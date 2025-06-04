@@ -3,30 +3,44 @@
 namespace App\Http\Controllers;
 
 use App\Models\Config;
+use App\Http\Requests\ConfigRequest;
 use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\View\View;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Auth;
 
 /**
- * کنترلر ساده برای مدیریت کانفیگ‌ها
+ * کنترلر مدیریت کانفیگ‌ها
  */
 class ConfigController extends Controller
 {
+    // حذف سازنده - middleware در روت‌ها اعمال می‌شود
+
     /**
      * نمایش لیست کانفیگ‌ها
      */
     public function index(Request $request): View
     {
-        $search = $request->query('search');
+        try {
+            $search = $request->query('search');
 
-        $configs = Config::search($search)
-            ->orderBy('created_at', 'desc')
-            ->paginate(10)
-            ->appends($request->query());
+            $configs = Config::search($search)
+                ->orderBy('created_at', 'desc')
+                ->paginate(10)
+                ->appends($request->query());
 
-        return view('configs.index', compact('configs', 'search'));
+            return view('configs.index', compact('configs', 'search'));
+
+        } catch (\Exception $e) {
+            Log::error('خطا در نمایش لیست کانفیگ‌ها: ' . $e->getMessage());
+
+            return view('configs.index', [
+                'configs' => Config::paginate(10),
+                'search' => null
+            ])->with('error', 'خطا در بارگذاری لیست کانفیگ‌ها');
+        }
     }
 
     /**
@@ -58,7 +72,7 @@ class ConfigController extends Controller
                 'description' => $request->input('description'),
                 'config_data' => $configData,
                 'status' => $request->input('status', Config::STATUS_DRAFT),
-                'created_by' => auth()->id() // در صورت وجود سیستم احراز هویت
+                'created_by' => Auth::id()
             ]);
 
             return redirect()->route('configs.index')
@@ -158,7 +172,7 @@ class ConfigController extends Controller
             $statusText = $newStatus === Config::STATUS_ACTIVE ? 'فعال' : 'غیرفعال';
 
             return redirect()->back()
-                ->with('success', "وضعیت کانفیگ به '$statusText' تغییر کرد.");
+                ->with('success', "وضعیت کانفیگ به '{$statusText}' تغییر کرد.");
 
         } catch (\Exception $e) {
             Log::error('خطا در تغییر وضعیت کانفیگ: ' . $e->getMessage());
@@ -182,18 +196,39 @@ class ConfigController extends Controller
             'base_url' => 'required|url',
             'timeout' => 'required|integer|min:1|max:300',
             'max_retries' => 'required|integer|min:0|max:10',
-            'delay' => 'required|integer|min:0|max:10000'
+            'delay' => 'required|integer|min:0|max:10000',
+            'user_agent' => 'nullable|string|max:500'
         ];
 
         $messages = [
             'name.required' => 'نام کانفیگ الزامی است.',
             'name.unique' => 'نام کانفیگ قبلاً استفاده شده است.',
+            'name.max' => 'نام کانفیگ نباید بیشتر از 255 کاراکتر باشد.',
+
+            'description.max' => 'توضیحات نباید بیشتر از 1000 کاراکتر باشد.',
+
+            'status.required' => 'انتخاب وضعیت الزامی است.',
+            'status.in' => 'وضعیت انتخاب شده معتبر نیست.',
+
             'base_url.required' => 'آدرس پایه الزامی است.',
             'base_url.url' => 'آدرس پایه معتبر نیست.',
+
             'timeout.required' => 'مقدار timeout الزامی است.',
             'timeout.integer' => 'مقدار timeout باید عدد باشد.',
+            'timeout.min' => 'مقدار timeout باید حداقل 1 ثانیه باشد.',
+            'timeout.max' => 'مقدار timeout نباید بیشتر از 300 ثانیه باشد.',
+
             'max_retries.required' => 'تعداد تلاش مجدد الزامی است.',
-            'delay.required' => 'مقدار تاخیر الزامی است.'
+            'max_retries.integer' => 'تعداد تلاش مجدد باید عدد باشد.',
+            'max_retries.min' => 'تعداد تلاش مجدد باید حداقل 0 باشد.',
+            'max_retries.max' => 'تعداد تلاش مجدد نباید بیشتر از 10 باشد.',
+
+            'delay.required' => 'مقدار تاخیر الزامی است.',
+            'delay.integer' => 'مقدار تاخیر باید عدد باشد.',
+            'delay.min' => 'مقدار تاخیر باید حداقل 0 میلی‌ثانیه باشد.',
+            'delay.max' => 'مقدار تاخیر نباید بیشتر از 10000 میلی‌ثانیه باشد.',
+
+            'user_agent.max' => 'User Agent نباید بیشتر از 500 کاراکتر باشد.'
         ];
 
         return Validator::make($request->all(), $rules, $messages);

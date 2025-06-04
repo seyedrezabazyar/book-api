@@ -13,7 +13,7 @@
 
             <div class="flex flex-col sm:flex-row gap-3 mt-4 md:mt-0">
                 {{-- جعبه جستجو --}}
-                <form method="GET" action="{{ route('simple-configs.index') }}" class="flex">
+                <form method="GET" action="#" class="flex">
                     <input
                         type="text"
                         name="search"
@@ -33,7 +33,7 @@
 
                 {{-- دکمه ایجاد کانفیگ جدید --}}
                 <a
-                    href="{{ route('simple-configs.create') }}"
+                    href="{{ route('configs.create') }}"
                     class="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 text-center"
                 >
                     + کانفیگ جدید
@@ -124,7 +124,7 @@
                                     <div class="flex items-center space-x-2 space-x-reverse">
                                         {{-- نمایش --}}
                                         <a
-                                            href="{{ route('simple-configs.show', $config) }}"
+                                            href="{{ route('configs.show', $config) }}"
                                             class="text-blue-600 hover:text-blue-900 px-2 py-1 rounded"
                                             title="مشاهده جزئیات"
                                         >
@@ -136,7 +136,7 @@
 
                                         {{-- ویرایش --}}
                                         <a
-                                            href="{{ route('simple-configs.edit', $config) }}"
+                                            href="{{ route('configs.edit', $config) }}"
                                             class="text-indigo-600 hover:text-indigo-900 px-2 py-1 rounded"
                                             title="ویرایش"
                                         >
@@ -148,7 +148,7 @@
                                         {{-- تغییر وضعیت --}}
                                         <form
                                             method="POST"
-                                            action="{{ route('simple-configs.toggle-status', $config) }}"
+                                            action="{{ route('configs.toggle-status', $config) }}"
                                             class="inline"
                                         >
                                             @csrf
@@ -174,7 +174,7 @@
                                         {{-- حذف --}}
                                         <form
                                             method="POST"
-                                            action="{{ route('simple-configs.destroy', $config) }}"
+                                            action="{{ route('configs.destroy', $config) }}"
                                             class="inline"
                                         >
                                             @csrf
@@ -226,7 +226,7 @@
                     </p>
                     <div class="mt-6">
                         <a
-                            href="{{ route('simple-configs.create') }}"
+                            href="{{ route('configs.create') }}"
                             class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                         >
                             + ایجاد کانفیگ جدید

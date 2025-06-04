@@ -8,7 +8,7 @@
         <div class="mb-6">
             <div class="flex items-center mb-4">
                 <a
-                    href="{{ route('simple-configs.index') }}"
+                    href="{{ route('configs.index') }}"
                     class="text-gray-600 hover:text-gray-800 ml-4"
                     title="بازگشت به لیست"
                 >
@@ -258,7 +258,7 @@
                 {{-- دکمه‌های عمل --}}
                 <div class="flex items-center justify-end space-x-4 space-x-reverse pt-6 border-t border-gray-200">
                     <a
-                        href="{{ route('simple-configs.index') }}"
+                        href="{{ route('configs.index') }}"
                         class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                     >
                         انصراف
