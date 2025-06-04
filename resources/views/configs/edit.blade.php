@@ -1,6 +1,6 @@
 @extends('layouts.app')
 
-@section('title', 'ایجاد کانفیگ جدید')
+@section('title', 'ویرایش کانفیگ')
 
 @section('content')
     <div class="container mx-auto px-4 py-6">
@@ -8,7 +8,7 @@
         <div class="mb-6">
             <div class="flex items-center mb-4">
                 <a
-                    href="{{ route('simple-configs.index') }}"
+                    href="{{ route('configs.index') }}"
                     class="text-gray-600 hover:text-gray-800 ml-4"
                     title="بازگشت به لیست"
                 >
@@ -17,8 +17,8 @@
                     </svg>
                 </a>
                 <div>
-                    <h1 class="text-2xl font-bold text-gray-800">ایجاد کانفیگ جدید</h1>
-                    <p class="text-gray-600">کانفیگ جدید برای سیستم ایجاد کنید</p>
+                    <h1 class="text-2xl font-bold text-gray-800">ویرایش کانفیگ</h1>
+                    <p class="text-gray-600">ویرایش کانفیگ: {{ $config->name }}</p>
                 </div>
             </div>
         </div>
@@ -35,10 +35,11 @@
             </div>
         @endif
 
-        {{-- فرم ایجاد کانفیگ --}}
+        {{-- فرم ویرایش کانفیگ --}}
         <div class="bg-white rounded-lg shadow">
-            <form method="POST" action="{{ route('configs.store') }}" class="space-y-6 p-6">
+            <form method="POST" action="{{ route('configs.update', $config) }}" class="space-y-6 p-6">
                 @csrf
+                @method('PUT')
 
                 {{-- بخش اطلاعات کلی --}}
                 <div class="border-b border-gray-200 pb-6">
@@ -54,11 +55,10 @@
                                 type="text"
                                 id="name"
                                 name="name"
-                                value="{{ old('name') }}"
+                                value="{{ old('name', $config->name) }}"
                                 required
                                 maxlength="255"
                                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('name') border-red-500 @enderror"
-                                placeholder="نام منحصر به فرد برای کانفیگ وارد کنید"
                             >
                             @error('name')
                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
@@ -76,11 +76,10 @@
                                 required
                                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('status') border-red-500 @enderror"
                             >
-                                <option value="">انتخاب کنید</option>
                                 @foreach(\App\Models\Config::getStatuses() as $value => $label)
                                     <option
                                         value="{{ $value }}"
-                                        {{ old('status') === $value ? 'selected' : '' }}
+                                        {{ old('status', $config->status) === $value ? 'selected' : '' }}
                                     >
                                         {{ $label }}
                                     </option>
@@ -104,11 +103,10 @@
                             maxlength="1000"
                             class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('description') border-red-500 @enderror"
                             placeholder="توضیحات مختصری درباره این کانفیگ بنویسید..."
-                        >{{ old('description') }}</textarea>
+                        >{{ old('description', $config->description) }}</textarea>
                         @error('description')
                         <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                         @enderror
-                        <p class="mt-1 text-sm text-gray-500">حداکثر 1000 کاراکتر</p>
                     </div>
                 </div>
 
@@ -126,10 +124,9 @@
                                 type="url"
                                 id="base_url"
                                 name="base_url"
-                                value="{{ old('base_url') }}"
+                                value="{{ old('base_url', $config->config_data['base_url'] ?? '') }}"
                                 required
                                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('base_url') border-red-500 @enderror"
-                                placeholder="https://example.com"
                             >
                             @error('base_url')
                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
@@ -145,7 +142,7 @@
                                 type="number"
                                 id="timeout"
                                 name="timeout"
-                                value="{{ old('timeout', 30) }}"
+                                value="{{ old('timeout', $config->config_data['timeout'] ?? 30) }}"
                                 required
                                 min="1"
                                 max="300"
@@ -154,7 +151,6 @@
                             @error('timeout')
                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                             @enderror
-                            <p class="mt-1 text-sm text-gray-500">بین 1 تا 300 ثانیه</p>
                         </div>
 
                         {{-- تعداد تلاش مجدد --}}
@@ -166,7 +162,7 @@
                                 type="number"
                                 id="max_retries"
                                 name="max_retries"
-                                value="{{ old('max_retries', 3) }}"
+                                value="{{ old('max_retries', $config->config_data['max_retries'] ?? 3) }}"
                                 required
                                 min="0"
                                 max="10"
@@ -175,7 +171,6 @@
                             @error('max_retries')
                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                             @enderror
-                            <p class="mt-1 text-sm text-gray-500">بین 0 تا 10</p>
                         </div>
 
                         {{-- تاخیر --}}
@@ -187,7 +182,7 @@
                                 type="number"
                                 id="delay"
                                 name="delay"
-                                value="{{ old('delay', 1000) }}"
+                                value="{{ old('delay', $config->config_data['delay'] ?? 1000) }}"
                                 required
                                 min="0"
                                 max="10000"
@@ -196,7 +191,6 @@
                             @error('delay')
                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                             @enderror
-                            <p class="mt-1 text-sm text-gray-500">بین 0 تا 10000 میلی‌ثانیه</p>
                         </div>
 
                         {{-- User Agent --}}
@@ -208,7 +202,7 @@
                                 type="text"
                                 id="user_agent"
                                 name="user_agent"
-                                value="{{ old('user_agent', 'Mozilla/5.0 (compatible; SimpleBot/1.0)') }}"
+                                value="{{ old('user_agent', $config->config_data['settings']['user_agent'] ?? 'Mozilla/5.0 (compatible; SimpleBot/1.0)') }}"
                                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('user_agent') border-red-500 @enderror"
                             >
                             @error('user_agent')
@@ -230,7 +224,7 @@
                                 id="verify_ssl"
                                 name="verify_ssl"
                                 value="1"
-                                {{ old('verify_ssl') ? 'checked' : '' }}
+                                {{ old('verify_ssl', $config->config_data['settings']['verify_ssl'] ?? false) ? 'checked' : '' }}
                                 class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
                             >
                             <label for="verify_ssl" class="mr-2 block text-sm text-gray-900">
@@ -245,7 +239,7 @@
                                 id="follow_redirects"
                                 name="follow_redirects"
                                 value="1"
-                                {{ old('follow_redirects', true) ? 'checked' : '' }}
+                                {{ old('follow_redirects', $config->config_data['settings']['follow_redirects'] ?? true) ? 'checked' : '' }}
                                 class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
                             >
                             <label for="follow_redirects" class="mr-2 block text-sm text-gray-900">
@@ -258,7 +252,7 @@
                 {{-- دکمه‌های عمل --}}
                 <div class="flex items-center justify-end space-x-4 space-x-reverse pt-6 border-t border-gray-200">
                     <a
-                        href="{{ route('simple-configs.index') }}"
+                        href="{{ route('configs.show', $config) }}"
                         class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                     >
                         انصراف
@@ -268,7 +262,7 @@
                         type="submit"
                         class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                     >
-                        ذخیره کانفیگ
+                        ذخیره تغییرات
                     </button>
                 </div>
             </form>
@@ -286,34 +280,6 @@
                     this.setCustomValidity('لطفاً یک URL معتبر وارد کنید (باید با http:// یا https:// شروع شود)');
                 } else {
                     this.setCustomValidity('');
-                }
-            });
-
-            // محدودیت کاراکتر برای توضیحات
-            const descriptionField = document.getElementById('description');
-            const maxLength = 1000;
-
-            descriptionField.addEventListener('input', function() {
-                const currentLength = this.value.length;
-                const remaining = maxLength - currentLength;
-
-                // ایجاد یا به‌روزرسانی شمارنده کاراکتر
-                let counter = document.getElementById('description-counter');
-                if (!counter) {
-                    counter = document.createElement('p');
-                    counter.id = 'description-counter';
-                    counter.className = 'mt-1 text-sm text-gray-500';
-                    this.parentNode.appendChild(counter);
-                }
-
-                counter.textContent = `${remaining} کاراکتر باقی مانده`;
-
-                if (remaining < 0) {
-                    counter.className = 'mt-1 text-sm text-red-600';
-                } else if (remaining < 100) {
-                    counter.className = 'mt-1 text-sm text-yellow-600';
-                } else {
-                    counter.className = 'mt-1 text-sm text-gray-500';
                 }
             });
         </script>

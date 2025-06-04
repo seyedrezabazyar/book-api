@@ -21,12 +21,12 @@ class ConfigController extends Controller
     {
         $search = $request->query('search');
 
-        $configs = SimpleConfig::search($search)
+        $configs = Config::search($search)
             ->orderBy('created_at', 'desc')
             ->paginate(10)
             ->appends($request->query());
 
-        return view('simple-configs.index', compact('configs', 'search'));
+        return view('configs.index', compact('configs', 'search'));
     }
 
     /**
@@ -34,7 +34,7 @@ class ConfigController extends Controller
      */
     public function create(): View
     {
-        return view('simple-configs.create');
+        return view('configs.create');
     }
 
     /**
@@ -53,15 +53,15 @@ class ConfigController extends Controller
         try {
             $configData = $this->buildConfigData($request);
 
-            SimpleConfig::create([
+            Config::create([
                 'name' => $request->input('name'),
                 'description' => $request->input('description'),
                 'config_data' => $configData,
-                'status' => $request->input('status', SimpleConfig::STATUS_DRAFT),
+                'status' => $request->input('status', Config::STATUS_DRAFT),
                 'created_by' => auth()->id() // در صورت وجود سیستم احراز هویت
             ]);
 
-            return redirect()->route('simple-configs.index')
+            return redirect()->route('configs.index')
                 ->with('success', 'کانفیگ با موفقیت ایجاد شد!');
 
         } catch (\Exception $e) {
@@ -76,25 +76,25 @@ class ConfigController extends Controller
     /**
      * نمایش جزئیات کانفیگ
      */
-    public function show(SimpleConfig $simpleConfig): View
+    public function show(Config $config): View
     {
-        return view('simple-configs.show', compact('simpleConfig'));
+        return view('configs.show', compact('config'));
     }
 
     /**
      * نمایش فرم ویرایش کانفیگ
      */
-    public function edit(SimpleConfig $simpleConfig): View
+    public function edit(Config $config): View
     {
-        return view('simple-configs.edit', compact('simpleConfig'));
+        return view('configs.edit', compact('config'));
     }
 
     /**
      * به‌روزرسانی کانفیگ
      */
-    public function update(Request $request, SimpleConfig $simpleConfig): RedirectResponse
+    public function update(Request $request, Config $config): RedirectResponse
     {
-        $validator = $this->getValidator($request, $simpleConfig->id);
+        $validator = $this->getValidator($request, $config->id);
 
         if ($validator->fails()) {
             return redirect()->back()
@@ -105,14 +105,14 @@ class ConfigController extends Controller
         try {
             $configData = $this->buildConfigData($request);
 
-            $simpleConfig->update([
+            $config->update([
                 'name' => $request->input('name'),
                 'description' => $request->input('description'),
                 'config_data' => $configData,
                 'status' => $request->input('status')
             ]);
 
-            return redirect()->route('simple-configs.index')
+            return redirect()->route('configs.index')
                 ->with('success', 'کانفیگ با موفقیت به‌روزرسانی شد!');
 
         } catch (\Exception $e) {
@@ -127,18 +127,18 @@ class ConfigController extends Controller
     /**
      * حذف کانفیگ
      */
-    public function destroy(SimpleConfig $simpleConfig): RedirectResponse
+    public function destroy(Config $config): RedirectResponse
     {
         try {
-            $simpleConfig->delete();
+            $config->delete();
 
-            return redirect()->route('simple-configs.index')
+            return redirect()->route('configs.index')
                 ->with('success', 'کانفیگ با موفقیت حذف شد!');
 
         } catch (\Exception $e) {
             Log::error('خطا در حذف کانفیگ: ' . $e->getMessage());
 
-            return redirect()->route('simple-configs.index')
+            return redirect()->route('configs.index')
                 ->with('error', 'خطا در حذف کانفیگ. لطفاً دوباره تلاش کنید.');
         }
     }
@@ -146,16 +146,16 @@ class ConfigController extends Controller
     /**
      * تغییر وضعیت کانفیگ (فعال/غیرفعال)
      */
-    public function toggleStatus(SimpleConfig $simpleConfig): RedirectResponse
+    public function toggleStatus(Config $config): RedirectResponse
     {
         try {
-            $newStatus = $simpleConfig->status === SimpleConfig::STATUS_ACTIVE
-                ? SimpleConfig::STATUS_INACTIVE
-                : SimpleConfig::STATUS_ACTIVE;
+            $newStatus = $config->status === Config::STATUS_ACTIVE
+                ? Config::STATUS_INACTIVE
+                : Config::STATUS_ACTIVE;
 
-            $simpleConfig->update(['status' => $newStatus]);
+            $config->update(['status' => $newStatus]);
 
-            $statusText = $newStatus === SimpleConfig::STATUS_ACTIVE ? 'فعال' : 'غیرفعال';
+            $statusText = $newStatus === Config::STATUS_ACTIVE ? 'فعال' : 'غیرفعال';
 
             return redirect()->back()
                 ->with('success', "وضعیت کانفیگ به '$statusText' تغییر کرد.");
@@ -174,7 +174,7 @@ class ConfigController extends Controller
     private function getValidator(Request $request, ?int $excludeId = null)
     {
         $rules = [
-            'name' => 'required|string|max:255|unique:simple_configs,name' . ($excludeId ? ",$excludeId" : ''),
+            'name' => 'required|string|max:255|unique:configs,name' . ($excludeId ? ",$excludeId" : ''),
             'description' => 'nullable|string|max:1000',
             'status' => 'required|in:active,inactive,draft',
 

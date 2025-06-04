@@ -12,7 +12,7 @@ class Config extends Model
 {
     use HasFactory;
 
-    protected $table = 'simple_configs';
+    protected $table = 'configs';
 
     protected $fillable = [
         'name',
