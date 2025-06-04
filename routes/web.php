@@ -1,48 +1,20 @@
 <?php
 
-// routes/web.php
-
-use App\Http\Controllers\ConfigController;
+use App\Http\Controllers\ProfileController;
 use Illuminate\Support\Facades\Route;
 
-/*
-|--------------------------------------------------------------------------
-| Config Routes
-|--------------------------------------------------------------------------
-|
-| روت‌های مربوط به مدیریت کانفیگ‌ها
-|
-*/
-
-// گروه روت‌های کانفیگ با middleware های مورد نیاز
-Route::middleware(['web'])->group(function () {
-
-    // روت‌های CRUD کامل برای کانفیگ‌ها
-    Route::resource('configs', ConfigController::class)->names([
-        'index' => 'configs.index',
-        'create' => 'configs.create',
-        'store' => 'configs.store',
-        'show' => 'configs.show',
-        'edit' => 'configs.edit',
-        'update' => 'configs.update',
-        'destroy' => 'configs.destroy'
-    ]);
-
-    // روت اضافی برای تغییر وضعیت کانفیگ
-    Route::patch('configs/{config}/toggle-status', [ConfigController::class, 'toggleStatus'])
-        ->name('configs.toggle-status');
-
-    // روت اصلی برای ریدایرکت به کانفیگ‌ها
-    Route::get('/', function () {
-        return redirect()->route('configs.index');
-    });
+Route::get('/', function () {
+    return view('welcome');
 });
 
-// در صورت استفاده از احراز هویت، می‌توانید middleware auth اضافه کنید:
-/*
-Route::middleware(['web', 'auth'])->group(function () {
-    Route::resource('configs', ConfigController::class);
-    Route::patch('configs/{config}/toggle-status', [ConfigController::class, 'toggleStatus'])
-         ->name('configs.toggle-status');
+Route::get('/dashboard', function () {
+    return view('dashboard');
+})->middleware(['auth', 'verified'])->name('dashboard');
+
+Route::middleware('auth')->group(function () {
+    Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
+    Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
+    Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
 });
-*/
+
+require __DIR__.'/auth.php';
