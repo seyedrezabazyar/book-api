@@ -36,6 +36,12 @@ Route::middleware('auth')->group(function () {
     Route::get('configs/test-page', [ConfigController::class, 'testPage'])->name('configs.test-page');
     Route::post('configs/test-url', [ConfigController::class, 'testUrl'])->name('configs.test-url');
 
+    // روت‌های debug کانفیگ‌ها (فقط در محیط development)
+    if (app()->environment(['local', 'development'])) {
+        Route::get('configs/{config}/debug', [ConfigController::class, 'debug'])->name('configs.debug');
+        Route::get('configs/{config}/debug-api', [ConfigController::class, 'debugApi'])->name('configs.debug-api');
+    }
+
     // مدیریت کانفیگ‌ها - Resource Routes
     Route::resource('configs', ConfigController::class);
 

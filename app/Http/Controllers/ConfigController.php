@@ -1124,4 +1124,354 @@ class ConfigController extends Controller
 
         return $pairs;
     }
+
+    /**
+     * صفحه debug کانفیگ (فقط در محیط development)
+     */
+    public function debug(Config $config): View
+    {
+        if (!app()->environment(['local', 'development'])) {
+            abort(404);
+        }
+
+        // دریافت اطلاعات debug از cache
+        $cacheKey = "config_debug_{$config->id}";
+        $debugInfo = Cache::get($cacheKey, []);
+
+        $lockKey = "config_processing_{$config->id}";
+        $isRunning = Cache::has($lockKey);
+
+        $errorKey = "config_error_{$config->id}";
+        $error = Cache::get($errorKey);
+
+        return view('configs.debug', compact('config', 'debugInfo', 'isRunning', 'error'));
+    }
+
+    /**
+     * Debug درخواست API
+     */
+    public function debugApi(Config $config): \Illuminate\Http\JsonResponse
+    {
+        if (!app()->environment(['local', 'development'])) {
+            abort(404);
+        }
+
+        try {
+            if (!$config->isApiSource()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'این کانفیگ از نوع API نیست'
+                ], 400);
+            }
+
+            $apiSettings = $config->getApiSettings();
+            $generalSettings = $config->getGeneralSettings();
+
+            // ساخت URL تست
+            $baseUrl = rtrim($config->base_url, '/');
+            $endpoint = ltrim($apiSettings['endpoint'], '/');
+            $testUrl = $baseUrl . '/' . $endpoint;
+
+            // اضافه کردن پارامترهای تست
+            $params = $apiSettings['params'] ?? [];
+            $params['page'] = 1; // فقط صفحه اول برای تست
+
+            if (!empty($params)) {
+                $separator = strpos($testUrl, '?') !== false ? '&' : '?';
+                $testUrl .= $separator . http_build_query($params);
+            }
+
+            Log::info("شروع debug API", [
+                'config_id' => $config->id,
+                'test_url' => $testUrl
+            ]);
+
+            // ارسال درخواست تست
+            $httpClient = \Illuminate\Support\Facades\Http::timeout($config->timeout);
+
+            if (!empty($generalSettings['user_agent'])) {
+                $httpClient = $httpClient->withUserAgent($generalSettings['user_agent']);
+            }
+
+            if (!$generalSettings['verify_ssl']) {
+                $httpClient = $httpClient->withoutVerifying();
+            }
+
+            if ($apiSettings['auth_type'] === 'bearer' && !empty($apiSettings['auth_token'])) {
+                $httpClient = $httpClient->withToken($apiSettings['auth_token']);
+            } elseif ($apiSettings['auth_type'] === 'basic' && !empty($apiSettings['auth_token'])) {
+                $credentials = explode(':', $apiSettings['auth_token'], 2);
+                if (count($credentials) === 2) {
+                    $httpClient = $httpClient->withBasicAuth($credentials[0], $credentials[1]);
+                }
+            }
+
+            if (!empty($apiSettings['headers'])) {
+                $httpClient = $httpClient->withHeaders($apiSettings['headers']);
+            }
+
+            $response = $httpClient->get($testUrl);
+
+            $debugData = [
+                'request' => [
+                    'url' => $testUrl,
+                    'method' => 'GET',
+                    'headers' => $httpClient->getOptions()['headers'] ?? [],
+                    'timeout' => $config->timeout,
+                    'auth_type' => $apiSettings['auth_type']
+                ],
+                'response' => [
+                    'status' => $response->status(),
+                    'headers' => $response->headers(),
+                    'body_size' => strlen($response->body()),
+                    'successful' => $response->successful()
+                ]
+            ];
+
+            if ($response->successful()) {
+                $data = $response->json();
+
+                // تحلیل ساختار داده‌ها
+                $analysis = $this->analyzeApiStructure($data);
+
+                $debugData['data_analysis'] = $analysis;
+
+                // تست استخراج کتاب‌ها
+                $books = $this->extractBooksForDebug($data);
+                $debugData['extracted_books'] = [
+                    'count' => count($books),
+                    'first_book' => $books[0] ?? null,
+                    'sample_extraction' => $this->testFieldExtraction($books[0] ?? [], $apiSettings['field_mapping'] ?? [])
+                ];
+
+            } else {
+                $debugData['error'] = [
+                    'status' => $response->status(),
+                    'body' => $response->body()
+                ];
+            }
+
+            // ذخیره اطلاعات debug در cache
+            Cache::put("config_debug_{$config->id}", $debugData, 3600);
+
+            return response()->json([
+                'success' => true,
+                'debug_data' => $debugData
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error("خطا در debug API", [
+                'config_id' => $config->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'details' => [
+                    'line' => $e->getLine(),
+                    'file' => basename($e->getFile())
+                ]
+            ], 500);
+        }
+    }
+
+    /**
+     * تحلیل ساختار API
+     */
+    private function analyzeApiStructure(array $data): array
+    {
+        $analysis = [
+            'root_keys' => array_keys($data),
+            'structure_type' => 'unknown',
+            'potential_book_paths' => []
+        ];
+
+        // شناسایی ساختار balyan.ir
+        if (isset($data['status']) && isset($data['data']['books'])) {
+            $analysis['structure_type'] = 'balyan_ir';
+            $analysis['potential_book_paths'][] = 'data.books';
+            $analysis['book_count'] = count($data['data']['books']);
+        }
+
+        // شناسایی ساختارهای متداول دیگر
+        $commonPaths = ['data', 'books', 'results', 'items', 'list', 'content'];
+        foreach ($commonPaths as $path) {
+            if (isset($data[$path]) && is_array($data[$path])) {
+                $analysis['potential_book_paths'][] = $path;
+                if (!empty($data[$path]) && is_array($data[$path][0])) {
+                    $analysis['sample_item_keys'] = array_keys($data[$path][0]);
+                }
+            }
+        }
+
+        // اگر خود data آرایه‌ای از objects باشد
+        if (isset($data[0]) && is_array($data[0])) {
+            $analysis['structure_type'] = 'direct_array';
+            $analysis['potential_book_paths'][] = 'root';
+            $analysis['sample_item_keys'] = array_keys($data[0]);
+        }
+
+        return $analysis;
+    }
+
+    /**
+     * استخراج کتاب‌ها برای debug
+     */
+    private function extractBooksForDebug(array $data): array
+    {
+        // برای API balyan.ir
+        if (isset($data['status']) && $data['status'] === 'success' && isset($data['data']['books'])) {
+            return array_slice($data['data']['books'], 0, 2); // فقط 2 کتاب اول
+        }
+
+        // سایر ساختارها
+        $possibleKeys = ['data', 'books', 'results', 'items', 'list', 'content'];
+        foreach ($possibleKeys as $key) {
+            if (isset($data[$key]) && is_array($data[$key]) && !empty($data[$key])) {
+                return array_slice($data[$key], 0, 2);
+            }
+        }
+
+        // اگر خود data آرایه باشد
+        if (isset($data[0]) && is_array($data[0])) {
+            return array_slice($data, 0, 2);
+        }
+
+        // کتاب منفرد
+        if (isset($data['title']) || isset($data['id'])) {
+            return [$data];
+        }
+
+        return [];
+    }
+
+    /**
+     * تست استخراج فیلدها
+     */
+    private function testFieldExtraction(array $bookData, array $fieldMapping): array
+    {
+        if (empty($bookData)) {
+            return ['error' => 'داده کتاب موجود نیست'];
+        }
+
+        $extracted = [];
+        $errors = [];
+
+        // اگر نقشه‌برداری خالی است، از نقشه پیش‌فرض استفاده کن
+        if (empty($fieldMapping)) {
+            $fieldMapping = [
+                'title' => 'title',
+                'description' => 'description_en',
+                'isbn' => 'isbn',
+                'publication_year' => 'publication_year',
+                'pages_count' => 'pages_count',
+                'language' => 'language',
+                'format' => 'format',
+                'file_size' => 'file_size',
+                'author' => 'authors',
+                'category' => 'category.name',
+                'publisher' => 'publisher.name',
+                'image_url' => 'image_url.0'
+            ];
+        }
+
+        foreach ($fieldMapping as $bookField => $apiField) {
+            if (empty($apiField)) continue;
+
+            try {
+                $value = $this->getNestedValueForDebug($bookData, $apiField);
+                $extracted[$bookField] = [
+                    'raw_value' => $value,
+                    'path' => $apiField,
+                    'found' => $value !== null,
+                    'type' => gettype($value)
+                ];
+            } catch (\Exception $e) {
+                $errors[$bookField] = [
+                    'path' => $apiField,
+                    'error' => $e->getMessage()
+                ];
+            }
+        }
+
+        return [
+            'extracted_fields' => $extracted,
+            'errors' => $errors,
+            'available_keys' => $this->getAvailableKeys($bookData)
+        ];
+    }
+
+    /**
+     * دریافت مقدار nested برای debug
+     */
+    private function getNestedValueForDebug(array $data, string $path)
+    {
+        $keys = explode('.', $path);
+        $value = $data;
+
+        foreach ($keys as $key) {
+            if (is_array($value)) {
+                if (is_numeric($key)) {
+                    $key = (int) $key;
+                    if (isset($value[$key])) {
+                        $value = $value[$key];
+                    } else {
+                        return null;
+                    }
+                } elseif (isset($value[$key])) {
+                    $value = $value[$key];
+                } else {
+                    return null;
+                }
+            } else {
+                return null;
+            }
+        }
+
+        // پردازش خاص برای نویسندگان
+        if ($path === 'authors' && is_array($value)) {
+            $names = [];
+            foreach ($value as $author) {
+                if (is_array($author) && isset($author['name'])) {
+                    $names[] = $author['name'];
+                } elseif (is_string($author)) {
+                    $names[] = $author;
+                }
+            }
+            return implode(', ', $names);
+        }
+
+        return $value;
+    }
+
+    /**
+     * دریافت کلیدهای موجود در داده
+     */
+    private function getAvailableKeys(array $data, string $prefix = ''): array
+    {
+        $keys = [];
+
+        foreach ($data as $key => $value) {
+            $fullKey = $prefix ? $prefix . '.' . $key : $key;
+
+            if (is_array($value) && !empty($value)) {
+                $keys[] = $fullKey;
+
+                // اگر آرایه‌ای از objects باشد، کلیدهای اولین object را نمایش بده
+                if (isset($value[0]) && is_array($value[0])) {
+                    $subKeys = $this->getAvailableKeys($value[0], $fullKey . '.0');
+                    $keys = array_merge($keys, $subKeys);
+                } elseif (is_array($value)) {
+                    $subKeys = $this->getAvailableKeys($value, $fullKey);
+                    $keys = array_merge($keys, array_slice($subKeys, 0, 5)); // محدود کردن تعداد
+                }
+            } else {
+                $keys[] = $fullKey;
+            }
+        }
+
+        return $keys;
+    }
 }

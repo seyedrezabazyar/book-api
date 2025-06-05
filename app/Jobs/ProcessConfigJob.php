@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
 
 /**
- * Job پردازش کانفیگ و دریافت اطلاعات
+ * Job بهبود یافته پردازش کانفیگ و دریافت اطلاعات
  */
 class ProcessConfigJob implements ShouldQueue
 {
@@ -42,7 +42,11 @@ class ProcessConfigJob implements ShouldQueue
     {
         // بررسی وضعیت فعال بودن کانفیگ
         if (!$this->config->isActive() && !$this->force) {
-            Log::info("کانفیگ غیرفعال رد شد: {$this->config->name}");
+            Log::info("کانفیگ غیرفعال رد شد", [
+                'config_id' => $this->config->id,
+                'config_name' => $this->config->name,
+                'status' => $this->config->status
+            ]);
             return;
         }
 
@@ -50,15 +54,34 @@ class ProcessConfigJob implements ShouldQueue
         $lockKey = "config_processing_{$this->config->id}";
 
         if (Cache::has($lockKey) && !$this->force) {
-            Log::info("کانفیگ در حال پردازش است: {$this->config->name}");
+            Log::info("کانفیگ در حال پردازش است", [
+                'config_id' => $this->config->id,
+                'config_name' => $this->config->name
+            ]);
             return;
         }
 
         // قفل کردن پردازش برای 1 ساعت
-        Cache::put($lockKey, true, 3600);
+        Cache::put($lockKey, [
+            'started_at' => now()->toDateTimeString(),
+            'attempt' => $this->attempts(),
+            'job_id' => $this->job?->getJobId()
+        ], 3600);
+
+        $startTime = microtime(true);
 
         try {
-            Log::info("شروع پردازش کانفیگ: {$this->config->name}");
+            Log::info("شروع پردازش کانفیگ", [
+                'config_id' => $this->config->id,
+                'config_name' => $this->config->name,
+                'data_source_type' => $this->config->data_source_type,
+                'base_url' => $this->config->base_url,
+                'attempt' => $this->attempts(),
+                'force' => $this->force
+            ]);
+
+            // پاک کردن خطاهای قبلی
+            $this->clearPreviousErrors();
 
             // به‌روزرسانی زمان آخرین اجرا
             $this->updateLastRun();
@@ -67,33 +90,58 @@ class ProcessConfigJob implements ShouldQueue
 
             // انتخاب سرویس مناسب براساس نوع کانفیگ
             if ($this->config->isApiSource()) {
+                Log::info("استفاده از ApiDataService");
                 $service = new ApiDataService($this->config);
                 $stats = $service->fetchData();
             } elseif ($this->config->isCrawlerSource()) {
+                Log::info("استفاده از CrawlerDataService");
                 $service = new CrawlerDataService($this->config);
                 $stats = $service->crawlData();
             } else {
                 throw new \InvalidArgumentException("نوع کانفیگ پشتیبانی نشده: {$this->config->data_source_type}");
             }
 
+            $executionTime = microtime(true) - $startTime;
+
             // ذخیره آمار در cache
-            $this->saveStats($stats);
+            $this->saveStats($stats, $executionTime);
 
             // به‌روزرسانی شمارنده‌های مدل‌ها
             $this->updateCounters();
 
-            Log::info("پایان موفق پردازش کانفیگ: {$this->config->name}", $stats);
-
-        } catch (\Exception $e) {
-            Log::error("خطا در پردازش کانفیگ {$this->config->name}: " . $e->getMessage(), [
+            Log::info("پایان موفق پردازش کانفیگ", [
                 'config_id' => $this->config->id,
-                'exception' => $e->getTraceAsString()
+                'config_name' => $this->config->name,
+                'stats' => $stats,
+                'execution_time' => round($executionTime, 2) . ' ثانیه',
+                'memory_usage' => $this->formatBytes(memory_get_peak_usage(true))
             ]);
 
-            // ذخیره خطا در cache
+        } catch (\Exception $e) {
+            $executionTime = microtime(true) - $startTime;
+
+            Log::error("خطا در پردازش کانفیگ", [
+                'config_id' => $this->config->id,
+                'config_name' => $this->config->name,
+                'error_message' => $e->getMessage(),
+                'error_line' => $e->getLine(),
+                'error_file' => $e->getFile(),
+                'execution_time' => round($executionTime, 2) . ' ثانیه',
+                'attempt' => $this->attempts(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            // ذخیره خطا در cache با جزئیات بیشتر
             Cache::put("config_error_{$this->config->id}", [
                 'message' => $e->getMessage(),
-                'time' => now()->toDateTimeString()
+                'time' => now()->toDateTimeString(),
+                'attempt' => $this->attempts(),
+                'execution_time' => round($executionTime, 2),
+                'details' => [
+                    'line' => $e->getLine(),
+                    'file' => basename($e->getFile()),
+                    'class' => get_class($e)
+                ]
             ], 86400); // 24 ساعت
 
             throw $e;
@@ -105,20 +153,47 @@ class ProcessConfigJob implements ShouldQueue
     }
 
     /**
+     * پاک کردن خطاهای قبلی
+     */
+    private function clearPreviousErrors(): void
+    {
+        $errorKeys = [
+            "config_error_{$this->config->id}",
+            "config_final_error_{$this->config->id}"
+        ];
+
+        foreach ($errorKeys as $key) {
+            Cache::forget($key);
+        }
+    }
+
+    /**
      * به‌روزرسانی زمان آخرین اجرا
      */
     private function updateLastRun(): void
     {
-        $configData = $this->config->config_data;
-        $configData['last_run'] = now()->toDateTimeString();
+        try {
+            $configData = $this->config->config_data;
+            $configData['last_run'] = now()->toDateTimeString();
 
-        $this->config->update(['config_data' => $configData]);
+            $this->config->update(['config_data' => $configData]);
+
+            Log::debug("زمان آخرین اجرا به‌روزرسانی شد", [
+                'config_id' => $this->config->id
+            ]);
+
+        } catch (\Exception $e) {
+            Log::warning("خطا در به‌روزرسانی زمان آخرین اجرا", [
+                'config_id' => $this->config->id,
+                'error' => $e->getMessage()
+            ]);
+        }
     }
 
     /**
      * ذخیره آمار در cache
      */
-    private function saveStats(array $stats): void
+    private function saveStats(array $stats, float $executionTime): void
     {
         $cacheKey = "config_stats_{$this->config->id}";
 
@@ -127,18 +202,17 @@ class ProcessConfigJob implements ShouldQueue
             'config_name' => $this->config->name,
             'data_source_type' => $this->config->data_source_type,
             'last_run' => now()->toDateTimeString(),
-            'execution_time' => $this->getExecutionTime()
+            'execution_time' => round($executionTime, 2),
+            'memory_usage' => memory_get_peak_usage(true),
+            'attempt' => $this->attempts()
         ]);
 
         Cache::put($cacheKey, $statsData, 86400); // 24 ساعت
-    }
 
-    /**
-     * محاسبه زمان اجرا
-     */
-    private function getExecutionTime(): int
-    {
-        return intval(microtime(true) - $_SERVER['REQUEST_TIME_FLOAT']);
+        Log::debug("آمار در cache ذخیره شد", [
+            'config_id' => $this->config->id,
+            'cache_key' => $cacheKey
+        ]);
     }
 
     /**
@@ -147,27 +221,53 @@ class ProcessConfigJob implements ShouldQueue
     private function updateCounters(): void
     {
         try {
+            Log::debug("شروع به‌روزرسانی شمارنده‌ها");
+
             // به‌روزرسانی تعداد کتاب‌های دسته‌بندی‌ها
-            \App\Models\Category::all()->each(function($category) {
-                $count = \App\Models\Book::where('category_id', $category->id)->count();
-                $category->update(['books_count' => $count]);
+            \App\Models\Category::whereHas('books')->chunk(50, function ($categories) {
+                foreach ($categories as $category) {
+                    $count = \App\Models\Book::where('category_id', $category->id)->count();
+                    $category->update(['books_count' => $count]);
+                }
             });
 
             // به‌روزرسانی تعداد کتاب‌های نویسندگان
-            \App\Models\Author::all()->each(function($author) {
-                $count = \DB::table('book_author')->where('author_id', $author->id)->count();
-                $author->update(['books_count' => $count]);
+            \App\Models\Author::whereHas('books')->chunk(50, function ($authors) {
+                foreach ($authors as $author) {
+                    $count = \DB::table('book_author')->where('author_id', $author->id)->count();
+                    $author->update(['books_count' => $count]);
+                }
             });
 
             // به‌روزرسانی تعداد کتاب‌های ناشران
-            \App\Models\Publisher::all()->each(function($publisher) {
-                $count = \App\Models\Book::where('publisher_id', $publisher->id)->count();
-                $publisher->update(['books_count' => $count]);
+            \App\Models\Publisher::whereHas('books')->chunk(50, function ($publishers) {
+                foreach ($publishers as $publisher) {
+                    $count = \App\Models\Book::where('publisher_id', $publisher->id)->count();
+                    $publisher->update(['books_count' => $count]);
+                }
             });
 
+            Log::debug("به‌روزرسانی شمارنده‌ها انجام شد");
+
         } catch (\Exception $e) {
-            Log::warning("خطا در به‌روزرسانی شمارنده‌ها: " . $e->getMessage());
+            Log::warning("خطا در به‌روزرسانی شمارنده‌ها", [
+                'error' => $e->getMessage()
+            ]);
         }
+    }
+
+    /**
+     * فرمت کردن bytes به واحد قابل خواندن
+     */
+    private function formatBytes(int $bytes): string
+    {
+        $units = ['B', 'KB', 'MB', 'GB'];
+
+        for ($i = 0; $bytes > 1024 && $i < count($units) - 1; $i++) {
+            $bytes /= 1024;
+        }
+
+        return round($bytes, 2) . ' ' . $units[$i];
     }
 
     /**
@@ -175,20 +275,34 @@ class ProcessConfigJob implements ShouldQueue
      */
     public function failed(\Throwable $exception): void
     {
-        Log::error("شکست نهایی در پردازش کانفیگ {$this->config->name}: " . $exception->getMessage(), [
+        Log::error("شکست نهایی در پردازش کانفیگ", [
             'config_id' => $this->config->id,
+            'config_name' => $this->config->name,
+            'error_message' => $exception->getMessage(),
+            'error_line' => $exception->getLine(),
+            'error_file' => $exception->getFile(),
             'attempts' => $this->attempts(),
-            'exception' => $exception->getTraceAsString()
+            'exception_class' => get_class($exception),
+            'trace' => $exception->getTraceAsString()
         ]);
 
         // ذخیره خطای نهایی
         Cache::put("config_final_error_{$this->config->id}", [
             'message' => $exception->getMessage(),
             'attempts' => $this->attempts(),
-            'time' => now()->toDateTimeString()
+            'time' => now()->toDateTimeString(),
+            'details' => [
+                'line' => $exception->getLine(),
+                'file' => basename($exception->getFile()),
+                'class' => get_class($exception)
+            ]
         ], 86400);
 
         // آزاد کردن قفل در صورت خطا
-        Cache::forget("config_processing_{$this->config->id}");
+        $lockKey = "config_processing_{$this->config->id}";
+        Cache::forget($lockKey);
+
+        // ارسال اعلان (در صورت نیاز)
+        // event(new ConfigProcessingFailed($this->config, $exception));
     }
 }
