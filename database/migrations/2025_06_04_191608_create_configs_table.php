@@ -9,33 +9,44 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('configs', function (Blueprint $table) {
+            // شناسه اصلی
             $table->id();
-            $table->string('name')->unique();
+
+            // اطلاعات کلی
+            $table->string('name')->unique()->index();
             $table->text('description')->nullable();
-            $table->enum('data_source_type', ['api', 'crawler'])->default('api');
-            $table->string('base_url');
-            $table->integer('timeout')->default(30);
-            $table->integer('max_retries')->default(3);
+            $table->enum('data_source_type', ['api', 'crawler'])->default('api')->index();
+            $table->string('base_url', 500);
 
-            // تنظیمات سرعت اسکرپر
-            $table->integer('delay_seconds')->default(1); // تاخیر بین درخواست‌ها (ثانیه)
-            $table->integer('records_per_run')->default(1); // تعداد رکورد در هر اجرا
+            // تنظیمات اتصال
+            $table->unsignedSmallInteger('timeout')->default(30);
+            $table->unsignedTinyInteger('max_retries')->default(3);
+            $table->unsignedSmallInteger('delay_seconds')->default(5);
+            $table->unsignedTinyInteger('records_per_run')->default(10);
 
+            // داده‌های کانفیگ (JSON)
             $table->json('config_data');
-            $table->enum('status', ['active', 'inactive', 'draft'])->default('draft');
 
-            // اطلاعات پیشرفت
-            $table->text('current_url')->nullable(); // آخرین URL پردازش شده
-            $table->integer('total_processed')->default(0); // کل پردازش شده
-            $table->integer('total_success')->default(0); // موفق
-            $table->integer('total_failed')->default(0); // ناموفق
+            // وضعیت
+            $table->enum('status', ['active', 'inactive', 'draft'])->default('draft')->index();
+
+            // اطلاعات پیشرفت - ساده شده
+            $table->text('current_url')->nullable();
+            $table->unsignedInteger('total_processed')->default(0);
+            $table->unsignedInteger('total_success')->default(0);
+            $table->unsignedInteger('total_failed')->default(0);
             $table->timestamp('last_run_at')->nullable();
-            $table->boolean('is_running')->default(false);
+            $table->boolean('is_running')->default(false)->index();
 
-            $table->unsignedBigInteger('created_by')->nullable();
+            // کاربر ایجادکننده
+            $table->foreignId('created_by')->nullable()->constrained('users')->onDelete('set null');
+
+            // زمان‌ها
             $table->timestamps();
 
+            // ایندکس‌های بهینه
             $table->index(['status', 'is_running']);
+            $table->index(['data_source_type', 'status']);
         });
     }
 

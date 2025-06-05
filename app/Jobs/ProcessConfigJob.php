@@ -15,22 +15,19 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
 
 /**
- * Job پردازش کانفیگ‌ها
+ * Job بهینه‌شده پردازش کانفیگ‌ها
  */
 class ProcessConfigJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public $timeout = 600; // 10 دقیقه
-    public $tries = 1; // فقط یک بار تلاش
+    public $timeout = 300; // 5 دقیقه
+    public $tries = 1; // فقط یک بار
     public $maxExceptions = 1;
 
     private Config $config;
     private bool $force;
 
-    /**
-     * ایجاد instance جدید از job
-     */
     public function __construct(Config $config, bool $force = false)
     {
         $this->config = $config;
@@ -44,30 +41,22 @@ class ProcessConfigJob implements ShouldQueue
     {
         Log::info("شروع پردازش کانفیگ", [
             'config_name' => $this->config->name,
-            'config_id' => $this->config->id,
-            'force' => $this->force
+            'config_id' => $this->config->id
         ]);
 
         // بررسی امکان ادامه
         $freshConfig = $this->config->fresh();
-        if (!$this->force && (!$freshConfig->canStart() && !$freshConfig->isRunning())) {
-            Log::info("کانفیگ متوقف شده یا غیرفعال", [
-                'config_name' => $this->config->name,
-                'status' => $freshConfig->status,
-                'is_running' => $freshConfig->isRunning()
-            ]);
+        if (!$this->force && !$freshConfig->canStart() && !$freshConfig->isRunning()) {
+            Log::info("کانفیگ غیرقابل اجرا", ['config' => $this->config->name]);
             return;
         }
 
-        // تنظیم قفل برای جلوگیری از اجرای همزمان
+        // تنظیم قفل
         $lockKey = "config_processing_{$this->config->id}";
         $lockDuration = 300; // 5 دقیقه
 
         if (Cache::has($lockKey) && !$this->force) {
-            Log::info("کانفیگ در حال پردازش است", [
-                'config_name' => $this->config->name,
-                'lock_key' => $lockKey
-            ]);
+            Log::info("کانفیگ در حال پردازش", ['config' => $this->config->name]);
             return;
         }
 
@@ -79,26 +68,24 @@ class ProcessConfigJob implements ShouldQueue
                 $this->config->start();
             }
 
-            // انتخاب سرویس مناسب
+            // انتخاب سرویس و پردازش
             $service = $this->getAppropriateService();
+            $this->processWithService($service);
 
-            // پردازش تعداد مشخص شده رکورد
-            $this->processRecords($service);
+            // برنامه‌ریزی اجرای بعدی فقط اگر کانفیگ هنوز فعال باشد
+            $this->scheduleNextRunIfNeeded();
 
-            Log::info("پایان موفق پردازش کانفیگ", [
-                'config_name' => $this->config->name
-            ]);
+            Log::info("پایان موفق پردازش کانفیگ", ['config' => $this->config->name]);
 
         } catch (\Exception $e) {
             $this->handleProcessingError($e);
         } finally {
-            // آزادسازی قفل
             Cache::forget($lockKey);
         }
     }
 
     /**
-     * انتخاب سرویس مناسب براساس نوع کانفیگ
+     * انتخاب سرویس مناسب
      */
     private function getAppropriateService()
     {
@@ -112,9 +99,9 @@ class ProcessConfigJob implements ShouldQueue
     }
 
     /**
-     * پردازش رکوردها
+     * پردازش با سرویس
      */
-    private function processRecords($service): void
+    private function processWithService($service): void
     {
         $startTime = microtime(true);
 
@@ -127,18 +114,11 @@ class ProcessConfigJob implements ShouldQueue
             }
 
             $executionTime = round(microtime(true) - $startTime, 2);
-
-            // ذخیره آمار در cache
             $stats['execution_time'] = $executionTime;
             $stats['last_run'] = now()->toDateTimeString();
 
+            // ذخیره آمار
             Cache::put("config_stats_{$this->config->id}", $stats, 3600);
-
-            Log::info("آمار پردازش کانفیگ", [
-                'config_name' => $this->config->name,
-                'stats' => $stats,
-                'execution_time' => $executionTime
-            ]);
 
             // به‌روزرسانی آمار کانفیگ
             $this->config->update([
@@ -148,18 +128,17 @@ class ProcessConfigJob implements ShouldQueue
                 'last_run_at' => now()
             ]);
 
-            // برنامه‌ریزی اجرای بعدی اگر کانفیگ هنوز فعال است
-            $this->scheduleNextRun();
-
-        } catch (\Exception $e) {
-            $executionTime = round(microtime(true) - $startTime, 2);
-
-            Log::error("خطا در پردازش رکوردها", [
-                'config_name' => $this->config->name,
-                'error' => $e->getMessage(),
+            Log::info("آمار پردازش", [
+                'config' => $this->config->name,
+                'stats' => $stats,
                 'execution_time' => $executionTime
             ]);
 
+        } catch (\Exception $e) {
+            Log::error("خطا در پردازش", [
+                'config' => $this->config->name,
+                'error' => $e->getMessage()
+            ]);
             throw $e;
         }
     }
@@ -167,26 +146,25 @@ class ProcessConfigJob implements ShouldQueue
     /**
      * برنامه‌ریزی اجرای بعدی
      */
-    private function scheduleNextRun(): void
+    private function scheduleNextRunIfNeeded(): void
     {
         $freshConfig = $this->config->fresh();
 
+        // فقط در صورتی که کانفیگ هنوز فعال و در حال اجرا باشد
         if ($freshConfig->isRunning() && $freshConfig->isActive()) {
-            // محاسبه زمان اجرای بعدی
             $nextRunDelay = $this->config->delay_seconds;
 
             Log::info("برنامه‌ریزی اجرای بعدی", [
-                'config_name' => $this->config->name,
-                'delay_seconds' => $nextRunDelay,
-                'next_run_at' => now()->addSeconds($nextRunDelay)->toDateTimeString()
+                'config' => $this->config->name,
+                'delay_seconds' => $nextRunDelay
             ]);
 
-            // اضافه کردن job جدید به صف با تاخیر
+            // اضافه کردن job جدید با تاخیر
             static::dispatch($this->config, $this->force)
                 ->delay(now()->addSeconds($nextRunDelay));
         } else {
-            Log::info("کانفیگ متوقف شد، اجرای بعدی برنامه‌ریزی نشد", [
-                'config_name' => $this->config->name,
+            Log::info("عدم برنامه‌ریزی اجرای بعدی", [
+                'config' => $this->config->name,
                 'is_running' => $freshConfig->isRunning(),
                 'is_active' => $freshConfig->isActive()
             ]);
@@ -199,9 +177,8 @@ class ProcessConfigJob implements ShouldQueue
     private function handleProcessingError(\Exception $e): void
     {
         Log::error("خطا در اجرای کانفیگ", [
-            'config_name' => $this->config->name,
-            'error' => $e->getMessage(),
-            'trace' => $e->getTraceAsString()
+            'config' => $this->config->name,
+            'error' => $e->getMessage()
         ]);
 
         // ثبت شکست
@@ -212,8 +189,7 @@ class ProcessConfigJob implements ShouldQueue
             [
                 'line' => $e->getLine(),
                 'file' => basename($e->getFile()),
-                'class' => get_class($e),
-                'job_class' => static::class
+                'class' => get_class($e)
             ]
         );
 
@@ -228,21 +204,18 @@ class ProcessConfigJob implements ShouldQueue
         ], 86400);
 
         // به‌روزرسانی آمار خطا
-        $this->config->updateStats(false);
+        $this->config->increment('total_failed');
 
         // متوقف کردن کانفیگ در صورت خطای جدی
         if ($this->shouldStopOnError($e)) {
             $this->config->stop();
-            Log::warning("کانفیگ به دلیل خطای جدی متوقف شد", [
-                'config_name' => $this->config->name,
-                'error_type' => get_class($e)
-            ]);
+            Log::warning("کانفیگ متوقف شد", ['config' => $this->config->name]);
         } else {
-            // برنامه‌ریزی تلاش مجدد با تاخیر بیشتر
-            $retryDelay = min($this->config->delay_seconds * 2, 300); // حداکثر 5 دقیقه
+            // تلاش مجدد با تاخیر بیشتر
+            $retryDelay = min($this->config->delay_seconds * 2, 300);
 
             Log::info("برنامه‌ریزی تلاش مجدد", [
-                'config_name' => $this->config->name,
+                'config' => $this->config->name,
                 'retry_delay' => $retryDelay
             ]);
 
@@ -252,11 +225,10 @@ class ProcessConfigJob implements ShouldQueue
     }
 
     /**
-     * تعیین اینکه آیا باید کانفیگ را در صورت خطا متوقف کرد
+     * تعیین متوقف کردن در صورت خطا
      */
     private function shouldStopOnError(\Exception $e): bool
     {
-        // خطاهای جدی که باعث توقف می‌شوند
         $criticalErrors = [
             \InvalidArgumentException::class,
             \BadMethodCallException::class,
@@ -273,8 +245,7 @@ class ProcessConfigJob implements ShouldQueue
             ->where('created_at', '>=', now()->subHour())
             ->count();
 
-        // اگر در یک ساعت گذشته بیش از 10 خطا داشته، متوقف کن
-        return $recentFailures > 10;
+        return $recentFailures > 5; // کاهش از 10 به 5
     }
 
     /**
@@ -282,46 +253,29 @@ class ProcessConfigJob implements ShouldQueue
      */
     public function failed(\Throwable $exception): void
     {
-        Log::error("شکست کامل Job پردازش کانفیگ", [
-            'config_name' => $this->config->name,
-            'error' => $exception->getMessage(),
-            'trace' => $exception->getTraceAsString()
+        Log::error("شکست کامل Job", [
+            'config' => $this->config->name,
+            'error' => $exception->getMessage()
         ]);
 
-        // متوقف کردن کانفیگ
         $this->config->stop();
 
-        // ثبت شکست
         ScrapingFailure::logFailure(
             $this->config->id,
             $this->config->current_url ?? $this->config->base_url,
             'شکست کامل Job: ' . $exception->getMessage(),
-            [
-                'trace' => $exception->getTraceAsString(),
-                'job_class' => static::class
-            ]
+            ['job_class' => static::class]
         );
-
-        // ذخیره خطا در cache
-        Cache::put("config_error_{$this->config->id}", [
-            'message' => 'شکست کامل Job: ' . $exception->getMessage(),
-            'time' => now()->toDateTimeString(),
-            'details' => [
-                'line' => $exception->getLine(),
-                'file' => basename($exception->getFile())
-            ]
-        ], 86400);
     }
 
     /**
-     * دریافت tags برای monitoring
+     * تگ‌ها برای monitoring
      */
     public function tags(): array
     {
         return [
             'config:' . $this->config->id,
-            'type:' . $this->config->data_source_type,
-            'status:' . $this->config->status
+            'type:' . $this->config->data_source_type
         ];
     }
 }

@@ -4,11 +4,12 @@ namespace App\Console\Commands;
 
 use App\Models\Config;
 use App\Jobs\ProcessConfigJob;
+use App\Services\ApiDataService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
 
 /**
- * کامند اجرای کانفیگ‌ها برای دریافت اطلاعات
+ * کامند بهینه‌شده اجرای کانفیگ‌ها
  */
 class RunConfigCommand extends Command
 {
@@ -18,14 +19,14 @@ class RunConfigCommand extends Command
     protected $signature = 'config:run
                             {--id= : شناسه کانفیگ خاص}
                             {--name= : نام کانفیگ خاص}
-                            {--force : اجرای اجباری حتی اگر کانفیگ غیرفعال باشد}
                             {--sync : اجرای همزمان به جای استفاده از Queue}
+                            {--limit=10 : تعداد رکورد برای پردازش}
                             {--all : اجرای تمام کانفیگ‌های فعال}';
 
     /**
      * توضیحات کامند
      */
-    protected $description = 'اجرای کانفیگ‌ها برای دریافت اطلاعات از منابع خارجی';
+    protected $description = 'اجرای بهینه‌شده کانفیگ‌ها برای دریافت اطلاعات';
 
     /**
      * اجرای کامند
@@ -47,12 +48,6 @@ class RunConfigCommand extends Command
 
             // نمایش لیست کانفیگ‌ها
             $this->displayConfigsList($configs);
-
-            // درخواست تأیید (در صورت عدم استفاده از force)
-            if (!$this->option('force') && !$this->confirmExecution($configs)) {
-                $this->info('❌ اجرا لغو شد.');
-                return Command::SUCCESS;
-            }
 
             // اجرای کانفیگ‌ها
             $results = $this->executeConfigs($configs);
@@ -87,15 +82,11 @@ class RunConfigCommand extends Command
 
         // اجرای همه کانفیگ‌ها
         if ($this->option('all')) {
-            if ($this->option('force')) {
-                return $query->get(); // همه کانفیگ‌ها
-            } else {
-                return $query->active()->get(); // فقط فعال‌ها
-            }
+            return $query->active()->get();
         }
 
         // پیش‌فرض: فقط کانفیگ‌های فعال
-        return $query->active()->get();
+        return $query->active()->limit(5)->get();
     }
 
     /**
@@ -106,7 +97,7 @@ class RunConfigCommand extends Command
         $tableData = [];
 
         foreach ($configs as $config) {
-            $lastRun = $config->config_data['last_run'] ?? 'هرگز';
+            $lastRun = $config->last_run_at ? $config->last_run_at->diffForHumans() : 'هرگز';
 
             $tableData[] = [
                 $config->id,
@@ -114,7 +105,7 @@ class RunConfigCommand extends Command
                 $config->data_source_type_text,
                 $config->status_text,
                 $lastRun,
-                $config->base_url
+                Str::limit($config->base_url, 50)
             ];
         }
 
@@ -125,25 +116,13 @@ class RunConfigCommand extends Command
     }
 
     /**
-     * درخواست تأیید اجرا
-     */
-    private function confirmExecution($configs): bool
-    {
-        if ($this->option('no-interaction')) {
-            return true;
-        }
-
-        return $this->confirm("آیا مطمئن هستید که می‌خواهید {$configs->count()} کانفیگ را اجرا کنید؟");
-    }
-
-    /**
      * اجرای کانفیگ‌ها
      */
     private function executeConfigs($configs): array
     {
         $results = [];
         $useSync = $this->option('sync');
-        $force = $this->option('force');
+        $limit = (int) $this->option('limit');
 
         $progressBar = $this->output->createProgressBar($configs->count());
         $progressBar->setFormat(' %current%/%max% [%bar%] %percent:3s%% -- %message%');
@@ -156,7 +135,7 @@ class RunConfigCommand extends Command
             try {
                 // بررسی قفل
                 $lockKey = "config_processing_{$config->id}";
-                if (Cache::has($lockKey) && !$force) {
+                if (Cache::has($lockKey)) {
                     $results[] = [
                         'config' => $config,
                         'status' => 'skipped',
@@ -168,7 +147,7 @@ class RunConfigCommand extends Command
 
                 if ($useSync) {
                     // اجرای همزمان
-                    $stats = $this->runConfigSync($config, $force);
+                    $stats = $this->runConfigSync($config, $limit);
                     $results[] = [
                         'config' => $config,
                         'status' => 'completed',
@@ -177,7 +156,7 @@ class RunConfigCommand extends Command
                     ];
                 } else {
                     // اضافه کردن به صف
-                    ProcessConfigJob::dispatch($config, $force);
+                    ProcessConfigJob::dispatch($config);
                     $results[] = [
                         'config' => $config,
                         'status' => 'queued',
@@ -207,14 +186,26 @@ class RunConfigCommand extends Command
     /**
      * اجرای همزمان کانفیگ
      */
-    private function runConfigSync(Config $config, bool $force): array
+    private function runConfigSync(Config $config, int $limit): array
     {
         if ($config->isApiSource()) {
-            $service = new \App\Services\ApiDataService($config);
-            return $service->fetchData();
-        } elseif ($config->isCrawlerSource()) {
-            $service = new \App\Services\CrawlerDataService($config);
-            return $service->crawlData();
+            $service = new ApiDataService($config);
+
+            // تنظیم محدودیت رکورد موقت
+            $originalLimit = $config->records_per_run;
+            $config->records_per_run = $limit;
+
+            try {
+                $stats = $service->fetchData();
+
+                // بازگرداندن تنظیم اصلی
+                $config->records_per_run = $originalLimit;
+
+                return $stats;
+            } catch (\Exception $e) {
+                $config->records_per_run = $originalLimit;
+                throw $e;
+            }
         }
 
         throw new \InvalidArgumentException("نوع کانفیگ پشتیبانی نشده: {$config->data_source_type}");
