@@ -1,79 +1,50 @@
 <?php
 
-use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ConfigController;
 use Illuminate\Support\Facades\Route;
 
-/*
-|--------------------------------------------------------------------------
-| Web Routes
-|--------------------------------------------------------------------------
-|
-| در اینجا می‌توانید روت‌های وب اپلیکیشن خود را ثبت کنید. این روت‌ها
-| توسط RouteServiceProvider بارگذاری می‌شوند و همگی در گروه middleware "web" قرار می‌گیرند.
-|
-*/
-
 // صفحه خانه
 Route::get('/', function () {
-    return view('welcome');
+    return redirect()->route('configs.index');
 });
 
-// داشبورد (نیاز به احراز هویت)
+// داشبورد
 Route::get('/dashboard', function () {
-    return view('dashboard');
+    return redirect()->route('configs.index');
 })->middleware(['auth', 'verified'])->name('dashboard');
 
 // گروه روت‌های احراز هویت شده
 Route::middleware('auth')->group(function () {
 
-    // مدیریت پروفایل کاربر
-    Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
-    Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
-    Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
-
-    // روت‌های تست کانفیگ‌ها (باید قبل از resource باشد)
-    Route::get('configs/test-page', [ConfigController::class, 'testPage'])->name('configs.test-page');
-    Route::post('configs/test-url', [ConfigController::class, 'testUrl'])->name('configs.test-url');
-
-    // روت‌های debug کانفیگ‌ها (فقط در محیط development)
-    if (app()->environment(['local', 'development'])) {
-        Route::get('configs/{config}/debug', [ConfigController::class, 'debug'])->name('configs.debug');
-        Route::get('configs/{config}/debug-api', [ConfigController::class, 'debugApi'])->name('configs.debug-api');
-    }
-
     // مدیریت کانفیگ‌ها - Resource Routes
     Route::resource('configs', ConfigController::class);
 
-    // روت‌های اضافی برای کانفیگ‌ها
-    Route::patch('configs/{config}/toggle-status', [ConfigController::class, 'toggleStatus'])
-        ->name('configs.toggle-status');
-
-    // روت‌های اجرای کانفیگ‌ها
-    Route::post('configs/{config}/run', [ConfigController::class, 'run'])
-        ->name('configs.run');
-
-    Route::post('configs/{config}/run-sync', [ConfigController::class, 'runSync'])
-        ->name('configs.run-sync');
+    // روت‌های کنترل اسکرپر
+    Route::post('configs/{config}/start', [ConfigController::class, 'start'])
+        ->name('configs.start');
 
     Route::post('configs/{config}/stop', [ConfigController::class, 'stop'])
         ->name('configs.stop');
 
-    Route::post('configs/run-all', [ConfigController::class, 'runAll'])
-        ->name('configs.run-all');
+    Route::post('configs/{config}/reset', [ConfigController::class, 'reset'])
+        ->name('configs.reset');
 
-    // روت‌های آمار و گزارش
-    Route::get('configs/{config}/stats', [ConfigController::class, 'stats'])
-        ->name('configs.stats');
+    // کنترل همه کانفیگ‌ها
+    Route::post('configs/start-all', [ConfigController::class, 'startAll'])
+        ->name('configs.start-all');
 
-    Route::delete('configs/{config}/clear-stats', [ConfigController::class, 'clearStats'])
-        ->name('configs.clear-stats');
+    Route::post('configs/stop-all', [ConfigController::class, 'stopAll'])
+        ->name('configs.stop-all');
 
-    // روت تست کانفیگ
-    Route::post('configs/{config}/test', [ConfigController::class, 'testConfig'])
-        ->name('configs.test');
+    // مدیریت شکست‌ها
+    Route::get('configs/{config}/failures', [ConfigController::class, 'failures'])
+        ->name('configs.failures');
 
+    Route::post('configs/{config}/failures/{failure}/resolve', [ConfigController::class, 'resolveFailure'])
+        ->name('configs.resolve-failure');
+
+    Route::post('configs/{config}/failures/resolve-all', [ConfigController::class, 'resolveAllFailures'])
+        ->name('configs.resolve-all-failures');
 });
 
-// فایل‌های روت احراز هویت
 require __DIR__.'/auth.php';

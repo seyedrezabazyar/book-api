@@ -6,56 +6,39 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * اجرای مایگریشن
-     */
     public function up(): void
     {
         Schema::create('configs', function (Blueprint $table) {
             $table->id();
+            $table->string('name')->unique();
+            $table->text('description')->nullable();
+            $table->enum('data_source_type', ['api', 'crawler'])->default('api');
+            $table->string('base_url');
+            $table->integer('timeout')->default(30);
+            $table->integer('max_retries')->default(3);
 
-            // اطلاعات اصلی کانفیگ
-            $table->string('name')->unique()->comment('نام کانفیگ');
-            $table->text('description')->nullable()->comment('توضیحات کانفیگ');
+            // تنظیمات سرعت اسکرپر
+            $table->integer('delay_seconds')->default(1); // تاخیر بین درخواست‌ها (ثانیه)
+            $table->integer('records_per_run')->default(1); // تعداد رکورد در هر اجرا
 
-            // نوع دریافت اطلاعات: api یا crawler
-            $table->enum('data_source_type', ['api', 'crawler'])
-                ->default('api')
-                ->comment('نوع روش دریافت اطلاعات');
+            $table->json('config_data');
+            $table->enum('status', ['active', 'inactive', 'draft'])->default('draft');
 
-            // تنظیمات اتصال پایه
-            $table->string('base_url')->comment('آدرس پایه سایت');
-            $table->integer('timeout')->default(30)->comment('تایم‌اوت درخواست به ثانیه');
-            $table->integer('max_retries')->default(3)->comment('تعداد تلاش مجدد');
-            $table->integer('delay')->default(1000)->comment('تاخیر بین درخواست‌ها به میلی‌ثانیه');
+            // اطلاعات پیشرفت
+            $table->text('current_url')->nullable(); // آخرین URL پردازش شده
+            $table->integer('total_processed')->default(0); // کل پردازش شده
+            $table->integer('total_success')->default(0); // موفق
+            $table->integer('total_failed')->default(0); // ناموفق
+            $table->timestamp('last_run_at')->nullable();
+            $table->boolean('is_running')->default(false);
 
-            // داده‌های کانفیگ به صورت JSON شامل تمام تنظیمات
-            $table->json('config_data')->comment('تنظیمات تفصیلی کانفیگ');
-
-            // وضعیت کانفیگ
-            $table->enum('status', ['active', 'inactive', 'draft'])
-                ->default('draft')
-                ->comment('وضعیت کانفیگ');
-
-            // اطلاعات ایجادکننده
-            $table->unsignedBigInteger('created_by')->nullable()->comment('شناسه کاربر ایجادکننده');
-
-            // تاریخ‌های ایجاد و به‌روزرسانی
+            $table->unsignedBigInteger('created_by')->nullable();
             $table->timestamps();
 
-            // فهرست‌ها برای بهینه‌سازی جستجو
-            $table->index(['status', 'created_at']);
-            $table->index(['data_source_type', 'status']);
-            $table->index('name');
-
-            // کلید خارجی برای کاربر (در صورت وجود جدول users)
-            // $table->foreign('created_by')->references('id')->on('users')->onDelete('set null');
+            $table->index(['status', 'is_running']);
         });
     }
 
-    /**
-     * برگرداندن تغییرات مایگریشن
-     */
     public function down(): void
     {
         Schema::dropIfExists('configs');

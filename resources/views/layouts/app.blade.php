@@ -1,52 +1,80 @@
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" dir="rtl">
+<html lang="fa" dir="rtl">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>@yield('title', 'مدیریت اسکرپر')</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <meta name="csrf-token" content="{{ csrf_token() }}">
-
-    <title>@yield('title', config('app.name', 'Laravel'))</title>
-
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.bunny.net">
-    <link href="https://fonts.bunny.net/css?family=figtree:400,500,600&display=swap" rel="stylesheet" />
-
-    <!-- Scripts -->
-    @vite(['resources/css/app.css', 'resources/js/app.js'])
-
-    <!-- سبک‌های سفارشی -->
     <style>
-        body {
-            font-family: 'figtree', sans-serif;
-            direction: rtl;
-            text-align: right;
-        }
-        .ltr {
-            direction: ltr;
-            text-align: left;
-        }
+        body { font-family: 'Vazir', 'Tahoma', sans-serif; }
     </style>
 </head>
-<body class="font-sans antialiased bg-gray-100">
-<div class="min-h-screen">
-    @include('layouts.navigation')
-
-    <!-- Page Heading -->
-    @hasSection('header')
-        <header class="bg-white shadow">
-            <div class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
-                @yield('header')
+<body class="bg-gray-50">
+<!-- نوار ناوبری -->
+<nav class="bg-white shadow border-b border-gray-200">
+    <div class="container mx-auto px-4">
+        <div class="flex justify-between items-center h-16">
+            <!-- لوگو -->
+            <div class="flex items-center">
+                <a href="{{ route('configs.index') }}" class="text-xl font-bold text-gray-800">
+                    🤖 اسکرپر مدیریت
+                </a>
             </div>
-        </header>
-    @endif
 
-    <!-- Page Content -->
-    <main class="py-4">
-        @yield('content')
-    </main>
-</div>
+            <!-- منوی اصلی -->
+            <div class="flex items-center space-x-4 space-x-reverse">
+                <a href="{{ route('configs.index') }}"
+                   class="text-gray-700 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('configs.*') ? 'bg-blue-100 text-blue-700' : '' }}">
+                    📋 کانفیگ‌ها
+                </a>
 
-<!-- Scripts اضافی -->
+                @auth
+                    <div class="relative group">
+                        <button class="flex items-center text-gray-700 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium">
+                            👤 {{ Auth::user()->name }}
+                            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                            </svg>
+                        </button>
+
+                        <!-- منوی کشویی -->
+                        <div class="absolute left-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50 hidden group-hover:block">
+                            <a href="{{ route('profile.edit') }}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                ⚙️ تنظیمات
+                            </a>
+                            <form method="POST" action="{{ route('logout') }}" class="block">
+                                @csrf
+                                <button type="submit" class="w-full text-right px-4 py-2 text-sm text-red-600 hover:bg-gray-100">
+                                    🚪 خروج
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                @else
+                    <a href="{{ route('login') }}" class="text-gray-700 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium">
+                        🔑 ورود
+                    </a>
+                @endauth
+            </div>
+        </div>
+    </div>
+</nav>
+
+<!-- محتوای اصلی -->
+<main>
+    @yield('content')
+</main>
+
+<!-- فوتر -->
+<footer class="bg-white border-t border-gray-200 mt-12">
+    <div class="container mx-auto px-4 py-6">
+        <div class="text-center text-gray-600 text-sm">
+            © {{ date('Y') }} سیستم مدیریت اسکرپر - ساخته شده با ❤️
+        </div>
+    </div>
+</footer>
+
 @stack('scripts')
 </body>
 </html>
