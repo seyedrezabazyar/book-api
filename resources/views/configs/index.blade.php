@@ -101,7 +101,27 @@
                         </thead>
                         <tbody class="bg-white divide-y divide-gray-200">
                         @foreach($configs as $config)
-                            <tr class="hover:bg-gray-50">
+                            @php
+                                // بارگذاری مجدد کانفیگ برای آمار جدید
+                                $freshConfig = $config->fresh();
+
+                                // دریافت آمار از cache
+                                $cacheStats = \Illuminate\Support\Facades\Cache::get("config_stats_{$config->id}");
+
+                                // ترکیب آمار دیتابیس و cache
+                                $displayStats = [
+                                    'total_processed' => $freshConfig->total_processed,
+                                    'total_success' => $freshConfig->total_success,
+                                    'total_failed' => $freshConfig->total_failed,
+                                    'last_run_at' => $freshConfig->last_run_at,
+                                    'cache_total' => $cacheStats['total'] ?? 0,
+                                    'cache_success' => $cacheStats['success'] ?? 0,
+                                    'cache_failed' => $cacheStats['failed'] ?? 0,
+                                    'cache_duplicate' => $cacheStats['duplicate'] ?? 0
+                                ];
+                            @endphp
+
+                            <tr class="hover:bg-gray-50" id="config-row-{{ $config->id }}">
                                 <!-- نام و توضیحات -->
                                 <td class="px-6 py-4 whitespace-nowrap">
                                     <div>
@@ -125,40 +145,51 @@
                                     <div class="flex flex-col space-y-1">
                                         <!-- وضعیت کانفیگ -->
                                         <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full
-                                            @if($config->status === 'active') bg-green-100 text-green-800
-                                            @elseif($config->status === 'inactive') bg-red-100 text-red-800
+                                            @if($freshConfig->status === 'active') bg-green-100 text-green-800
+                                            @elseif($freshConfig->status === 'inactive') bg-red-100 text-red-800
                                             @else bg-yellow-100 text-yellow-800 @endif">
-                                            {{ $config->status_text }}
+                                            {{ $freshConfig->status_text }}
                                         </span>
 
                                         <!-- وضعیت اجرا -->
-                                        @if($config->is_running)
-                                            <span class="inline-flex items-center px-2 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">
-                                                <svg class="animate-spin -ml-1 mr-1 h-3 w-3" fill="none" viewBox="0 0 24 24">
-                                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                                </svg>
-                                                در حال اجرا
-                                            </span>
-                                        @else
-                                            <span class="inline-flex px-2 py-1 text-xs font-medium bg-gray-100 text-gray-700 rounded-full">
-                                                آماده
-                                            </span>
-                                        @endif
+                                        <span id="running-status-{{ $config->id }}">
+                                            @if($freshConfig->is_running)
+                                                <span class="inline-flex items-center px-2 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">
+                                                    <svg class="animate-spin -ml-1 mr-1 h-3 w-3" fill="none" viewBox="0 0 24 24">
+                                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                    </svg>
+                                                    در حال اجرا
+                                                </span>
+                                            @else
+                                                <span class="inline-flex px-2 py-1 text-xs font-medium bg-gray-100 text-gray-700 rounded-full">
+                                                    آماده
+                                                </span>
+                                            @endif
+                                        </span>
                                     </div>
                                 </td>
 
-                                <!-- آمار -->
-                                <td class="px-6 py-4 whitespace-nowrap">
+                                <!-- آمار - بهبود شده -->
+                                <td class="px-6 py-4 whitespace-nowrap" id="stats-{{ $config->id }}">
                                     <div class="text-xs space-y-1">
-                                        <div>کل: <span class="font-medium">{{ number_format($config->total_processed) }}</span></div>
-                                        <div>موفق: <span class="font-medium text-green-600">{{ number_format($config->total_success) }}</span></div>
-                                        <div>خطا: <span class="font-medium text-red-600">{{ number_format($config->total_failed) }}</span></div>
-                                        @if($config->total_processed > 0)
-                                            <div>نرخ: <span class="font-medium">{{ $config->getSuccessRate() }}%</span></div>
+                                        <div>کل: <span class="font-medium" data-stat="total">{{ number_format($displayStats['total_processed']) }}</span></div>
+                                        <div>موفق: <span class="font-medium text-green-600" data-stat="success">{{ number_format($displayStats['total_success']) }}</span></div>
+                                        <div>خطا: <span class="font-medium text-red-600" data-stat="failed">{{ number_format($displayStats['total_failed']) }}</span></div>
+
+                                        @if($displayStats['cache_total'] > 0)
+                                            <div class="text-blue-600">آخرین اجرا:
+                                                <span class="font-medium">{{ $displayStats['cache_success'] }}</span>موفق،
+                                                <span class="font-medium">{{ $displayStats['cache_duplicate'] }}</span>تکراری
+                                            </div>
                                         @endif
-                                        @if($config->last_run_at)
-                                            <div class="text-gray-500">آخرین اجرا: {{ $config->last_run_at->diffForHumans() }}</div>
+
+                                        @if($displayStats['total_processed'] > 0)
+                                            <div>نرخ: <span class="font-medium">{{ round(($displayStats['total_success'] / $displayStats['total_processed']) * 100, 1) }}%</span></div>
+                                        @endif
+
+                                        @if($displayStats['last_run_at'])
+                                            <div class="text-gray-500">آخرین اجرا: {{ $displayStats['last_run_at']->diffForHumans() }}</div>
                                         @endif
                                     </div>
                                 </td>
@@ -202,39 +233,52 @@
                                         </a>
 
                                         @if($config->status === 'active')
-                                            @if($config->is_running)
-                                                <!-- متوقف کردن -->
-                                                <form method="POST" action="{{ route('configs.stop', $config) }}" class="inline">
-                                                    @csrf
-                                                    <button type="submit"
-                                                            class="text-red-600 hover:text-red-900 p-1 rounded"
-                                                            title="متوقف کردن"
-                                                            onclick="return confirm('متوقف کردن اسکرپر؟')">
-                                                        ⏹️
-                                                    </button>
-                                                </form>
-                                            @else
-                                                <!-- شروع -->
-                                                <form method="POST" action="{{ route('configs.start', $config) }}" class="inline">
-                                                    @csrf
-                                                    <button type="submit"
-                                                            class="text-green-600 hover:text-green-900 p-1 rounded"
-                                                            title="شروع اسکرپر">
-                                                        ▶️
-                                                    </button>
-                                                </form>
+                                            <span id="action-buttons-{{ $config->id }}">
+                                                @if($freshConfig->is_running)
+                                                    <!-- متوقف کردن -->
+                                                    <form method="POST" action="{{ route('configs.stop', $config) }}" class="inline">
+                                                        @csrf
+                                                        <button type="submit"
+                                                                class="text-red-600 hover:text-red-900 p-1 rounded"
+                                                                title="متوقف کردن"
+                                                                onclick="return confirm('متوقف کردن اسکرپر؟')">
+                                                            ⏹️
+                                                        </button>
+                                                    </form>
+                                                @else
+                                                    <!-- شروع -->
+                                                    <form method="POST" action="{{ route('configs.start', $config) }}" class="inline">
+                                                        @csrf
+                                                        <button type="submit"
+                                                                class="text-green-600 hover:text-green-900 p-1 rounded"
+                                                                title="شروع اسکرپر">
+                                                            ▶️
+                                                        </button>
+                                                    </form>
 
-                                                <!-- ریست -->
-                                                <form method="POST" action="{{ route('configs.reset', $config) }}" class="inline">
-                                                    @csrf
-                                                    <button type="submit"
-                                                            class="text-orange-600 hover:text-orange-900 p-1 rounded"
-                                                            title="شروع از اول"
-                                                            onclick="return confirm('پاک کردن پیشرفت و شروع از اول؟')">
-                                                        🔄
-                                                    </button>
-                                                </form>
-                                            @endif
+                                                    <!-- اجرای فوری -->
+                                                    <form method="POST" action="{{ route('configs.run-sync', $config) }}" class="inline">
+                                                        @csrf
+                                                        <button type="submit"
+                                                                class="text-orange-600 hover:text-orange-900 p-1 rounded"
+                                                                title="اجرای فوری"
+                                                                onclick="return confirm('اجرای فوری ممکن است زمان زیادی طول بکشد. ادامه می‌دهید؟')">
+                                                            ⚡
+                                                        </button>
+                                                    </form>
+
+                                                    <!-- ریست -->
+                                                    <form method="POST" action="{{ route('configs.reset', $config) }}" class="inline">
+                                                        @csrf
+                                                        <button type="submit"
+                                                                class="text-orange-600 hover:text-orange-900 p-1 rounded"
+                                                                title="شروع از اول"
+                                                                onclick="return confirm('پاک کردن پیشرفت و شروع از اول؟')">
+                                                            🔄
+                                                        </button>
+                                                    </form>
+                                                @endif
+                                            </span>
                                         @endif
 
                                         <!-- ویرایش -->
@@ -244,7 +288,7 @@
                                         </a>
 
                                         <!-- حذف -->
-                                        @if(!$config->is_running)
+                                        @if(!$freshConfig->is_running)
                                             <form method="POST" action="{{ route('configs.destroy', $config) }}" class="inline">
                                                 @csrf
                                                 @method('DELETE')
@@ -311,9 +355,12 @@
                     @php
                         $totalRunning = $configs->where('is_running', true)->count();
                         $totalActive = $configs->where('status', 'active')->count();
-                        $totalProcessed = $configs->sum('total_processed');
-                        $totalSuccess = $configs->sum('total_success');
-                        $totalFailed = $configs->sum('total_failed');
+
+                        // محاسبه آمار کلی با refresh
+                        $allConfigs = \App\Models\Config::all();
+                        $totalProcessed = $allConfigs->sum('total_processed');
+                        $totalSuccess = $allConfigs->sum('total_success');
+                        $totalFailed = $allConfigs->sum('total_failed');
                     @endphp
 
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -330,7 +377,7 @@
                             <div class="text-xs text-gray-500">در حال اجرا</div>
                         </div>
                         <div class="text-center">
-                            <div class="text-lg font-bold text-blue-600">{{ number_format($totalProcessed) }}</div>
+                            <div class="text-lg font-bold text-blue-600" id="total-processed-global">{{ number_format($totalProcessed) }}</div>
                             <div class="text-xs text-gray-500">کل پردازش شده</div>
                         </div>
                     </div>
@@ -353,17 +400,70 @@
         @endif
     </div>
 
-    <!-- به‌روزرسانی خودکار صفحه -->
+    <!-- Real-time Updates Script -->
     <script>
-        // به‌روزرسانی خودکار هر 30 ثانیه اگر کانفیگی در حال اجرا باشد
-        @if($configs->where('is_running', true)->count() > 0)
-        setInterval(() => {
-            // بررسی اینکه آیا هنوز در همان صفحه هستیم
-            if (window.location.pathname === '{{ route('configs.index') }}') {
-                window.location.reload();
+        let updateInterval;
+
+        // شروع به‌روزرسانی real-time
+        function startRealTimeUpdates() {
+            updateInterval = setInterval(updateStats, 5000); // هر 5 ثانیه
+        }
+
+        // متوقف کردن به‌روزرسانی
+        function stopRealTimeUpdates() {
+            if (updateInterval) {
+                clearInterval(updateInterval);
             }
-        }, 30000);
-        @endif
+        }
+
+        // به‌روزرسانی آمار
+        async function updateStats() {
+            try {
+                const response = await fetch('/configs/status-check', {
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+                    }
+                });
+
+                if (!response.ok) return;
+
+                const data = await response.json();
+
+                // به‌روزرسانی آمار کلی
+                const totalElement = document.getElementById('total-processed-global');
+                if (totalElement) {
+                    totalElement.textContent = data.total_processed ? data.total_processed.toLocaleString() : '0';
+                }
+
+                // بررسی تغییرات مهم و refresh صفحه در صورت نیاز
+                if (data.should_refresh) {
+                    location.reload();
+                }
+
+            } catch (error) {
+                console.log('خطا در به‌روزرسانی آمار:', error);
+            }
+        }
+
+        // شروع به‌روزرسانی وقتی صفحه بارگذاری شد
+        document.addEventListener('DOMContentLoaded', function() {
+            // اگر کانفیگی در حال اجرا باشد، به‌روزرسانی را شروع کن
+            @if($configs->where('is_running', true)->count() > 0)
+            startRealTimeUpdates();
+            @endif
+
+            // متوقف کردن به‌روزرسانی وقتی کاربر صفحه را ترک می‌کند
+            document.addEventListener('visibilitychange', function() {
+                if (document.hidden) {
+                    stopRealTimeUpdates();
+                } else {
+                    @if($configs->where('is_running', true)->count() > 0)
+                    startRealTimeUpdates();
+                    @endif
+                }
+            });
+        });
 
         // تأیید عملیات‌های مهم
         document.addEventListener('DOMContentLoaded', function() {

@@ -7,10 +7,11 @@ use App\Jobs\ProcessConfigJob;
 use App\Services\ApiDataService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Str; // اضافه کردن import مفقود شده
+use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Log;
 
 /**
- * کامند بهینه‌شده اجرای کانفیگ‌ها - رفع شده
+ * کامند بهینه‌شده اجرای کانفیگ‌ها - رفع مشکل آمار
  */
 class RunConfigCommand extends Command
 {
@@ -106,7 +107,7 @@ class RunConfigCommand extends Command
                 $config->data_source_type_text,
                 $config->status_text,
                 $lastRun,
-                Str::limit($config->base_url, 50) // حل شده: import اضافه شد
+                Str::limit($config->base_url, 50)
             ];
         }
 
@@ -148,8 +149,12 @@ class RunConfigCommand extends Command
                 }
 
                 if ($useSync) {
-                    // اجرای همزمان
+                    // اجرای همزمان با به‌روزرسانی آمار
                     $stats = $this->runConfigSync($config, $limit);
+
+                    // **مهم: به‌روزرسانی آمار کانفیگ**
+                    $this->updateConfigStats($config, $stats);
+
                     $results[] = [
                         'config' => $config,
                         'status' => 'completed',
@@ -174,7 +179,16 @@ class RunConfigCommand extends Command
                     'message' => $e->getMessage(),
                     'stats' => null
                 ];
+
                 $this->error("خطا در {$config->name}: " . $e->getMessage());
+
+                Log::error("❌ خطا در اجرای کامند کانفیگ", [
+                    'config_id' => $config->id,
+                    'config_name' => $config->name,
+                    'error' => $e->getMessage(),
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine()
+                ]);
             }
 
             $progressBar->advance();
@@ -187,7 +201,7 @@ class RunConfigCommand extends Command
     }
 
     /**
-     * اجرای همزمان کانفیگ
+     * اجرای همزمان کانفیگ با آمار
      */
     private function runConfigSync(Config $config, int $limit): array
     {
@@ -199,12 +213,30 @@ class RunConfigCommand extends Command
             $config->records_per_run = $limit;
 
             try {
+                Log::info("🔄 شروع اجرای sync از کامند", [
+                    'config_id' => $config->id,
+                    'config_name' => $config->name,
+                    'limit' => $limit
+                ]);
+
+                $startTime = microtime(true);
                 $stats = $service->fetchData();
+                $executionTime = round(microtime(true) - $startTime, 2);
+
+                $stats['execution_time'] = $executionTime;
+                $stats['last_run'] = now()->toDateTimeString();
+
+                Log::info("✅ اجرای sync کامند موفق", [
+                    'config_id' => $config->id,
+                    'stats' => $stats,
+                    'execution_time' => $executionTime
+                ]);
 
                 // بازگرداندن تنظیم اصلی
                 $config->records_per_run = $originalLimit;
 
                 return $stats;
+
             } catch (\Exception $e) {
                 $config->records_per_run = $originalLimit;
                 throw $e;
@@ -212,6 +244,51 @@ class RunConfigCommand extends Command
         }
 
         throw new \InvalidArgumentException("نوع کانفیگ پشتیبانی نشده: {$config->data_source_type}");
+    }
+
+    /**
+     * به‌روزرسانی آمار کانفیگ در دیتابیس
+     */
+    private function updateConfigStats(Config $config, array $stats): void
+    {
+        try {
+            // بارگذاری مجدد کانفیگ از دیتابیس
+            $config->refresh();
+
+            $newTotalProcessed = $config->total_processed + $stats['total'];
+            $newTotalSuccess = $config->total_success + $stats['success'];
+            $newTotalFailed = $config->total_failed + $stats['failed'];
+
+            // به‌روزرسانی آمار در دیتابیس
+            $config->update([
+                'total_processed' => $newTotalProcessed,
+                'total_success' => $newTotalSuccess,
+                'total_failed' => $newTotalFailed,
+                'last_run_at' => now()
+            ]);
+
+            Log::info("💾 آمار کانفیگ به‌روزرسانی شد از کامند", [
+                'config_id' => $config->id,
+                'old_processed' => $config->total_processed,
+                'new_processed' => $newTotalProcessed,
+                'new_success' => $newTotalSuccess,
+                'new_failed' => $newTotalFailed,
+                'current_stats' => $stats
+            ]);
+
+            // ذخیره آمار در cache نیز
+            Cache::put("config_stats_{$config->id}", $stats, 3600);
+
+        } catch (\Exception $e) {
+            Log::error("❌ خطا در به‌روزرسانی آمار کانفیگ", [
+                'config_id' => $config->id,
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
+
+            $this->error("خطا در به‌روزرسانی آمار: " . $e->getMessage());
+        }
     }
 
     /**

@@ -17,11 +17,11 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Validator;
 
 /**
- * کنترلر مدیریت کانفیگ‌ها
+ * کنترلر بهبود شده مدیریت کانفیگ‌ها
  */
 class ConfigController extends Controller
 {
-    // نمایش لیست کانفیگ‌ها
+    // نمایش لیست کانفیگ‌ها - رفع شده
     public function index(Request $request): View
     {
         $search = $request->query('search');
@@ -44,6 +44,11 @@ class ConfigController extends Controller
         $configs = $query->orderBy('created_at', 'desc')
             ->paginate(10)
             ->appends($request->query());
+
+        // **مهم: بارگذاری مجدد همه کانفیگ‌ها برای آمار جدید**
+        $configs->getCollection()->transform(function ($config) {
+            return $config->fresh(); // بارگذاری مجدد از دیتابیس
+        });
 
         return view('configs.index', compact('configs', 'search', 'sourceType'));
     }
@@ -75,10 +80,16 @@ class ConfigController extends Controller
         try {
             $configData = $this->buildConfigData($request);
 
-            Config::create([
+            $config = Config::create([
                 ...$validated,
                 'config_data' => $configData,
                 'created_by' => Auth::id()
+            ]);
+
+            Log::info("✅ کانفیگ جدید ایجاد شد", [
+                'config_id' => $config->id,
+                'config_name' => $config->name,
+                'user_id' => Auth::id()
             ]);
 
             return redirect()->route('configs.index')
@@ -171,12 +182,12 @@ class ConfigController extends Controller
         }
     }
 
-    // شروع اسکرپر
+    // شروع اسکرپر - بهبود شده
     public function start(Config $config): RedirectResponse
     {
         if (!$config->canStart()) {
             return redirect()->back()
-                ->with('error', 'امکان شروع این کانفیگ وجود ندارد.');
+                ->with('error', 'امکان شروع این کانفیگ وجود ندارد. (وضعیت: ' . $config->status . ')');
         }
 
         try {
@@ -186,6 +197,10 @@ class ConfigController extends Controller
                 'user_id' => Auth::id()
             ]);
 
+            // پاک کردن خطاهای قبلی
+            Cache::forget("config_error_{$config->id}");
+
+            // شروع کانفیگ
             $config->start();
 
             // dispatch job جدید
@@ -197,7 +212,7 @@ class ConfigController extends Controller
             ]);
 
             return redirect()->back()
-                ->with('success', "اسکرپر '{$config->name}' شروع شد.");
+                ->with('success', "اسکرپر '{$config->name}' شروع شد و به صف اضافه شد.");
 
         } catch (\Exception $e) {
             Log::error('❌ خطا در شروع اسکرپر از وب', [
@@ -220,10 +235,27 @@ class ConfigController extends Controller
                 ->with('error', 'این کانفیگ در حال اجرا نیست.');
         }
 
-        $config->stop();
+        try {
+            $config->stop();
 
-        return redirect()->back()
-            ->with('success', "اسکرپر '{$config->name}' متوقف شد.");
+            Log::info("⏹️ کانفیگ متوقف شد", [
+                'config_id' => $config->id,
+                'config_name' => $config->name,
+                'user_id' => Auth::id()
+            ]);
+
+            return redirect()->back()
+                ->with('success', "اسکرپر '{$config->name}' متوقف شد.");
+
+        } catch (\Exception $e) {
+            Log::error('خطا در متوقف کردن اسکرپر', [
+                'config_id' => $config->id,
+                'error' => $e->getMessage()
+            ]);
+
+            return redirect()->back()
+                ->with('error', 'خطا در متوقف کردن اسکرپر.');
+        }
     }
 
     // ریست کردن (شروع از اول)
@@ -234,10 +266,31 @@ class ConfigController extends Controller
                 ->with('error', 'ابتدا اسکرپر را متوقف کنید.');
         }
 
-        $config->reset();
+        try {
+            $config->reset();
 
-        return redirect()->back()
-            ->with('success', "پیشرفت کانفیگ '{$config->name}' ریست شد.");
+            // پاک کردن cache های مربوطه
+            Cache::forget("config_stats_{$config->id}");
+            Cache::forget("config_error_{$config->id}");
+
+            Log::info("🔄 کانفیگ ریست شد", [
+                'config_id' => $config->id,
+                'config_name' => $config->name,
+                'user_id' => Auth::id()
+            ]);
+
+            return redirect()->back()
+                ->with('success', "پیشرفت کانفیگ '{$config->name}' ریست شد.");
+
+        } catch (\Exception $e) {
+            Log::error('خطا در ریست کردن کانفیگ', [
+                'config_id' => $config->id,
+                'error' => $e->getMessage()
+            ]);
+
+            return redirect()->back()
+                ->with('error', 'خطا در ریست کردن کانفیگ.');
+        }
     }
 
     // شروع همه کانفیگ‌های فعال
@@ -253,18 +306,32 @@ class ConfigController extends Controller
         }
 
         $started = 0;
+        $errors = [];
+
         foreach ($activeConfigs as $config) {
             try {
                 $config->start();
                 ProcessConfigJob::dispatch($config);
                 $started++;
+
+                Log::info("🚀 کانفیگ شروع شد (start all)", [
+                    'config_id' => $config->id,
+                    'config_name' => $config->name
+                ]);
+
             } catch (\Exception $e) {
+                $errors[] = $config->name;
                 Log::error("خطا در شروع کانفیگ {$config->name}: " . $e->getMessage());
             }
         }
 
+        $message = "{$started} کانفیگ شروع شد.";
+        if (!empty($errors)) {
+            $message .= " خطا در: " . implode(', ', $errors);
+        }
+
         return redirect()->back()
-            ->with('success', "{$started} کانفیگ شروع شد.");
+            ->with('success', $message);
     }
 
     // متوقف کردن همه
@@ -278,7 +345,15 @@ class ConfigController extends Controller
         }
 
         foreach ($runningConfigs as $config) {
-            $config->stop();
+            try {
+                $config->stop();
+                Log::info("⏹️ کانفیگ متوقف شد (stop all)", [
+                    'config_id' => $config->id,
+                    'config_name' => $config->name
+                ]);
+            } catch (\Exception $e) {
+                Log::error("خطا در متوقف کردن کانفیگ {$config->name}: " . $e->getMessage());
+            }
         }
 
         return redirect()->back()
@@ -307,10 +382,11 @@ class ConfigController extends Controller
     // حل کردن همه شکست‌ها
     public function resolveAllFailures(Config $config): RedirectResponse
     {
+        $count = $config->failures()->where('is_resolved', false)->count();
         $config->failures()->where('is_resolved', false)->update(['is_resolved' => true]);
 
         return redirect()->back()
-            ->with('success', 'همه شکست‌ها به عنوان حل شده علامت‌گذاری شدند.');
+            ->with('success', "همه شکست‌ها ({$count}) به عنوان حل شده علامت‌گذاری شدند.");
     }
 
     // نمایش آمار
@@ -332,7 +408,7 @@ class ConfigController extends Controller
         return view('configs.debug', compact('config', 'isRunning', 'error'));
     }
 
-    // API debug
+    // API debug - بهبود شده
     public function debugApi(Config $config): JsonResponse
     {
         try {
@@ -352,6 +428,13 @@ class ConfigController extends Controller
             ]);
 
         } catch (\Exception $e) {
+            Log::error("خطا در debug API", [
+                'config_id' => $config->id,
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
+
             return response()->json([
                 'success' => false,
                 'error' => $e->getMessage(),
@@ -366,11 +449,11 @@ class ConfigController extends Controller
     // صفحه تست
     public function testPage(): View
     {
-        $configs = Config::all();
+        $configs = Config::where('status', 'active')->get();
         return view('configs.test', compact('configs'));
     }
 
-    // تست URL
+    // تست URL - بهبود شده
     public function testUrl(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
@@ -381,13 +464,20 @@ class ConfigController extends Controller
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'error' => 'داده‌های ورودی نامعتبر'
+                'error' => 'داده‌های ورودی نامعتبر',
+                'validation_errors' => $validator->errors()
             ], 422);
         }
 
         try {
             $config = Config::findOrFail($request->config_id);
             $testUrl = $request->test_url;
+
+            Log::info("🧪 تست URL شروع شد", [
+                'config_id' => $config->id,
+                'test_url' => $testUrl,
+                'user_id' => Auth::id()
+            ]);
 
             if ($config->isApiSource()) {
                 $service = new ApiDataService($config);
@@ -397,20 +487,38 @@ class ConfigController extends Controller
                 $result = $service->testUrl($testUrl);
             }
 
+            Log::info("✅ تست URL موفق", [
+                'config_id' => $config->id,
+                'test_url' => $testUrl,
+                'extracted_fields' => array_keys($result['extracted_data'] ?? [])
+            ]);
+
             return response()->json([
                 'success' => true,
                 'data' => $result
             ]);
 
         } catch (\Exception $e) {
+            Log::error("❌ خطا در تست URL", [
+                'config_id' => $request->config_id,
+                'test_url' => $request->test_url,
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
+
             return response()->json([
                 'success' => false,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'details' => [
+                    'file' => basename($e->getFile()),
+                    'line' => $e->getLine()
+                ]
             ], 500);
         }
     }
 
-    // اجرای کانفیگ (Queue)
+    // اجرای کانفیگ (Queue) - بهبود شده
     public function run(Config $config): RedirectResponse
     {
         if (!$config->isActive()) {
@@ -418,21 +526,39 @@ class ConfigController extends Controller
                 ->with('error', 'کانفیگ غیرفعال است.');
         }
 
+        // بررسی اینکه کانفیگ در حال اجرا نباشد
+        if ($config->isRunning()) {
+            return redirect()->back()
+                ->with('warning', 'این کانفیگ در حال حاضر در حال اجرا است.');
+        }
+
         try {
+            Log::info("🚀 اجرای کانفیگ (Queue) از وب", [
+                'config_id' => $config->id,
+                'config_name' => $config->name,
+                'user_id' => Auth::id()
+            ]);
+
+            // پاک کردن خطاهای قبلی
+            Cache::forget("config_error_{$config->id}");
+
             ProcessConfigJob::dispatch($config);
 
             return redirect()->back()
                 ->with('success', 'کانفیگ به صف اجرا اضافه شد.');
 
         } catch (\Exception $e) {
-            Log::error('خطا در اجرای کانفیگ: ' . $e->getMessage());
+            Log::error('خطا در اجرای کانفیگ (Queue)', [
+                'config_id' => $config->id,
+                'error' => $e->getMessage()
+            ]);
 
             return redirect()->back()
                 ->with('error', 'خطا در اجرای کانفیگ.');
         }
     }
 
-    // اجرای فوری (Sync)
+    // اجرای فوری (Sync) - بهبود شده
     public function runSync(Config $config): RedirectResponse
     {
         if (!$config->isActive()) {
@@ -440,12 +566,29 @@ class ConfigController extends Controller
                 ->with('error', 'کانفیگ غیرفعال است.');
         }
 
+        // بررسی اینکه کانفیگ در حال اجرا نباشد
+        if ($config->isRunning()) {
+            return redirect()->back()
+                ->with('warning', 'این کانفیگ در حال حاضر در حال اجرا است.');
+        }
+
+        // تنظیم timeout بیشتر برای اجرای فوری
+        set_time_limit(600); // 10 دقیقه
+
         try {
             Log::info("⚡ اجرای فوری کانفیگ از وب", [
                 'config_id' => $config->id,
                 'config_name' => $config->name,
                 'user_id' => Auth::id()
             ]);
+
+            // پاک کردن خطاهای قبلی
+            Cache::forget("config_error_{$config->id}");
+
+            // شروع کانفیگ
+            $config->start();
+
+            $startTime = microtime(true);
 
             if ($config->isApiSource()) {
                 $service = new ApiDataService($config);
@@ -455,16 +598,33 @@ class ConfigController extends Controller
                 $stats = $service->crawlData();
             }
 
+            $executionTime = round(microtime(true) - $startTime, 2);
+            $stats['execution_time'] = $executionTime;
+
+            // متوقف کردن کانفیگ بعد از اجرای فوری
+            $config->stop();
+
+            // **مهم: به‌روزرسانی آمار در دیتابیس**
+            $this->updateConfigStatsFromWeb($config, $stats);
+
             // ذخیره آمار در cache
             Cache::put("config_stats_{$config->id}", $stats, 3600);
 
             Log::info("📊 اجرای فوری تمام شد", [
                 'config_id' => $config->id,
-                'stats' => $stats
+                'stats' => $stats,
+                'execution_time' => $executionTime
             ]);
 
+            $message = "اجرا تمام شد. ";
+            $message .= "کل: {$stats['total']}, ";
+            $message .= "موفق: {$stats['success']}, ";
+            $message .= "خطا: {$stats['failed']}, ";
+            $message .= "تکراری: {$stats['duplicate']}, ";
+            $message .= "زمان: {$executionTime}s";
+
             return redirect()->back()
-                ->with('success', "اجرا تمام شد. موفق: {$stats['success']}, خطا: {$stats['failed']}");
+                ->with('success', $message);
 
         } catch (\Exception $e) {
             Log::error('💥 خطا در اجرای فوری', [
@@ -474,10 +634,21 @@ class ConfigController extends Controller
                 'line' => $e->getLine()
             ]);
 
+            // متوقف کردن کانفیگ در صورت خطا
+            try {
+                $config->stop();
+            } catch (\Exception $stopError) {
+                Log::error('خطا در متوقف کردن کانفیگ بعد از خطا', [
+                    'config_id' => $config->id,
+                    'stop_error' => $stopError->getMessage()
+                ]);
+            }
+
             // ذخیره خطا در cache
             Cache::put("config_error_{$config->id}", [
                 'message' => $e->getMessage(),
-                'time' => now()->toDateTimeString()
+                'time' => now()->toDateTimeString(),
+                'sync_run' => true
             ], 3600);
 
             return redirect()->back()
@@ -485,17 +656,79 @@ class ConfigController extends Controller
         }
     }
 
+    /**
+     * به‌روزرسانی آمار کانفیگ از وب‌اینترفیس
+     */
+    private function updateConfigStatsFromWeb(Config $config, array $stats): void
+    {
+        try {
+            // بارگذاری مجدد کانفیگ از دیتابیس
+            $config->refresh();
+
+            $oldProcessed = $config->total_processed;
+            $oldSuccess = $config->total_success;
+            $oldFailed = $config->total_failed;
+
+            $newProcessed = $oldProcessed + $stats['total'];
+            $newSuccess = $oldSuccess + $stats['success'];
+            $newFailed = $oldFailed + $stats['failed'];
+
+            // به‌روزرسانی آمار در دیتابیس
+            $config->update([
+                'total_processed' => $newProcessed,
+                'total_success' => $newSuccess,
+                'total_failed' => $newFailed,
+                'last_run_at' => now()
+            ]);
+
+            Log::info("💾 آمار کانفیگ به‌روزرسانی شد از وب", [
+                'config_id' => $config->id,
+                'old_processed' => $oldProcessed,
+                'new_processed' => $newProcessed,
+                'old_success' => $oldSuccess,
+                'new_success' => $newSuccess,
+                'old_failed' => $oldFailed,
+                'new_failed' => $newFailed,
+                'current_run_stats' => $stats
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error("❌ خطا در به‌روزرسانی آمار از وب", [
+                'config_id' => $config->id,
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
+        }
+    }
+
     // پاک کردن آمار
     public function clearStats(Config $config): RedirectResponse
     {
-        Cache::forget("config_stats_{$config->id}");
-        Cache::forget("config_error_{$config->id}");
+        try {
+            Cache::forget("config_stats_{$config->id}");
+            Cache::forget("config_error_{$config->id}");
 
-        return redirect()->back()
-            ->with('success', 'آمار پاک شد.');
+            Log::info("🗑️ آمار کانفیگ پاک شد", [
+                'config_id' => $config->id,
+                'user_id' => Auth::id()
+            ]);
+
+            return redirect()->back()
+                ->with('success', 'آمار پاک شد.');
+
+        } catch (\Exception $e) {
+            Log::error('خطا در پاک کردن آمار', [
+                'config_id' => $config->id,
+                'error' => $e->getMessage()
+            ]);
+
+            return redirect()->back()
+                ->with('error', 'خطا در پاک کردن آمار.');
+        }
     }
 
-    // ساخت داده‌های کانفیگ
+    // ساخت داده‌های کانفیگ - بهبود شده
     private function buildConfigData(Request $request): array
     {
         $configData = [
@@ -551,18 +784,29 @@ class ConfigController extends Controller
      */
     public function statusCheck(): JsonResponse
     {
-        $runningConfigs = Config::where('is_running', true)->count();
-        $activeConfigs = Config::where('status', 'active')->count();
-        $totalProcessed = Config::sum('total_processed');
-        $recentFailures = ScrapingFailure::where('created_at', '>=', now()->subMinutes(5))->count();
+        try {
+            $runningConfigs = Config::where('is_running', true)->count();
+            $activeConfigs = Config::where('status', 'active')->count();
+            $totalProcessed = Config::sum('total_processed');
+            $recentFailures = ScrapingFailure::where('created_at', '>=', now()->subMinutes(5))->count();
 
-        return response()->json([
-            'running_configs' => $runningConfigs,
-            'active_configs' => $activeConfigs,
-            'total_processed' => $totalProcessed,
-            'recent_failures' => $recentFailures,
-            'should_refresh' => $recentFailures > 0 || $runningConfigs > 0,
-            'timestamp' => now()->toISOString()
-        ]);
+            return response()->json([
+                'running_configs' => $runningConfigs,
+                'active_configs' => $activeConfigs,
+                'total_processed' => $totalProcessed,
+                'recent_failures' => $recentFailures,
+                'should_refresh' => $recentFailures > 0 || $runningConfigs > 0,
+                'timestamp' => now()->toISOString()
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('خطا در status check', [
+                'error' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'error' => 'خطا در دریافت وضعیت'
+            ], 500);
+        }
     }
 }
