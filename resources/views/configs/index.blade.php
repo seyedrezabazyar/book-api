@@ -8,7 +8,7 @@
         <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6">
             <div>
                 <h1 class="text-2xl font-bold text-gray-800 mb-2">مدیریت کانفیگ‌ها</h1>
-                <p class="text-gray-600">کانفیگ‌های سیستم را مدیریت کنید</p>
+                <p class="text-gray-600">کانفیگ‌های دریافت اطلاعات را مدیریت و اجرا کنید</p>
             </div>
 
             <div class="flex flex-col sm:flex-row gap-3 mt-4 md:mt-0">
@@ -31,6 +31,19 @@
                     </button>
                 </form>
 
+                {{-- دکمه اجرای همه --}}
+                <form method="POST" action="{{ route('configs.run-all') }}" class="inline">
+                    @csrf
+                    <button
+                        type="submit"
+                        class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500"
+                        onclick="return confirm('آیا مطمئن هستید که می‌خواهید همه کانفیگ‌های فعال را اجرا کنید؟')"
+                        title="اجرای همه کانفیگ‌های فعال"
+                    >
+                        ▶️ اجرای همه
+                    </button>
+                </form>
+
                 {{-- دکمه ایجاد کانفیگ جدید --}}
                 <a
                     href="{{ route('configs.create') }}"
@@ -45,6 +58,12 @@
         @if(session('success'))
             <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4" role="alert">
                 <span class="block sm:inline">{{ session('success') }}</span>
+            </div>
+        @endif
+
+        @if(session('warning'))
+            <div class="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded mb-4" role="alert">
+                <span class="block sm:inline">{{ session('warning') }}</span>
             </div>
         @endif
 
@@ -65,13 +84,16 @@
                                 نام کانفیگ
                             </th>
                             <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                توضیحات
+                                نوع منبع
                             </th>
                             <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                                 وضعیت
                             </th>
                             <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                تاریخ ایجاد
+                                آخرین اجرا
+                            </th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                وضعیت اجرا
                             </th>
                             <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                                 عملیات
@@ -80,6 +102,11 @@
                         </thead>
                         <tbody class="bg-white divide-y divide-gray-200">
                         @foreach($configs as $config)
+                            @php
+                                $lastRun = $config->config_data['last_run'] ?? null;
+                                $isRunning = \Illuminate\Support\Facades\Cache::has("config_processing_{$config->id}");
+                                $hasError = \Illuminate\Support\Facades\Cache::has("config_error_{$config->id}");
+                            @endphp
                             <tr class="hover:bg-gray-50">
                                 {{-- نام کانفیگ --}}
                                 <td class="px-6 py-4 whitespace-nowrap">
@@ -89,17 +116,20 @@
                                                 {{ $config->name }}
                                             </div>
                                             <div class="text-sm text-gray-500">
-                                                {{ Str::limit($config->config_data['base_url'] ?? '-', 40) }}
+                                                {{ Str::limit($config->description ?? 'بدون توضیحات', 40) }}
                                             </div>
                                         </div>
                                     </div>
                                 </td>
 
-                                {{-- توضیحات --}}
-                                <td class="px-6 py-4">
-                                    <div class="text-sm text-gray-900">
-                                        {{ Str::limit($config->description ?? 'بدون توضیحات', 50) }}
-                                    </div>
+                                {{-- نوع منبع --}}
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full
+                                        @if($config->data_source_type === 'api') bg-blue-100 text-blue-800
+                                        @else bg-purple-100 text-purple-800 @endif
+                                    ">
+                                        {{ $config->data_source_type_text }}
+                                    </span>
                                 </td>
 
                                 {{-- وضعیت --}}
@@ -113,10 +143,35 @@
                                     </span>
                                 </td>
 
-                                {{-- تاریخ ایجاد --}}
+                                {{-- آخرین اجرا --}}
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                    <div>{{ $config->created_at->format('Y/m/d') }}</div>
-                                    <div class="text-xs">{{ $config->created_at->format('H:i') }}</div>
+                                    @if($lastRun)
+                                        <div>{{ \Carbon\Carbon::parse($lastRun)->format('Y/m/d') }}</div>
+                                        <div class="text-xs">{{ \Carbon\Carbon::parse($lastRun)->format('H:i') }}</div>
+                                    @else
+                                        <span class="text-gray-400">هرگز</span>
+                                    @endif
+                                </td>
+
+                                {{-- وضعیت اجرا --}}
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    @if($isRunning)
+                                        <span class="inline-flex items-center px-2 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">
+                                            <svg class="animate-spin -ml-1 mr-2 h-3 w-3 text-yellow-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                            </svg>
+                                            در حال اجرا
+                                        </span>
+                                    @elseif($hasError)
+                                        <span class="inline-flex px-2 py-1 text-xs font-medium bg-red-100 text-red-800 rounded-full">
+                                            ❌ خطا
+                                        </span>
+                                    @else
+                                        <span class="inline-flex px-2 py-1 text-xs font-medium bg-gray-100 text-gray-800 rounded-full">
+                                            آماده
+                                        </span>
+                                    @endif
                                 </td>
 
                                 {{-- عملیات --}}
@@ -134,62 +189,76 @@
                                             </svg>
                                         </a>
 
+                                        {{-- آمار --}}
+                                        <a
+                                            href="{{ route('configs.stats', $config) }}"
+                                            class="text-indigo-600 hover:text-indigo-900 px-2 py-1 rounded"
+                                            title="آمار و گزارش"
+                                        >
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                                            </svg>
+                                        </a>
+
+                                        @if($config->isActive())
+                                            @if($isRunning)
+                                                {{-- متوقف کردن --}}
+                                                <form method="POST" action="{{ route('configs.stop', $config) }}" class="inline">
+                                                    @csrf
+                                                    <button
+                                                        type="submit"
+                                                        class="text-red-600 hover:text-red-900 px-2 py-1 rounded"
+                                                        title="متوقف کردن"
+                                                        onclick="return confirm('آیا مطمئن هستید که می‌خواهید اجرا را متوقف کنید؟')"
+                                                    >
+                                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10h6v4H9z"></path>
+                                                        </svg>
+                                                    </button>
+                                                </form>
+                                            @else
+                                                {{-- اجرای عادی --}}
+                                                <form method="POST" action="{{ route('configs.run', $config) }}" class="inline">
+                                                    @csrf
+                                                    <button
+                                                        type="submit"
+                                                        class="text-green-600 hover:text-green-900 px-2 py-1 rounded"
+                                                        title="اجرای کانفیگ (صف)"
+                                                    >
+                                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h1m4 0h1m-6 4h6m2 5H7a2 2 0 01-2-2V7a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                                                        </svg>
+                                                    </button>
+                                                </form>
+
+                                                {{-- اجرای فوری --}}
+                                                <form method="POST" action="{{ route('configs.run-sync', $config) }}" class="inline">
+                                                    @csrf
+                                                    <button
+                                                        type="submit"
+                                                        class="text-orange-600 hover:text-orange-900 px-2 py-1 rounded"
+                                                        title="اجرای فوری (همزمان)"
+                                                        onclick="return confirm('اجرای فوری ممکن است زمان زیادی طول بکشد. ادامه می‌دهید؟')"
+                                                    >
+                                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                                                        </svg>
+                                                    </button>
+                                                </form>
+                                            @endif
+                                        @endif
+
                                         {{-- ویرایش --}}
                                         <a
                                             href="{{ route('configs.edit', $config) }}"
-                                            class="text-indigo-600 hover:text-indigo-900 px-2 py-1 rounded"
+                                            class="text-blue-600 hover:text-blue-900 px-2 py-1 rounded"
                                             title="ویرایش"
                                         >
                                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
                                             </svg>
                                         </a>
-
-                                        {{-- تغییر وضعیت --}}
-                                        <form
-                                            method="POST"
-                                            action="{{ route('configs.toggle-status', $config) }}"
-                                            class="inline"
-                                        >
-                                            @csrf
-                                            @method('PATCH')
-                                            <button
-                                                type="submit"
-                                                class="@if($config->isActive()) text-orange-600 hover:text-orange-900 @else text-green-600 hover:text-green-900 @endif px-2 py-1 rounded"
-                                                title="@if($config->isActive()) غیرفعال کردن @else فعال کردن @endif"
-                                                onclick="return confirm('آیا از تغییر وضعیت این کانفیگ اطمینان دارید؟')"
-                                            >
-                                                @if($config->isActive())
-                                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                                                    </svg>
-                                                @else
-                                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h1m4 0h1m-6 4h6m2 5H7a2 2 0 01-2-2V7a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                                                    </svg>
-                                                @endif
-                                            </button>
-                                        </form>
-
-                                        {{-- حذف --}}
-                                        <form
-                                            method="POST"
-                                            action="{{ route('configs.destroy', $config) }}"
-                                            class="inline"
-                                        >
-                                            @csrf
-                                            @method('DELETE')
-                                            <button
-                                                type="submit"
-                                                class="text-red-600 hover:text-red-900 px-2 py-1 rounded"
-                                                title="حذف"
-                                                onclick="return confirm('آیا از حذف این کانفیگ اطمینان دارید؟ این عمل غیرقابل بازگشت است.')"
-                                            >
-                                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
-                                                </svg>
-                                            </button>
-                                        </form>
                                     </div>
                                 </td>
                             </tr>
@@ -251,18 +320,26 @@
 
     @push('scripts')
         <script>
+            // به‌روزرسانی خودکار وضعیت صفحه هر 30 ثانیه
+            setInterval(function() {
+                // فقط اگر کانفیگی در حال اجرا باشد
+                if (document.querySelector('.animate-spin')) {
+                    location.reload();
+                }
+            }, 30000);
+
             // حذف پیام‌های موفقیت پس از 5 ثانیه
             document.addEventListener('DOMContentLoaded', function() {
-                const successAlert = document.querySelector('.bg-green-100');
-                if (successAlert) {
+                const alerts = document.querySelectorAll('.bg-green-100, .bg-yellow-100');
+                alerts.forEach(function(alert) {
                     setTimeout(() => {
-                        successAlert.style.transition = 'opacity 0.5s';
-                        successAlert.style.opacity = '0';
+                        alert.style.transition = 'opacity 0.5s';
+                        alert.style.opacity = '0';
                         setTimeout(() => {
-                            successAlert.remove();
+                            alert.remove();
                         }, 500);
                     }, 5000);
-                }
+                });
             });
         </script>
     @endpush

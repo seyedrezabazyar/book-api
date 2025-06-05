@@ -18,7 +18,7 @@
                 </a>
                 <div>
                     <h1 class="text-2xl font-bold text-gray-800">ایجاد کانفیگ جدید</h1>
-                    <p class="text-gray-600">کانفیگ جدید برای سیستم ایجاد کنید</p>
+                    <p class="text-gray-600">کانفیگ جدید برای دریافت اطلاعات از منابع خارجی ایجاد کنید</p>
                 </div>
             </div>
         </div>
@@ -37,7 +37,7 @@
 
         {{-- فرم ایجاد کانفیگ --}}
         <div class="bg-white rounded-lg shadow">
-            <form method="POST" action="{{ route('configs.store') }}" class="space-y-6 p-6">
+            <form method="POST" action="{{ route('configs.store') }}" class="space-y-6 p-6" id="configForm">
                 @csrf
 
                 {{-- بخش اطلاعات کلی --}}
@@ -65,6 +65,33 @@
                             @enderror
                         </div>
 
+                        {{-- نوع منبع داده --}}
+                        <div>
+                            <label for="data_source_type" class="block text-sm font-medium text-gray-700 mb-2">
+                                نوع منبع داده <span class="text-red-500">*</span>
+                            </label>
+                            <select
+                                id="data_source_type"
+                                name="data_source_type"
+                                required
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('data_source_type') border-red-500 @enderror"
+                                onchange="toggleSourceTypeFields()"
+                            >
+                                <option value="">انتخاب کنید</option>
+                                @foreach($dataSourceTypes as $value => $label)
+                                    <option
+                                        value="{{ $value }}"
+                                        {{ old('data_source_type') === $value ? 'selected' : '' }}
+                                    >
+                                        {{ $label }}
+                                    </option>
+                                @endforeach
+                            </select>
+                            @error('data_source_type')
+                            <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
+                            @enderror
+                        </div>
+
                         {{-- وضعیت --}}
                         <div>
                             <label for="status" class="block text-sm font-medium text-gray-700 mb-2">
@@ -76,17 +103,35 @@
                                 required
                                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('status') border-red-500 @enderror"
                             >
-                                <option value="">انتخاب کنید</option>
                                 @foreach(\App\Models\Config::getStatuses() as $value => $label)
                                     <option
                                         value="{{ $value }}"
-                                        {{ old('status') === $value ? 'selected' : '' }}
+                                        {{ old('status', 'draft') === $value ? 'selected' : '' }}
                                     >
                                         {{ $label }}
                                     </option>
                                 @endforeach
                             </select>
                             @error('status')
+                            <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        {{-- آدرس پایه --}}
+                        <div>
+                            <label for="base_url" class="block text-sm font-medium text-gray-700 mb-2">
+                                آدرس پایه سایت <span class="text-red-500">*</span>
+                            </label>
+                            <input
+                                type="url"
+                                id="base_url"
+                                name="base_url"
+                                value="{{ old('base_url') }}"
+                                required
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('base_url') border-red-500 @enderror"
+                                placeholder="https://example.com"
+                            >
+                            @error('base_url')
                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                             @enderror
                         </div>
@@ -108,34 +153,14 @@
                         @error('description')
                         <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                         @enderror
-                        <p class="mt-1 text-sm text-gray-500">حداکثر 1000 کاراکتر</p>
                     </div>
                 </div>
 
-                {{-- بخش تنظیمات کانفیگ --}}
+                {{-- بخش تنظیمات اتصال --}}
                 <div class="border-b border-gray-200 pb-6">
-                    <h2 class="text-lg font-medium text-gray-900 mb-4">تنظیمات کانفیگ</h2>
+                    <h2 class="text-lg font-medium text-gray-900 mb-4">تنظیمات اتصال</h2>
 
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {{-- آدرس پایه --}}
-                        <div class="md:col-span-2">
-                            <label for="base_url" class="block text-sm font-medium text-gray-700 mb-2">
-                                آدرس پایه <span class="text-red-500">*</span>
-                            </label>
-                            <input
-                                type="url"
-                                id="base_url"
-                                name="base_url"
-                                value="{{ old('base_url') }}"
-                                required
-                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('base_url') border-red-500 @enderror"
-                                placeholder="https://example.com"
-                            >
-                            @error('base_url')
-                            <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
-                            @enderror
-                        </div>
-
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                         {{-- تایم‌اوت --}}
                         <div>
                             <label for="timeout" class="block text-sm font-medium text-gray-700 mb-2">
@@ -154,7 +179,6 @@
                             @error('timeout')
                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                             @enderror
-                            <p class="mt-1 text-sm text-gray-500">بین 1 تا 300 ثانیه</p>
                         </div>
 
                         {{-- تعداد تلاش مجدد --}}
@@ -175,7 +199,6 @@
                             @error('max_retries')
                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                             @enderror
-                            <p class="mt-1 text-sm text-gray-500">بین 0 تا 10</p>
                         </div>
 
                         {{-- تاخیر --}}
@@ -196,41 +219,35 @@
                             @error('delay')
                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                             @enderror
-                            <p class="mt-1 text-sm text-gray-500">بین 0 تا 10000 میلی‌ثانیه</p>
-                        </div>
-
-                        {{-- User Agent --}}
-                        <div>
-                            <label for="user_agent" class="block text-sm font-medium text-gray-700 mb-2">
-                                User Agent
-                            </label>
-                            <input
-                                type="text"
-                                id="user_agent"
-                                name="user_agent"
-                                value="{{ old('user_agent', 'Mozilla/5.0 (compatible; SimpleBot/1.0)') }}"
-                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('user_agent') border-red-500 @enderror"
-                            >
-                            @error('user_agent')
-                            <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
-                            @enderror
                         </div>
                     </div>
-                </div>
 
-                {{-- بخش تنظیمات پیشرفته --}}
-                <div>
-                    <h2 class="text-lg font-medium text-gray-900 mb-4">تنظیمات پیشرفته</h2>
+                    {{-- User Agent --}}
+                    <div class="mt-6">
+                        <label for="user_agent" class="block text-sm font-medium text-gray-700 mb-2">
+                            User Agent
+                        </label>
+                        <input
+                            type="text"
+                            id="user_agent"
+                            name="user_agent"
+                            value="{{ old('user_agent', 'Mozilla/5.0 (compatible; LaravelBot/1.0)') }}"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('user_agent') border-red-500 @enderror"
+                        >
+                        @error('user_agent')
+                        <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
+                        @enderror
+                    </div>
 
-                    <div class="space-y-4">
-                        {{-- تأیید SSL --}}
+                    {{-- تنظیمات امنیتی --}}
+                    <div class="mt-6 space-y-4">
                         <div class="flex items-center">
                             <input
                                 type="checkbox"
                                 id="verify_ssl"
                                 name="verify_ssl"
                                 value="1"
-                                {{ old('verify_ssl') ? 'checked' : '' }}
+                                {{ old('verify_ssl', true) ? 'checked' : '' }}
                                 class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
                             >
                             <label for="verify_ssl" class="mr-2 block text-sm text-gray-900">
@@ -238,7 +255,6 @@
                             </label>
                         </div>
 
-                        {{-- پیگیری ریدایرکت‌ها --}}
                         <div class="flex items-center">
                             <input
                                 type="checkbox"
@@ -251,6 +267,222 @@
                             <label for="follow_redirects" class="mr-2 block text-sm text-gray-900">
                                 پیگیری ریدایرکت‌ها
                             </label>
+                        </div>
+                    </div>
+                </div>
+
+                {{-- بخش تنظیمات API --}}
+                <div id="api-settings" class="border-b border-gray-200 pb-6" style="display: none;">
+                    <h2 class="text-lg font-medium text-gray-900 mb-4">تنظیمات API</h2>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {{-- آدرس Endpoint --}}
+                        <div class="md:col-span-2">
+                            <label for="api_endpoint" class="block text-sm font-medium text-gray-700 mb-2">
+                                آدرس Endpoint <span class="text-red-500">*</span>
+                            </label>
+                            <input
+                                type="text"
+                                id="api_endpoint"
+                                name="api_endpoint"
+                                value="{{ old('api_endpoint') }}"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                placeholder="/api/books"
+                            >
+                        </div>
+
+                        {{-- متد HTTP --}}
+                        <div>
+                            <label for="api_method" class="block text-sm font-medium text-gray-700 mb-2">
+                                متد HTTP <span class="text-red-500">*</span>
+                            </label>
+                            <select
+                                id="api_method"
+                                name="api_method"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            >
+                                <option value="GET" {{ old('api_method', 'GET') === 'GET' ? 'selected' : '' }}>GET</option>
+                                <option value="POST" {{ old('api_method') === 'POST' ? 'selected' : '' }}>POST</option>
+                            </select>
+                        </div>
+
+                        {{-- نوع احراز هویت --}}
+                        <div>
+                            <label for="auth_type" class="block text-sm font-medium text-gray-700 mb-2">
+                                نوع احراز هویت <span class="text-red-500">*</span>
+                            </label>
+                            <select
+                                id="auth_type"
+                                name="auth_type"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                onchange="toggleAuthToken()"
+                            >
+                                <option value="none" {{ old('auth_type', 'none') === 'none' ? 'selected' : '' }}>بدون احراز هویت</option>
+                                <option value="bearer" {{ old('auth_type') === 'bearer' ? 'selected' : '' }}>Bearer Token</option>
+                                <option value="basic" {{ old('auth_type') === 'basic' ? 'selected' : '' }}>Basic Auth</option>
+                            </select>
+                        </div>
+
+                        {{-- توکن احراز هویت --}}
+                        <div id="auth-token-field" class="md:col-span-2" style="display: none;">
+                            <label for="auth_token" class="block text-sm font-medium text-gray-700 mb-2">
+                                توکن احراز هویت <span class="text-red-500">*</span>
+                            </label>
+                            <input
+                                type="text"
+                                id="auth_token"
+                                name="auth_token"
+                                value="{{ old('auth_token') }}"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                placeholder="توکن یا اطلاعات احراز هویت"
+                            >
+                        </div>
+                    </div>
+
+                    {{-- نقشه‌برداری فیلدهای API --}}
+                    <div class="mt-6">
+                        <h3 class="text-md font-medium text-gray-900 mb-4">نقشه‌برداری فیلدهای API</h3>
+                        <div class="bg-gray-50 p-4 rounded-lg">
+                            <p class="text-sm text-gray-600 mb-4">
+                                مشخص کنید هر فیلد کتاب از کدام فیلد پاسخ API دریافت شود:
+                            </p>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                @foreach($bookFields as $field => $label)
+                                    <div>
+                                        <label for="api_field_{{ $field }}" class="block text-sm font-medium text-gray-700 mb-1">
+                                            {{ $label }}
+                                        </label>
+                                        <input
+                                            type="text"
+                                            id="api_field_{{ $field }}"
+                                            name="api_field_{{ $field }}"
+                                            value="{{ old("api_field_{$field}") }}"
+                                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                                            placeholder="نام فیلد در پاسخ API"
+                                        >
+                                    </div>
+                                @endforeach
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {{-- بخش تنظیمات Crawler --}}
+                <div id="crawler-settings" class="border-b border-gray-200 pb-6" style="display: none;">
+                    <h2 class="text-lg font-medium text-gray-900 mb-4">تنظیمات وب کراولر</h2>
+
+                    {{-- نقشه‌برداری سلکتورهای Crawler --}}
+                    <div class="mt-6">
+                        <h3 class="text-md font-medium text-gray-900 mb-4">سلکتورهای CSS</h3>
+                        <div class="bg-gray-50 p-4 rounded-lg">
+                            <p class="text-sm text-gray-600 mb-4">
+                                مشخص کنید هر فیلد کتاب از کدام سلکتور CSS استخراج شود:
+                            </p>
+                            <div class="grid grid-cols-1 gap-4">
+                                @foreach($bookFields as $field => $label)
+                                    <div>
+                                        <label for="crawler_selector_{{ $field }}" class="block text-sm font-medium text-gray-700 mb-1">
+                                            {{ $label }}
+                                        </label>
+                                        <input
+                                            type="text"
+                                            id="crawler_selector_{{ $field }}"
+                                            name="crawler_selector_{{ $field }}"
+                                            value="{{ old("crawler_selector_{$field}") }}"
+                                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                                            placeholder="سلکتور CSS (مثال: .book-title, #title)"
+                                        >
+                                    </div>
+                                @endforeach
+                            </div>
+                        </div>
+                    </div>
+
+                    {{-- تنظیمات صفحه‌بندی --}}
+                    <div class="mt-6">
+                        <h3 class="text-md font-medium text-gray-900 mb-4">تنظیمات صفحه‌بندی</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div class="flex items-center">
+                                <input
+                                    type="checkbox"
+                                    id="pagination_enabled"
+                                    name="pagination_enabled"
+                                    value="1"
+                                    {{ old('pagination_enabled') ? 'checked' : '' }}
+                                    class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                                    onchange="togglePaginationFields()"
+                                >
+                                <label for="pagination_enabled" class="mr-2 block text-sm text-gray-900">
+                                    فعال‌سازی صفحه‌بندی
+                                </label>
+                            </div>
+                        </div>
+
+                        <div id="pagination-fields" style="display: none;">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
+                                <div>
+                                    <label for="pagination_selector" class="block text-sm font-medium text-gray-700 mb-2">
+                                        سلکتور دکمه صفحه بعد
+                                    </label>
+                                    <input
+                                        type="text"
+                                        id="pagination_selector"
+                                        name="pagination_selector"
+                                        value="{{ old('pagination_selector') }}"
+                                        class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                        placeholder=".next-page, .pagination-next"
+                                    >
+                                </div>
+
+                                <div>
+                                    <label for="pagination_max_pages" class="block text-sm font-medium text-gray-700 mb-2">
+                                        حداکثر تعداد صفحات
+                                    </label>
+                                    <input
+                                        type="number"
+                                        id="pagination_max_pages"
+                                        name="pagination_max_pages"
+                                        value="{{ old('pagination_max_pages', 10) }}"
+                                        min="1"
+                                        max="100"
+                                        class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    >
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {{-- تنظیمات پیشرفته Crawler --}}
+                    <div class="mt-6">
+                        <h3 class="text-md font-medium text-gray-900 mb-4">تنظیمات پیشرفته</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label for="wait_for_element" class="block text-sm font-medium text-gray-700 mb-2">
+                                    انتظار برای عنصر
+                                </label>
+                                <input
+                                    type="text"
+                                    id="wait_for_element"
+                                    name="wait_for_element"
+                                    value="{{ old('wait_for_element') }}"
+                                    class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    placeholder="سلکتور عنصری که باید منتظر بارگذاری آن باشد"
+                                >
+                            </div>
+
+                            <div class="flex items-center">
+                                <input
+                                    type="checkbox"
+                                    id="javascript_enabled"
+                                    name="javascript_enabled"
+                                    value="1"
+                                    {{ old('javascript_enabled') ? 'checked' : '' }}
+                                    class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                                >
+                                <label for="javascript_enabled" class="mr-2 block text-sm text-gray-900">
+                                    فعال‌سازی JavaScript
+                                </label>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -277,6 +509,82 @@
 
     @push('scripts')
         <script>
+            // تابع تغییر نوع منبع داده
+            function toggleSourceTypeFields() {
+                const sourceType = document.getElementById('data_source_type').value;
+                const apiSettings = document.getElementById('api-settings');
+                const crawlerSettings = document.getElementById('crawler-settings');
+
+                // مخفی کردن همه بخش‌ها
+                apiSettings.style.display = 'none';
+                crawlerSettings.style.display = 'none';
+
+                // نمایش بخش مناسب
+                if (sourceType === 'api') {
+                    apiSettings.style.display = 'block';
+                    // فعال‌سازی اعتبارسنجی فیلدهای API
+                    setFieldsRequired(['api_endpoint', 'api_method', 'auth_type'], true);
+                    // بررسی وضعیت احراز هویت
+                    toggleAuthToken();
+                } else if (sourceType === 'crawler') {
+                    crawlerSettings.style.display = 'block';
+                    // غیرفعال‌سازی اعتبارسنجی فیلدهای API
+                    setFieldsRequired(['api_endpoint', 'api_method', 'auth_type', 'auth_token'], false);
+                } else {
+                    // غیرفعال‌سازی تمام اعتبارسنجی‌های اضافی
+                    setFieldsRequired(['api_endpoint', 'api_method', 'auth_type', 'auth_token'], false);
+                }
+            }
+
+            // تابع تغییر نوع احراز هویت
+            function toggleAuthToken() {
+                const authType = document.getElementById('auth_type').value;
+                const authTokenField = document.getElementById('auth-token-field');
+                const authTokenInput = document.getElementById('auth_token');
+
+                if (authType === 'none') {
+                    authTokenField.style.display = 'none';
+                    authTokenInput.removeAttribute('required');
+                    authTokenInput.value = ''; // پاک کردن مقدار
+                } else {
+                    authTokenField.style.display = 'block';
+                    authTokenInput.setAttribute('required', 'required');
+                }
+            }
+
+            // تابع تغییر تنظیمات صفحه‌بندی
+            function togglePaginationFields() {
+                const paginationEnabled = document.getElementById('pagination_enabled').checked;
+                const paginationFields = document.getElementById('pagination-fields');
+
+                if (paginationEnabled) {
+                    paginationFields.style.display = 'block';
+                } else {
+                    paginationFields.style.display = 'none';
+                }
+            }
+
+            // تابع کمکی برای تنظیم الزامی بودن فیلدها
+            function setFieldsRequired(fieldIds, required) {
+                fieldIds.forEach(function(fieldId) {
+                    const field = document.getElementById(fieldId);
+                    if (field) {
+                        if (required) {
+                            field.setAttribute('required', 'required');
+                        } else {
+                            field.removeAttribute('required');
+                            field.value = ''; // پاک کردن مقدار
+                        }
+                    }
+                });
+            }
+
+            // اجرای تنظیمات اولیه هنگام بارگذاری صفحه
+            document.addEventListener('DOMContentLoaded', function() {
+                toggleSourceTypeFields();
+                togglePaginationFields();
+            });
+
             // اعتبارسنجی فرمت URL در سمت کلاینت
             document.getElementById('base_url').addEventListener('blur', function() {
                 const url = this.value;
@@ -289,31 +597,26 @@
                 }
             });
 
-            // محدودیت کاراکتر برای توضیحات
-            const descriptionField = document.getElementById('description');
-            const maxLength = 1000;
+            // اعتبارسنجی قبل از ارسال فرم
+            document.getElementById('configForm').addEventListener('submit', function(e) {
+                const sourceType = document.getElementById('data_source_type').value;
 
-            descriptionField.addEventListener('input', function() {
-                const currentLength = this.value.length;
-                const remaining = maxLength - currentLength;
+                if (sourceType === 'api') {
+                    const authType = document.getElementById('auth_type').value;
+                    const authToken = document.getElementById('auth_token').value;
 
-                // ایجاد یا به‌روزرسانی شمارنده کاراکتر
-                let counter = document.getElementById('description-counter');
-                if (!counter) {
-                    counter = document.createElement('p');
-                    counter.id = 'description-counter';
-                    counter.className = 'mt-1 text-sm text-gray-500';
-                    this.parentNode.appendChild(counter);
-                }
+                    // اگر نوع احراز هویت bearer یا basic است ولی توکن خالی است
+                    if ((authType === 'bearer' || authType === 'basic') && !authToken.trim()) {
+                        e.preventDefault();
+                        alert('لطفاً توکن احراز هویت را وارد کنید.');
+                        document.getElementById('auth_token').focus();
+                        return false;
+                    }
 
-                counter.textContent = `${remaining} کاراکتر باقی مانده`;
-
-                if (remaining < 0) {
-                    counter.className = 'mt-1 text-sm text-red-600';
-                } else if (remaining < 100) {
-                    counter.className = 'mt-1 text-sm text-yellow-600';
-                } else {
-                    counter.className = 'mt-1 text-sm text-gray-500';
+                    // اگر نوع احراز هویت none است، توکن را پاک کن
+                    if (authType === 'none') {
+                        document.getElementById('auth_token').value = '';
+                    }
                 }
             });
         </script>

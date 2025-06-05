@@ -32,12 +32,40 @@ Route::middleware('auth')->group(function () {
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
 
+    // روت‌های تست کانفیگ‌ها (باید قبل از resource باشد)
+    Route::get('configs/test-page', [ConfigController::class, 'testPage'])->name('configs.test-page');
+    Route::post('configs/test-url', [ConfigController::class, 'testUrl'])->name('configs.test-url');
+
     // مدیریت کانفیگ‌ها - Resource Routes
     Route::resource('configs', ConfigController::class);
 
     // روت‌های اضافی برای کانفیگ‌ها
     Route::patch('configs/{config}/toggle-status', [ConfigController::class, 'toggleStatus'])
         ->name('configs.toggle-status');
+
+    // روت‌های اجرای کانفیگ‌ها
+    Route::post('configs/{config}/run', [ConfigController::class, 'run'])
+        ->name('configs.run');
+
+    Route::post('configs/{config}/run-sync', [ConfigController::class, 'runSync'])
+        ->name('configs.run-sync');
+
+    Route::post('configs/{config}/stop', [ConfigController::class, 'stop'])
+        ->name('configs.stop');
+
+    Route::post('configs/run-all', [ConfigController::class, 'runAll'])
+        ->name('configs.run-all');
+
+    // روت‌های آمار و گزارش
+    Route::get('configs/{config}/stats', [ConfigController::class, 'stats'])
+        ->name('configs.stats');
+
+    Route::delete('configs/{config}/clear-stats', [ConfigController::class, 'clearStats'])
+        ->name('configs.clear-stats');
+
+    // روت تست کانفیگ
+    Route::post('configs/{config}/test', [ConfigController::class, 'testConfig'])
+        ->name('configs.test');
 
 });
 
