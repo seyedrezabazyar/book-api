@@ -4,14 +4,21 @@ namespace App\Http\Controllers;
 
 use App\Models\Config;
 use App\Models\ScrapingFailure;
-use App\Jobs\ProcessScrapingJob;
+use App\Jobs\ProcessConfigJob;
+use App\Services\ApiDataService;
+use App\Services\CrawlerDataService;
 use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\JsonResponse;
 use Illuminate\View\View;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Validator;
 
+/**
+ * کنترلر مدیریت کانفیگ‌ها
+ */
 class ConfigController extends Controller
 {
     // نمایش لیست کانفیگ‌ها
@@ -174,7 +181,7 @@ class ConfigController extends Controller
 
         try {
             $config->start();
-            ProcessScrapingJob::dispatch($config);
+            ProcessConfigJob::dispatch($config);
 
             return redirect()->back()
                 ->with('success', "اسکرپر '{$config->name}' شروع شد.");
@@ -231,7 +238,7 @@ class ConfigController extends Controller
         foreach ($activeConfigs as $config) {
             try {
                 $config->start();
-                ProcessScrapingJob::dispatch($config);
+                ProcessConfigJob::dispatch($config);
                 $started++;
             } catch (\Exception $e) {
                 Log::error("خطا در شروع کانفیگ {$config->name}: " . $e->getMessage());
@@ -288,6 +295,172 @@ class ConfigController extends Controller
             ->with('success', 'همه شکست‌ها به عنوان حل شده علامت‌گذاری شدند.');
     }
 
+    // نمایش آمار
+    public function stats(Config $config): View
+    {
+        $isRunning = $config->isRunning();
+        $stats = Cache::get("config_stats_{$config->id}");
+        $error = Cache::get("config_error_{$config->id}");
+
+        return view('configs.stats', compact('config', 'isRunning', 'stats', 'error'));
+    }
+
+    // صفحه debug
+    public function debug(Config $config): View
+    {
+        $isRunning = $config->isRunning();
+        $error = Cache::get("config_error_{$config->id}");
+
+        return view('configs.debug', compact('config', 'isRunning', 'error'));
+    }
+
+    // API debug
+    public function debugApi(Config $config): JsonResponse
+    {
+        try {
+            if (!$config->isApiSource()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'این کانفیگ از نوع API نیست'
+                ]);
+            }
+
+            $service = new ApiDataService($config);
+            $debugData = $service->debugApiCall();
+
+            return response()->json([
+                'success' => true,
+                'debug_data' => $debugData
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'details' => [
+                    'file' => basename($e->getFile()),
+                    'line' => $e->getLine()
+                ]
+            ]);
+        }
+    }
+
+    // صفحه تست
+    public function testPage(): View
+    {
+        $configs = Config::all();
+        return view('configs.test', compact('configs'));
+    }
+
+    // تست URL
+    public function testUrl(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'config_id' => 'required|exists:configs,id',
+            'test_url' => 'required|url'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'error' => 'داده‌های ورودی نامعتبر'
+            ], 422);
+        }
+
+        try {
+            $config = Config::findOrFail($request->config_id);
+            $testUrl = $request->test_url;
+
+            if ($config->isApiSource()) {
+                $service = new ApiDataService($config);
+                $result = $service->testUrl($testUrl);
+            } else {
+                $service = new CrawlerDataService($config);
+                $result = $service->testUrl($testUrl);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $result
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    // اجرای کانفیگ (Queue)
+    public function run(Config $config): RedirectResponse
+    {
+        if (!$config->isActive()) {
+            return redirect()->back()
+                ->with('error', 'کانفیگ غیرفعال است.');
+        }
+
+        try {
+            ProcessConfigJob::dispatch($config);
+
+            return redirect()->back()
+                ->with('success', 'کانفیگ به صف اجرا اضافه شد.');
+
+        } catch (\Exception $e) {
+            Log::error('خطا در اجرای کانفیگ: ' . $e->getMessage());
+
+            return redirect()->back()
+                ->with('error', 'خطا در اجرای کانفیگ.');
+        }
+    }
+
+    // اجرای فوری (Sync)
+    public function runSync(Config $config): RedirectResponse
+    {
+        if (!$config->isActive()) {
+            return redirect()->back()
+                ->with('error', 'کانفیگ غیرفعال است.');
+        }
+
+        try {
+            if ($config->isApiSource()) {
+                $service = new ApiDataService($config);
+                $stats = $service->fetchData();
+            } else {
+                $service = new CrawlerDataService($config);
+                $stats = $service->crawlData();
+            }
+
+            // ذخیره آمار در cache
+            Cache::put("config_stats_{$config->id}", $stats, 3600);
+
+            return redirect()->back()
+                ->with('success', "اجرا تمام شد. موفق: {$stats['success']}, خطا: {$stats['failed']}");
+
+        } catch (\Exception $e) {
+            Log::error('خطا در اجرای فوری کانفیگ: ' . $e->getMessage());
+
+            // ذخیره خطا در cache
+            Cache::put("config_error_{$config->id}", [
+                'message' => $e->getMessage(),
+                'time' => now()->toDateTimeString()
+            ], 3600);
+
+            return redirect()->back()
+                ->with('error', 'خطا در اجرای کانفیگ: ' . $e->getMessage());
+        }
+    }
+
+    // پاک کردن آمار
+    public function clearStats(Config $config): RedirectResponse
+    {
+        Cache::forget("config_stats_{$config->id}");
+        Cache::forget("config_error_{$config->id}");
+
+        return redirect()->back()
+            ->with('success', 'آمار پاک شد.');
+    }
+
     // ساخت داده‌های کانفیگ
     private function buildConfigData(Request $request): array
     {
@@ -337,5 +510,25 @@ class ConfigController extends Controller
         }
 
         return $mapping;
+    }
+
+    /**
+     * بررسی وضعیت کانفیگ‌ها برای آپدیت real-time
+     */
+    public function statusCheck(): JsonResponse
+    {
+        $runningConfigs = Config::where('is_running', true)->count();
+        $activeConfigs = Config::where('status', 'active')->count();
+        $totalProcessed = Config::sum('total_processed');
+        $recentFailures = ScrapingFailure::where('created_at', '>=', now()->subMinutes(5))->count();
+
+        return response()->json([
+            'running_configs' => $runningConfigs,
+            'active_configs' => $activeConfigs,
+            'total_processed' => $totalProcessed,
+            'recent_failures' => $recentFailures,
+            'should_refresh' => $recentFailures > 0 || $runningConfigs > 0,
+            'timestamp' => now()->toISOString()
+        ]);
     }
 }

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\ConfigController;
+use App\Http\Controllers\ProfileController;
 use Illuminate\Support\Facades\Route;
 
 // صفحه خانه
@@ -15,6 +16,11 @@ Route::get('/dashboard', function () {
 
 // گروه روت‌های احراز هویت شده
 Route::middleware('auth')->group(function () {
+
+    // مدیریت پروفایل - روت‌های مفقود شده
+    Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
+    Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
+    Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
 
     // مدیریت کانفیگ‌ها - Resource Routes
     Route::resource('configs', ConfigController::class);
@@ -45,6 +51,32 @@ Route::middleware('auth')->group(function () {
 
     Route::post('configs/{config}/failures/resolve-all', [ConfigController::class, 'resolveAllFailures'])
         ->name('configs.resolve-all-failures');
+
+    // روت‌های آمار و تست
+    Route::get('configs/{config}/stats', [ConfigController::class, 'stats'])
+        ->name('configs.stats');
+
+    Route::get('configs/{config}/debug', [ConfigController::class, 'debug'])
+        ->name('configs.debug');
+
+    Route::get('configs/{config}/debug-api', [ConfigController::class, 'debugApi'])
+        ->name('configs.debug-api');
+
+    Route::get('configs/test', [ConfigController::class, 'testPage'])
+        ->name('configs.test');
+
+    Route::post('configs/test-url', [ConfigController::class, 'testUrl'])
+        ->name('configs.test-url');
+
+    // روت‌های اجرا
+    Route::post('configs/{config}/run', [ConfigController::class, 'run'])
+        ->name('configs.run');
+
+    Route::post('configs/{config}/run-sync', [ConfigController::class, 'runSync'])
+        ->name('configs.run-sync');
+
+    Route::delete('configs/{config}/clear-stats', [ConfigController::class, 'clearStats'])
+        ->name('configs.clear-stats');
 });
 
 require __DIR__.'/auth.php';

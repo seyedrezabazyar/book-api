@@ -62,6 +62,62 @@ class CrawlerDataService
     }
 
     /**
+     * تست URL مشخص
+     */
+    public function testUrl(string $testUrl): array
+    {
+        Log::info("تست Crawler URL", [
+            'config_name' => $this->config->name,
+            'test_url' => $testUrl
+        ]);
+
+        try {
+            $crawlerSettings = $this->config->getCrawlerSettings();
+            $generalSettings = $this->config->getGeneralSettings();
+
+            // دریافت محتوای صفحه
+            $html = $this->fetchPageContent($testUrl, $generalSettings);
+
+            if (empty($html)) {
+                throw new \Exception('محتوای صفحه خالی است');
+            }
+
+            $crawler = new Crawler($html);
+
+            // استخراج اطلاعات کتاب
+            $extractedData = $this->extractBookDataFromHtml($crawler, $testUrl);
+
+            // تحلیل صفحه
+            $pageTitle = '';
+            try {
+                $titleNode = $crawler->filter('title');
+                if ($titleNode->count() > 0) {
+                    $pageTitle = $titleNode->text();
+                }
+            } catch (\Exception $e) {
+                // در صورت عدم وجود title
+            }
+
+            return [
+                'config_name' => $this->config->name,
+                'source_type' => 'Crawler',
+                'test_url' => $testUrl,
+                'page_title' => $pageTitle,
+                'response_status' => 200,
+                'extracted_data' => $extractedData,
+                'raw_data' => [
+                    'html_length' => strlen($html),
+                    'page_title' => $pageTitle,
+                    'extracted_fields' => array_keys($extractedData)
+                ]
+            ];
+
+        } catch (\Exception $e) {
+            throw new \Exception("خطا در تست Crawler: " . $e->getMessage());
+        }
+    }
+
+    /**
      * Crawl کردن صفحات
      */
     private function crawlPages(array $crawlerSettings, array $generalSettings): void
@@ -92,10 +148,10 @@ class CrawlerDataService
                 }
 
                 // استخراج اطلاعات کتاب‌ها از صفحه
-                $this->extractBooksFromPage($crawler, $crawlerSettings['selectors']);
+                $this->extractBooksFromPage($crawler, $crawlerSettings['selectors'] ?? []);
 
                 // بررسی وجود صفحه بعد
-                if ($crawlerSettings['pagination']['enabled']) {
+                if (isset($crawlerSettings['pagination']['enabled']) && $crawlerSettings['pagination']['enabled']) {
                     $hasNextPage = $this->hasNextPage($crawler, $crawlerSettings['pagination']);
                 } else {
                     $hasNextPage = false;
@@ -104,8 +160,8 @@ class CrawlerDataService
                 $currentPage++;
 
                 // تاخیر بین درخواست‌ها
-                if ($this->config->delay > 0) {
-                    usleep($this->config->delay * 1000); // تبدیل میلی‌ثانیه به میکروثانیه
+                if ($this->config->delay_seconds > 0) {
+                    sleep($this->config->delay_seconds);
                 }
 
             } catch (\Exception $e) {
@@ -138,7 +194,7 @@ class CrawlerDataService
     private function fetchPageContent(string $url, array $generalSettings): string
     {
         $httpClient = Http::timeout($this->config->timeout)
-            ->retry($this->config->max_retries, $this->config->delay);
+            ->retry($this->config->max_retries, $this->config->delay_seconds);
 
         // تنظیم User Agent
         if (!empty($generalSettings['user_agent'])) {
@@ -146,12 +202,12 @@ class CrawlerDataService
         }
 
         // تنظیم SSL verification
-        if (!$generalSettings['verify_ssl']) {
+        if (!($generalSettings['verify_ssl'] ?? true)) {
             $httpClient = $httpClient->withoutVerifying();
         }
 
         // تنظیم follow redirects
-        if ($generalSettings['follow_redirects']) {
+        if ($generalSettings['follow_redirects'] ?? true) {
             $httpClient = $httpClient->withOptions(['allow_redirects' => true]);
         }
 
@@ -245,6 +301,38 @@ class CrawlerDataService
     }
 
     /**
+     * استخراج اطلاعات کتاب از HTML
+     */
+    private function extractBookDataFromHtml(Crawler $crawler, string $url): array
+    {
+        $selectors = $this->config->config_data['crawler']['selectors'] ?? [];
+        $data = [];
+
+        foreach ($selectors as $field => $selector) {
+            if (empty($selector)) continue;
+
+            try {
+                $elements = $crawler->filter($selector);
+                if ($elements->count() > 0) {
+                    $data[$field] = $this->extractValueFromElement($elements, $field);
+                }
+            } catch (\Exception $e) {
+                Log::debug("خطا در selector {$field}: {$selector}", [
+                    'error' => $e->getMessage(),
+                    'url' => $url
+                ]);
+            }
+        }
+
+        // اگر selector تعریف نشده، تلاش خودکار
+        if (empty($selectors)) {
+            $data = $this->autoExtractFromHtml($crawler);
+        }
+
+        return $data;
+    }
+
+    /**
      * استخراج مقدار با سلکتور
      */
     private function extractValueBySelector(Crawler $container, string $selector, string $field): ?string
@@ -261,6 +349,41 @@ class CrawlerDataService
             'download_url' => $this->extractDownloadUrl($elements),
             default => $this->extractTextContent($elements)
         };
+    }
+
+    /**
+     * استخراج مقدار از element
+     */
+    private function extractValueFromElement($elements, string $field): string
+    {
+        $element = $elements->first();
+
+        switch ($field) {
+            case 'image_url':
+                if ($element->nodeName() === 'img') {
+                    return $element->attr('src') ?: $element->attr('data-src') ?: '';
+                }
+                $img = $element->filter('img');
+                if ($img->count() > 0) {
+                    return $img->attr('src') ?: $img->attr('data-src') ?: '';
+                }
+                break;
+
+            case 'download_url':
+                if ($element->nodeName() === 'a') {
+                    return $element->attr('href') ?: '';
+                }
+                $link = $element->filter('a');
+                if ($link->count() > 0) {
+                    return $link->attr('href') ?: '';
+                }
+                break;
+
+            default:
+                return trim($element->text());
+        }
+
+        return '';
     }
 
     /**
@@ -321,11 +444,48 @@ class CrawlerDataService
     }
 
     /**
+     * استخراج خودکار از HTML
+     */
+    private function autoExtractFromHtml(Crawler $crawler): array
+    {
+        $data = [];
+
+        // الگوهای متداول
+        $patterns = [
+            'title' => ['h1', '.title', '#title', '.book-title', '.product-title'],
+            'description' => ['.description', '.summary', '.content', '.product-description'],
+            'author' => ['.author', '.writer', '.by-author'],
+            'category' => ['.category', '.genre', '.classification'],
+            'publisher' => ['.publisher', '.publication'],
+            'image_url' => ['.book-cover img', '.product-image img', 'img.cover']
+        ];
+
+        foreach ($patterns as $field => $selectors) {
+            foreach ($selectors as $selector) {
+                try {
+                    $elements = $crawler->filter($selector);
+                    if ($elements->count() > 0) {
+                        $value = $this->extractValueFromElement($elements, $field);
+                        if (!empty(trim($value))) {
+                            $data[$field] = trim($value);
+                            break;
+                        }
+                    }
+                } catch (\Exception $e) {
+                    continue;
+                }
+            }
+        }
+
+        return $data;
+    }
+
+    /**
      * بررسی وجود صفحه بعد
      */
     private function hasNextPage(Crawler $crawler, array $paginationSettings): bool
     {
-        if (!$paginationSettings['enabled'] || empty($paginationSettings['selector'])) {
+        if (!($paginationSettings['enabled'] ?? false) || empty($paginationSettings['selector'])) {
             return false;
         }
 

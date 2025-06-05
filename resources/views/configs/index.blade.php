@@ -17,7 +17,7 @@
                     <input
                         type="text"
                         name="search"
-                        value="{{ $search }}"
+                        value="{{ $search ?? '' }}"
                         placeholder="جستجو..."
                         class="px-4 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
@@ -78,6 +78,12 @@
             </div>
         @endif
 
+        @if(session('info'))
+            <div class="bg-blue-100 border border-blue-400 text-blue-700 px-4 py-3 rounded mb-4">
+                {{ session('info') }}
+            </div>
+        @endif
+
         <!-- جدول کانفیگ‌ها -->
         <div class="bg-white rounded-lg shadow overflow-hidden">
             @if($configs->count() > 0)
@@ -85,64 +91,65 @@
                     <table class="min-w-full divide-y divide-gray-200">
                         <thead class="bg-gray-50">
                         <tr>
-                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">نام</th>
-                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">نوع</th>
-                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">وضعیت</th>
-                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">آمار</th>
-                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">تنظیمات</th>
-                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">عملیات</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">نام</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">نوع</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">وضعیت</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">آمار</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">تنظیمات</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">عملیات</th>
                         </tr>
                         </thead>
                         <tbody class="bg-white divide-y divide-gray-200">
                         @foreach($configs as $config)
                             <tr class="hover:bg-gray-50">
                                 <!-- نام و توضیحات -->
-                                <td class="px-6 py-4">
+                                <td class="px-6 py-4 whitespace-nowrap">
                                     <div>
                                         <div class="text-sm font-medium text-gray-900">{{ $config->name }}</div>
                                         <div class="text-sm text-gray-500">{{ Str::limit($config->description ?? 'بدون توضیحات', 40) }}</div>
+                                        <div class="text-xs text-gray-400 mt-1">{{ Str::limit($config->base_url, 50) }}</div>
                                     </div>
                                 </td>
 
                                 <!-- نوع منبع -->
-                                <td class="px-6 py-4">
-                                        <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full
-                                            @if($config->data_source_type === 'api') bg-blue-100 text-blue-800
-                                            @else bg-purple-100 text-purple-800 @endif">
-                                            {{ $config->data_source_type_text }}
-                                        </span>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full
+                                        @if($config->data_source_type === 'api') bg-blue-100 text-blue-800
+                                        @else bg-purple-100 text-purple-800 @endif">
+                                        {{ $config->data_source_type_text }}
+                                    </span>
                                 </td>
 
                                 <!-- وضعیت -->
-                                <td class="px-6 py-4">
+                                <td class="px-6 py-4 whitespace-nowrap">
                                     <div class="flex flex-col space-y-1">
                                         <!-- وضعیت کانفیگ -->
                                         <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full
-                                                @if($config->status === 'active') bg-green-100 text-green-800
-                                                @elseif($config->status === 'inactive') bg-red-100 text-red-800
-                                                @else bg-yellow-100 text-yellow-800 @endif">
-                                                {{ $config->status_text }}
-                                            </span>
+                                            @if($config->status === 'active') bg-green-100 text-green-800
+                                            @elseif($config->status === 'inactive') bg-red-100 text-red-800
+                                            @else bg-yellow-100 text-yellow-800 @endif">
+                                            {{ $config->status_text }}
+                                        </span>
 
                                         <!-- وضعیت اجرا -->
                                         @if($config->is_running)
                                             <span class="inline-flex items-center px-2 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">
-                                                    <svg class="animate-spin -ml-1 mr-1 h-3 w-3" fill="none" viewBox="0 0 24 24">
-                                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                                    </svg>
-                                                    در حال اجرا
-                                                </span>
+                                                <svg class="animate-spin -ml-1 mr-1 h-3 w-3" fill="none" viewBox="0 0 24 24">
+                                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                </svg>
+                                                در حال اجرا
+                                            </span>
                                         @else
                                             <span class="inline-flex px-2 py-1 text-xs font-medium bg-gray-100 text-gray-700 rounded-full">
-                                                    آماده
-                                                </span>
+                                                آماده
+                                            </span>
                                         @endif
                                     </div>
                                 </td>
 
                                 <!-- آمار -->
-                                <td class="px-6 py-4">
+                                <td class="px-6 py-4 whitespace-nowrap">
                                     <div class="text-xs space-y-1">
                                         <div>کل: <span class="font-medium">{{ number_format($config->total_processed) }}</span></div>
                                         <div>موفق: <span class="font-medium text-green-600">{{ number_format($config->total_success) }}</span></div>
@@ -150,33 +157,47 @@
                                         @if($config->total_processed > 0)
                                             <div>نرخ: <span class="font-medium">{{ $config->getSuccessRate() }}%</span></div>
                                         @endif
+                                        @if($config->last_run_at)
+                                            <div class="text-gray-500">آخرین اجرا: {{ $config->last_run_at->diffForHumans() }}</div>
+                                        @endif
                                     </div>
                                 </td>
 
                                 <!-- تنظیمات سرعت -->
-                                <td class="px-6 py-4">
+                                <td class="px-6 py-4 whitespace-nowrap">
                                     <div class="text-xs space-y-1">
                                         <div>هر <span class="font-medium">{{ $config->delay_seconds }}</span> ثانیه</div>
                                         <div><span class="font-medium">{{ $config->records_per_run }}</span> رکورد</div>
+                                        <div class="text-gray-500">
+                                            ≈ {{ round((60 / $config->delay_seconds) * $config->records_per_run) }} رکورد/دقیقه
+                                        </div>
                                     </div>
                                 </td>
 
                                 <!-- عملیات -->
-                                <td class="px-6 py-4">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
                                     <div class="flex items-center space-x-2 space-x-reverse">
                                         <!-- نمایش -->
                                         <a href="{{ route('configs.show', $config) }}"
-                                           class="text-blue-600 hover:text-blue-900 p-1 rounded" title="مشاهده">
+                                           class="text-blue-600 hover:text-blue-900 p-1 rounded" title="مشاهده جزئیات">
                                             👁️
+                                        </a>
+
+                                        <!-- آمار -->
+                                        <a href="{{ route('configs.stats', $config) }}"
+                                           class="text-green-600 hover:text-green-900 p-1 rounded" title="آمار و گزارش">
+                                            📊
                                         </a>
 
                                         <!-- شکست‌ها -->
                                         @php $unresolvedFailures = $config->failures()->where('is_resolved', false)->count(); @endphp
                                         <a href="{{ route('configs.failures', $config) }}"
-                                           class="text-orange-600 hover:text-orange-900 p-1 rounded" title="شکست‌ها">
+                                           class="text-orange-600 hover:text-orange-900 p-1 rounded relative" title="شکست‌ها">
                                             ⚠️
                                             @if($unresolvedFailures > 0)
-                                                <span class="text-xs">({{ $unresolvedFailures }})</span>
+                                                <span class="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center">
+                                                    {{ $unresolvedFailures > 9 ? '9+' : $unresolvedFailures }}
+                                                </span>
                                             @endif
                                         </a>
 
@@ -187,7 +208,8 @@
                                                     @csrf
                                                     <button type="submit"
                                                             class="text-red-600 hover:text-red-900 p-1 rounded"
-                                                            title="متوقف کردن">
+                                                            title="متوقف کردن"
+                                                            onclick="return confirm('متوقف کردن اسکرپر؟')">
                                                         ⏹️
                                                     </button>
                                                 </form>
@@ -208,7 +230,7 @@
                                                     <button type="submit"
                                                             class="text-orange-600 hover:text-orange-900 p-1 rounded"
                                                             title="شروع از اول"
-                                                            onclick="return confirm('شروع از اول؟')">
+                                                            onclick="return confirm('پاک کردن پیشرفت و شروع از اول؟')">
                                                         🔄
                                                     </button>
                                                 </form>
@@ -228,8 +250,8 @@
                                                 @method('DELETE')
                                                 <button type="submit"
                                                         class="text-red-600 hover:text-red-900 p-1 rounded"
-                                                        title="حذف"
-                                                        onclick="return confirm('حذف کانفیگ؟')">
+                                                        title="حذف کانفیگ"
+                                                        onclick="return confirm('حذف کامل کانفیگ و تمام اطلاعات آن؟')">
                                                     🗑️
                                                 </button>
                                             </form>
@@ -244,8 +266,8 @@
 
                 <!-- صفحه‌بندی -->
                 @if($configs->hasPages())
-                    <div class="px-4 py-3 border-t">
-                        {{ $configs->links() }}
+                    <div class="bg-white px-4 py-3 border-t border-gray-200 sm:px-6">
+                        {{ $configs->appends(request()->query())->links() }}
                     </div>
                 @endif
             @else
@@ -253,23 +275,31 @@
                 <div class="text-center py-12">
                     <div class="text-6xl mb-4">📄</div>
                     <h3 class="text-lg font-medium text-gray-900 mb-2">
-                        @if($search)
+                        @if($search ?? false)
                             هیچ کانفیگی برای "{{ $search }}" یافت نشد
                         @else
                             هیچ کانفیگی موجود نیست
                         @endif
                     </h3>
                     <p class="text-gray-500 mb-6">
-                        @if($search)
-                            جستجوی دیگری امتحان کنید
+                        @if($search ?? false)
+                            جستجوی دیگری امتحان کنید یا کانفیگ جدید ایجاد کنید
                         @else
-                            اولین کانفیگ خود را ایجاد کنید
+                            اولین کانفیگ خود را ایجاد کنید تا شروع کنید
                         @endif
                     </p>
-                    <a href="{{ route('configs.create') }}"
-                       class="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
-                        ➕ ایجاد کانفیگ جدید
-                    </a>
+                    <div class="space-x-3 space-x-reverse">
+                        @if($search ?? false)
+                            <a href="{{ route('configs.index') }}"
+                               class="inline-flex items-center px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700">
+                                🔍 نمایش همه
+                            </a>
+                        @endif
+                        <a href="{{ route('configs.create') }}"
+                           class="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                            ➕ ایجاد کانفیگ جدید
+                        </a>
+                    </div>
                 </div>
             @endif
         </div>
@@ -281,29 +311,73 @@
                     @php
                         $totalRunning = $configs->where('is_running', true)->count();
                         $totalActive = $configs->where('status', 'active')->count();
+                        $totalProcessed = $configs->sum('total_processed');
+                        $totalSuccess = $configs->sum('total_success');
+                        $totalFailed = $configs->sum('total_failed');
                     @endphp
 
-                    <div class="flex justify-between items-center">
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div class="text-center">
+                            <div class="text-lg font-bold text-gray-800">{{ $configs->total() }}</div>
+                            <div class="text-xs text-gray-500">کل کانفیگ‌ها</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="text-lg font-bold text-green-600">{{ $totalActive }}</div>
+                            <div class="text-xs text-gray-500">فعال</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="text-lg font-bold text-yellow-600">{{ $totalRunning }}</div>
+                            <div class="text-xs text-gray-500">در حال اجرا</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="text-lg font-bold text-blue-600">{{ number_format($totalProcessed) }}</div>
+                            <div class="text-xs text-gray-500">کل پردازش شده</div>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 pt-4 border-t border-gray-200 flex justify-between items-center text-xs">
                         <div>
                             نمایش {{ $configs->firstItem() }} تا {{ $configs->lastItem() }} از {{ $configs->total() }} کانفیگ
-                            @if($search)
-                                برای "{{ $search }}"
+                            @if($search ?? false)
+                                برای جستجوی "{{ $search }}"
                             @endif
                         </div>
-                        <div class="flex space-x-4 space-x-reverse text-sm">
-                            <span class="text-green-600">فعال: {{ $totalActive }}</span>
-                            <span class="text-yellow-600">در حال اجرا: {{ $totalRunning }}</span>
-                        </div>
+                        @if($totalProcessed > 0)
+                            <div class="text-gray-500">
+                                نرخ موفقیت کلی: {{ round(($totalSuccess / $totalProcessed) * 100, 1) }}%
+                            </div>
+                        @endif
                     </div>
                 </div>
             </div>
         @endif
     </div>
 
+    <!-- به‌روزرسانی خودکار صفحه -->
     <script>
-        // به‌روزرسانی خودکار هر 15 ثانیه
+        // به‌روزرسانی خودکار هر 30 ثانیه اگر کانفیگی در حال اجرا باشد
+        @if($configs->where('is_running', true)->count() > 0)
         setInterval(() => {
-            if (document.querySelector('.animate-spin')) {
-                location.reload();
+            // بررسی اینکه آیا هنوز در همان صفحه هستیم
+            if (window.location.pathname === '{{ route('configs.index') }}') {
+                window.location.reload();
             }
-        }, 15000);
+        }, 30000);
+        @endif
+
+        // تأیید عملیات‌های مهم
+        document.addEventListener('DOMContentLoaded', function() {
+            // اضافه کردن تأیید برای دکمه‌های خطرناک
+            document.querySelectorAll('form button[title*="حذف"], form button[title*="ریست"]').forEach(button => {
+                button.addEventListener('click', function(e) {
+                    const form = this.closest('form');
+                    const action = this.getAttribute('title');
+
+                    if (!confirm(`آیا مطمئن هستید که می‌خواهید ${action} را انجام دهید؟`)) {
+                        e.preventDefault();
+                    }
+                });
+            });
+        });
+    </script>
+@endsection

@@ -149,7 +149,6 @@ class Config extends Model
         if (!$this->current_url || $this->total_processed === 0) {
             return 0;
         }
-        // محاسبه براساس URL یا سایر معیارها
         return min(100, ($this->total_success / max(1, $this->total_processed)) * 100);
     }
 
@@ -173,6 +172,24 @@ class Config extends Model
             'current_url' => $this->current_url,
             'unresolved_failures' => $this->failures()->where('is_resolved', false)->count()
         ];
+    }
+
+    // دریافت تنظیمات API
+    public function getApiSettings(): array
+    {
+        return $this->config_data['api'] ?? [];
+    }
+
+    // دریافت تنظیمات کراولر
+    public function getCrawlerSettings(): array
+    {
+        return $this->config_data['crawler'] ?? [];
+    }
+
+    // دریافت تنظیمات عمومی
+    public function getGeneralSettings(): array
+    {
+        return $this->config_data['general'] ?? [];
     }
 
     // انواع منابع داده
