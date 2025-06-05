@@ -7,9 +7,10 @@ use App\Jobs\ProcessConfigJob;
 use App\Services\ApiDataService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str; // اضافه کردن import مفقود شده
 
 /**
- * کامند بهینه‌شده اجرای کانفیگ‌ها
+ * کامند بهینه‌شده اجرای کانفیگ‌ها - رفع شده
  */
 class RunConfigCommand extends Command
 {
@@ -105,7 +106,7 @@ class RunConfigCommand extends Command
                 $config->data_source_type_text,
                 $config->status_text,
                 $lastRun,
-                Str::limit($config->base_url, 50)
+                Str::limit($config->base_url, 50) // حل شده: import اضافه شد
             ];
         }
 
@@ -142,6 +143,7 @@ class RunConfigCommand extends Command
                         'message' => 'در حال پردازش',
                         'stats' => null
                     ];
+                    $progressBar->advance();
                     continue;
                 }
 
@@ -172,6 +174,7 @@ class RunConfigCommand extends Command
                     'message' => $e->getMessage(),
                     'stats' => null
                 ];
+                $this->error("خطا در {$config->name}: " . $e->getMessage());
             }
 
             $progressBar->advance();

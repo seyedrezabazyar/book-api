@@ -180,14 +180,32 @@ class ConfigController extends Controller
         }
 
         try {
+            Log::info("🌐 شروع کانفیگ از وب اینترفیس", [
+                'config_id' => $config->id,
+                'config_name' => $config->name,
+                'user_id' => Auth::id()
+            ]);
+
             $config->start();
+
+            // dispatch job جدید
             ProcessConfigJob::dispatch($config);
+
+            Log::info("✅ Job اضافه شد به queue", [
+                'config_id' => $config->id,
+                'job_class' => ProcessConfigJob::class
+            ]);
 
             return redirect()->back()
                 ->with('success', "اسکرپر '{$config->name}' شروع شد.");
 
         } catch (\Exception $e) {
-            Log::error('خطا در شروع اسکرپر: ' . $e->getMessage());
+            Log::error('❌ خطا در شروع اسکرپر از وب', [
+                'config_id' => $config->id,
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
 
             return redirect()->back()
                 ->with('error', 'خطا در شروع اسکرپر: ' . $e->getMessage());
@@ -423,6 +441,12 @@ class ConfigController extends Controller
         }
 
         try {
+            Log::info("⚡ اجرای فوری کانفیگ از وب", [
+                'config_id' => $config->id,
+                'config_name' => $config->name,
+                'user_id' => Auth::id()
+            ]);
+
             if ($config->isApiSource()) {
                 $service = new ApiDataService($config);
                 $stats = $service->fetchData();
@@ -434,11 +458,21 @@ class ConfigController extends Controller
             // ذخیره آمار در cache
             Cache::put("config_stats_{$config->id}", $stats, 3600);
 
+            Log::info("📊 اجرای فوری تمام شد", [
+                'config_id' => $config->id,
+                'stats' => $stats
+            ]);
+
             return redirect()->back()
                 ->with('success', "اجرا تمام شد. موفق: {$stats['success']}, خطا: {$stats['failed']}");
 
         } catch (\Exception $e) {
-            Log::error('خطا در اجرای فوری کانفیگ: ' . $e->getMessage());
+            Log::error('💥 خطا در اجرای فوری', [
+                'config_id' => $config->id,
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
 
             // ذخیره خطا در cache
             Cache::put("config_error_{$config->id}", [

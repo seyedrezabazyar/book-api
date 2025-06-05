@@ -15,7 +15,7 @@ use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
 
 /**
- * سرویس بهینه‌شده دریافت و پردازش اطلاعات از API
+ * سرویس API با نقشه‌برداری صحیح فیلدها
  */
 class ApiDataService
 {
@@ -30,6 +30,12 @@ class ApiDataService
     public function __construct(Config $config)
     {
         $this->config = $config;
+
+        Log::info("🚀 ApiDataService ایجاد شد", [
+            'config_id' => $this->config->id,
+            'config_name' => $this->config->name,
+            'version' => 'CORRECTED_V2.0'
+        ]);
     }
 
     /**
@@ -37,22 +43,40 @@ class ApiDataService
      */
     public function fetchData(): array
     {
-        Log::info("شروع دریافت اطلاعات API", ['config' => $this->config->name]);
+        Log::info("📡 شروع fetchData", [
+            'config_id' => $this->config->id,
+            'config_name' => $this->config->name
+        ]);
 
         try {
             $apiSettings = $this->config->getApiSettings();
             $generalSettings = $this->config->getGeneralSettings();
 
-            // پردازش تنها یک صفحه (تعداد محدود)
+            Log::info("⚙️ تنظیمات دریافت شده", [
+                'config_id' => $this->config->id,
+                'api_settings' => $apiSettings,
+                'field_mapping' => $apiSettings['field_mapping'] ?? 'پیش‌فرض'
+            ]);
+
             $recordsToProcess = min($this->config->records_per_run, 50);
             $this->processApiPage($apiSettings, $generalSettings, $recordsToProcess);
 
         } catch (\Exception $e) {
-            Log::error("خطا در API", ['error' => $e->getMessage()]);
+            Log::error("❌ خطا در fetchData", [
+                'config_id' => $this->config->id,
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString()
+            ]);
             throw $e;
         }
 
-        Log::info("پایان دریافت API", ['stats' => $this->stats]);
+        Log::info("✅ پایان fetchData", [
+            'config_id' => $this->config->id,
+            'stats' => $this->stats
+        ]);
+
         return $this->stats;
     }
 
@@ -61,27 +85,45 @@ class ApiDataService
      */
     private function processApiPage(array $apiSettings, array $generalSettings, int $limit): void
     {
-        // ساخت URL با محدودیت تعداد
+        // ساخت URL
         $fullUrl = $this->buildApiUrl($apiSettings, $limit);
 
-        Log::info("درخواست به API", ['url' => $fullUrl]);
+        Log::info("🌐 درخواست به API", [
+            'config_id' => $this->config->id,
+            'url' => $fullUrl,
+            'limit' => $limit
+        ]);
 
         // ارسال درخواست
         $response = $this->makeHttpRequest($fullUrl, $apiSettings, $generalSettings);
 
         if (!$response->successful()) {
-            throw new \Exception("خطای HTTP {$response->status()}");
+            throw new \Exception("خطای HTTP {$response->status()}: {$response->reason()}");
         }
 
         $data = $response->json();
 
+        Log::info("📊 پاسخ API دریافت شد", [
+            'config_id' => $this->config->id,
+            'response_keys' => array_keys($data),
+            'status' => $data['status'] ?? 'نامشخص'
+        ]);
+
         // استخراج کتاب‌ها
         $books = $this->extractBooksFromApiData($data);
 
-        Log::info("کتاب‌های یافته", ['count' => count($books)]);
+        Log::info("📚 کتاب‌های استخراج شده", [
+            'config_id' => $this->config->id,
+            'books_count' => count($books),
+            'sample_book_keys' => !empty($books) ? array_keys($books[0]) : [],
+            'first_book_title' => $books[0]['title'] ?? 'نامشخص'
+        ]);
 
         if (empty($books)) {
-            Log::warning("هیچ کتابی یافت نشد");
+            Log::warning("⚠️ هیچ کتابی یافت نشد", [
+                'config_id' => $this->config->id,
+                'raw_response' => $data
+            ]);
             return;
         }
 
@@ -90,129 +132,113 @@ class ApiDataService
             $this->stats['total']++;
 
             try {
-                $this->processBookData($bookData, $apiSettings['field_mapping'] ?? []);
-                $this->stats['success']++;
+                Log::info("📖 شروع پردازش کتاب", [
+                    'config_id' => $this->config->id,
+                    'book_index' => $index,
+                    'book_title' => $bookData['title'] ?? 'نامشخص',
+                    'book_keys' => array_keys($bookData)
+                ]);
 
-                Log::info("کتاب پردازش شد", ['index' => $index, 'title' => $bookData['title'] ?? 'نامشخص']);
+                $result = $this->createBookDirectly($bookData, $apiSettings['field_mapping'] ?? [], $index);
+
+                if ($result['status'] === 'created') {
+                    $this->stats['success']++;
+                    Log::info("✅ کتاب ایجاد شد", [
+                        'config_id' => $this->config->id,
+                        'book_id' => $result['book_id'],
+                        'title' => $result['title']
+                    ]);
+                }
 
             } catch (\Exception $e) {
                 $this->stats['failed']++;
-                Log::warning("خطا در پردازش کتاب", [
-                    'index' => $index,
+                Log::error("💥 خطا در پردازش کتاب", [
+                    'config_id' => $this->config->id,
+                    'book_index' => $index,
+                    'book_title' => $bookData['title'] ?? 'نامشخص',
                     'error' => $e->getMessage(),
-                    'title' => $bookData['title'] ?? 'نامشخص'
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine()
                 ]);
             }
         }
     }
 
     /**
-     * ساخت URL API
+     * ایجاد مستقیم کتاب
      */
-    private function buildApiUrl(array $apiSettings, int $limit): string
+    private function createBookDirectly(array $bookData, array $fieldMapping, int $index): array
     {
-        $baseUrl = rtrim($this->config->base_url, '/');
-        $endpoint = $apiSettings['endpoint'] ?? '';
-
-        $fullUrl = $baseUrl . ($endpoint ? '/' . ltrim($endpoint, '/') : '');
-
-        // اضافه کردن پارامترها
-        $params = ['limit' => $limit];
-        if (!empty($apiSettings['params'])) {
-            $params = array_merge($params, $apiSettings['params']);
-        }
-
-        return $fullUrl . '?' . http_build_query($params);
-    }
-
-    /**
-     * ارسال درخواست HTTP
-     */
-    private function makeHttpRequest(string $url, array $apiSettings, array $generalSettings)
-    {
-        $httpClient = Http::timeout($this->config->timeout)
-            ->retry($this->config->max_retries, 1);
-
-        // تنظیمات عمومی
-        if (!empty($generalSettings['user_agent'])) {
-            $httpClient = $httpClient->withUserAgent($generalSettings['user_agent']);
-        }
-
-        if (!($generalSettings['verify_ssl'] ?? true)) {
-            $httpClient = $httpClient->withoutVerifying();
-        }
-
-        // احراز هویت
-        if (($apiSettings['auth_type'] ?? '') === 'bearer' && !empty($apiSettings['auth_token'])) {
-            $httpClient = $httpClient->withToken($apiSettings['auth_token']);
-        }
-
-        return $httpClient->get($url);
-    }
-
-    /**
-     * استخراج کتاب‌ها از پاسخ API
-     */
-    private function extractBooksFromApiData(array $data): array
-    {
-        // ساختار balyan.ir
-        if (isset($data['status'], $data['data']['books']) && $data['status'] === 'success') {
-            return $data['data']['books'];
-        }
-
-        // ساختارهای متداول
-        $possibleKeys = ['data', 'books', 'results', 'items'];
-        foreach ($possibleKeys as $key) {
-            if (isset($data[$key]) && is_array($data[$key]) && !empty($data[$key])) {
-                $firstItem = $data[$key][0] ?? null;
-                if (is_array($firstItem) && (isset($firstItem['title']) || isset($firstItem['id']))) {
-                    return $data[$key];
-                }
-            }
-        }
-
-        // کتاب منفرد
-        if (isset($data['title']) || isset($data['id'])) {
-            return [$data];
-        }
-
-        return [];
-    }
-
-    /**
-     * پردازش اطلاعات یک کتاب
-     */
-    private function processBookData(array $bookData, array $fieldMapping): void
-    {
-        // استخراج فیلدها
+        // استخراج فیلدها با نقشه‌برداری صحیح
         $extractedData = $this->extractFieldsFromData($bookData, $fieldMapping);
 
+        Log::info("🔍 فیلدهای استخراج شده", [
+            'config_id' => $this->config->id,
+            'book_index' => $index,
+            'extracted_data' => $extractedData,
+            'field_mapping_used' => $fieldMapping
+        ]);
+
         if (empty($extractedData['title'])) {
+            Log::error("❌ عنوان کتاب یافت نشد", [
+                'config_id' => $this->config->id,
+                'raw_book_data' => $bookData,
+                'extracted_data' => $extractedData
+            ]);
             throw new \Exception('عنوان کتاب یافت نشد');
         }
 
-        // ایجاد hash یکتا
-        $contentHash = $this->generateContentHash($extractedData);
-
-        // بررسی تکراری بودن
-        if (Book::where('content_hash', $contentHash)->exists()) {
-            $this->stats['duplicate']++;
-            Log::debug("کتاب تکراری", ['title' => $extractedData['title']]);
-            return;
-        }
+        // تولید hash یکتا
+        $uniqueHash = md5($this->config->id . '_' . $extractedData['title'] . '_' . time() . '_' . rand(1000, 9999));
 
         DB::beginTransaction();
 
         try {
-            // ایجاد/پیدا کردن روابط
-            $category = $this->findOrCreateCategory($extractedData['category'] ?? 'عمومی');
+            // ایجاد دسته‌بندی
+            $categoryName = $extractedData['category'] ?? 'عمومی';
+            $category = $this->findOrCreateCategory($categoryName);
+
+            Log::info("📂 دسته‌بندی آماده", [
+                'config_id' => $this->config->id,
+                'category_name' => $categoryName,
+                'category_id' => $category->id
+            ]);
+
+            // ایجاد ناشر
             $publisher = null;
             if (!empty($extractedData['publisher'])) {
                 $publisher = $this->findOrCreatePublisher($extractedData['publisher']);
+                Log::info("🏢 ناشر آماده", [
+                    'config_id' => $this->config->id,
+                    'publisher_name' => $extractedData['publisher'],
+                    'publisher_id' => $publisher->id
+                ]);
             }
 
             // ایجاد کتاب
-            $book = $this->createBook($extractedData, $contentHash, $category, $publisher);
+            $book = Book::create([
+                'title' => $extractedData['title'],
+                'description' => $extractedData['description'] ?? null,
+                'excerpt' => Str::limit($extractedData['description'] ?? $extractedData['title'], 200),
+                'slug' => Str::slug($extractedData['title'] . '_' . time()),
+                'isbn' => $extractedData['isbn'] ?? null,
+                'publication_year' => $extractedData['publication_year'] ?? null,
+                'pages_count' => $extractedData['pages_count'] ?? null,
+                'language' => $extractedData['language'] ?? 'fa',
+                'format' => $extractedData['format'] ?? 'pdf',
+                'file_size' => $extractedData['file_size'] ?? null,
+                'content_hash' => $uniqueHash,
+                'category_id' => $category->id,
+                'publisher_id' => $publisher?->id,
+                'downloads_count' => 0,
+                'status' => 'active'
+            ]);
+
+            Log::info("📚 کتاب در دیتابیس ایجاد شد", [
+                'config_id' => $this->config->id,
+                'book_id' => $book->id,
+                'title' => $book->title
+            ]);
 
             // پردازش نویسندگان
             if (!empty($extractedData['author'])) {
@@ -225,36 +251,114 @@ class ApiDataService
             }
 
             // پردازش hash ها
-            $this->processHashes($book, $contentHash);
+            $this->processHashes($book, $uniqueHash);
 
             DB::commit();
 
-            Log::info("کتاب جدید ایجاد شد", [
+            return [
+                'status' => 'created',
+                'title' => $book->title,
                 'book_id' => $book->id,
-                'title' => $book->title
-            ]);
+                'hash' => $uniqueHash
+            ];
 
         } catch (\Exception $e) {
             DB::rollBack();
+            Log::error("💥 Rollback - خطا در ایجاد کتاب", [
+                'config_id' => $this->config->id,
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
             throw $e;
         }
     }
 
-    /**
-     * استخراج فیلدها براساس نقشه‌برداری
-     */
+    private function buildApiUrl(array $apiSettings, int $limit): string
+    {
+        $baseUrl = rtrim($this->config->base_url, '/');
+        $endpoint = $apiSettings['endpoint'] ?? '';
+        $fullUrl = $baseUrl . ($endpoint ? '/' . ltrim($endpoint, '/') : '');
+
+        // استفاده از page به جای limit برای API balyan.ir
+        $params = ['page' => 1, 'limit' => $limit];
+
+        if (!empty($apiSettings['params'])) {
+            $params = array_merge($params, $apiSettings['params']);
+        }
+
+        return $fullUrl . '?' . http_build_query($params);
+    }
+
+    private function makeHttpRequest(string $url, array $apiSettings, array $generalSettings)
+    {
+        $httpClient = Http::timeout($this->config->timeout)
+            ->retry($this->config->max_retries, 1);
+
+        if (!empty($generalSettings['user_agent'])) {
+            $httpClient = $httpClient->withUserAgent($generalSettings['user_agent']);
+        }
+
+        if (!($generalSettings['verify_ssl'] ?? true)) {
+            $httpClient = $httpClient->withoutVerifying();
+        }
+
+        if (($apiSettings['auth_type'] ?? '') === 'bearer' && !empty($apiSettings['auth_token'])) {
+            $httpClient = $httpClient->withToken($apiSettings['auth_token']);
+        }
+
+        return $httpClient->get($url);
+    }
+
+    private function extractBooksFromApiData(array $data): array
+    {
+        // ساختار خاص balyan.ir
+        if (isset($data['status'], $data['data']['books']) && $data['status'] === 'success') {
+            return $data['data']['books'];
+        }
+
+        // ساختارهای متداول دیگر
+        $possibleKeys = ['data', 'books', 'results', 'items'];
+        foreach ($possibleKeys as $key) {
+            if (isset($data[$key]) && is_array($data[$key]) && !empty($data[$key])) {
+                $firstItem = $data[$key][0] ?? null;
+                if (is_array($firstItem) && (isset($firstItem['title']) || isset($firstItem['id']))) {
+                    return $data[$key];
+                }
+            }
+        }
+
+        if (isset($data['title']) || isset($data['id'])) {
+            return [$data];
+        }
+
+        return [];
+    }
+
     private function extractFieldsFromData(array $data, array $fieldMapping): array
     {
+        // اگر نقشه‌برداری خالی است، از پیش‌فرض استفاده کن
         if (empty($fieldMapping)) {
             $fieldMapping = $this->getDefaultFieldMapping();
         }
 
-        $extracted = [];
+        Log::info("🗺️ نقشه‌برداری فیلدها", [
+            'config_id' => $this->config->id,
+            'field_mapping' => $fieldMapping
+        ]);
 
+        $extracted = [];
         foreach ($fieldMapping as $bookField => $apiField) {
             if (empty($apiField)) continue;
 
             $value = $this->getNestedValue($data, $apiField);
+
+            Log::debug("🔍 استخراج فیلد", [
+                'book_field' => $bookField,
+                'api_field' => $apiField,
+                'extracted_value' => $value
+            ]);
+
             if ($value !== null) {
                 $extracted[$bookField] = $this->sanitizeValue($value, $bookField);
             }
@@ -264,14 +368,14 @@ class ApiDataService
     }
 
     /**
-     * نقشه‌برداری پیش‌فرض
+     * نقشه‌برداری پیش‌فرض مطابق ساختار balyan.ir
      */
     private function getDefaultFieldMapping(): array
     {
         return [
             'title' => 'title',
             'description' => 'description_en',
-            'author' => 'authors',
+            'author' => 'authors', // آرایه از نویسندگان
             'category' => 'category.name',
             'publisher' => 'publisher.name',
             'isbn' => 'isbn',
@@ -280,13 +384,10 @@ class ApiDataService
             'language' => 'language',
             'format' => 'format',
             'file_size' => 'file_size',
-            'image_url' => 'image_url.0'
+            'image_url' => 'image_url.0' // اولین تصویر از آرایه
         ];
     }
 
-    /**
-     * دریافت مقدار از nested array
-     */
     private function getNestedValue(array $data, string $path)
     {
         $keys = explode('.', $path);
@@ -305,7 +406,7 @@ class ApiDataService
             }
         }
 
-        // پردازش نویسندگان
+        // پردازش خاص برای نویسندگان balyan.ir
         if ($path === 'authors' && is_array($value)) {
             $names = [];
             foreach ($value as $author) {
@@ -318,7 +419,7 @@ class ApiDataService
             return implode(', ', $names);
         }
 
-        // پردازش آرایه تصاویر
+        // پردازش تصاویر
         if (str_contains($path, 'image_url') && is_array($value)) {
             return $value[0] ?? null;
         }
@@ -326,9 +427,6 @@ class ApiDataService
         return $value;
     }
 
-    /**
-     * پاک‌سازی مقادیر
-     */
     private function sanitizeValue($value, string $fieldType)
     {
         if ($value === null) return null;
@@ -340,137 +438,76 @@ class ApiDataService
             case 'publisher':
             case 'category':
                 return is_string($value) ? trim($value) : (string) $value;
-
             case 'publication_year':
                 if (is_numeric($value)) {
                     $year = (int) $value;
                     return ($year >= 1000 && $year <= date('Y') + 5) ? $year : null;
                 }
                 return null;
-
             case 'pages_count':
             case 'file_size':
                 return is_numeric($value) && $value > 0 ? (int) $value : null;
-
             case 'isbn':
                 return preg_replace('/[^0-9X-]/', '', (string) $value);
-
             case 'language':
                 $language = strtolower(trim((string) $value));
                 $langMap = ['persian' => 'fa', 'english' => 'en', 'فارسی' => 'fa'];
                 return $langMap[$language] ?? substr($language, 0, 2);
-
             case 'format':
                 $format = strtolower(trim((string) $value));
                 $allowedFormats = ['pdf', 'epub', 'mobi', 'djvu'];
                 return in_array($format, $allowedFormats) ? $format : 'pdf';
-
             case 'image_url':
                 $url = trim((string) $value);
                 return filter_var($url, FILTER_VALIDATE_URL) ? $url : null;
-
             default:
                 return trim((string) $value);
         }
     }
 
-    /**
-     * تولید content hash
-     */
-    private function generateContentHash(array $data): string
-    {
-        $hashData = ($data['title'] ?? '') .
-            ($data['author'] ?? '') .
-            ($data['isbn'] ?? '') .
-            ($data['publication_year'] ?? '');
-
-        return md5($hashData);
-    }
-
-    /**
-     * پیدا کردن یا ایجاد دسته‌بندی
-     */
     private function findOrCreateCategory(string $categoryName): Category
     {
-        $slug = Str::slug($categoryName);
-
+        $slug = Str::slug($categoryName . '_' . time());
         return Category::firstOrCreate(
-            ['slug' => $slug],
+            ['name' => $categoryName],
             [
-                'name' => $categoryName,
+                'slug' => $slug,
                 'is_active' => true,
                 'books_count' => 0
             ]
         );
     }
 
-    /**
-     * پیدا کردن یا ایجاد ناشر
-     */
     private function findOrCreatePublisher(string $publisherName): Publisher
     {
-        $slug = Str::slug($publisherName);
-
+        $slug = Str::slug($publisherName . '_' . time());
         return Publisher::firstOrCreate(
-            ['slug' => $slug],
+            ['name' => $publisherName],
             [
-                'name' => $publisherName,
+                'slug' => $slug,
                 'is_active' => true,
                 'books_count' => 0
             ]
         );
     }
 
-    /**
-     * ایجاد کتاب
-     */
-    private function createBook(array $data, string $contentHash, Category $category, ?Publisher $publisher): Book
-    {
-        return Book::create([
-            'title' => $data['title'],
-            'description' => $data['description'] ?? null,
-            'excerpt' => $data['excerpt'] ?? Str::limit($data['description'] ?? '', 200),
-            'slug' => Str::slug($data['title']),
-            'isbn' => $data['isbn'] ?? null,
-            'publication_year' => $data['publication_year'] ?? null,
-            'pages_count' => $data['pages_count'] ?? null,
-            'language' => $data['language'] ?? 'fa',
-            'format' => $data['format'] ?? 'pdf',
-            'file_size' => $data['file_size'] ?? null,
-            'content_hash' => $contentHash,
-            'category_id' => $category->id,
-            'publisher_id' => $publisher?->id,
-            'downloads_count' => 0,
-            'status' => 'active'
-        ]);
-    }
-
-    /**
-     * پردازش نویسندگان
-     */
     private function processAuthors(Book $book, string $authorString): void
     {
         $authorNames = array_map('trim', explode(',', $authorString));
-
         foreach ($authorNames as $authorName) {
             if (empty($authorName)) continue;
-
             $author = Author::firstOrCreate(
-                ['slug' => Str::slug($authorName)],
+                ['name' => $authorName],
                 [
-                    'name' => $authorName,
+                    'slug' => Str::slug($authorName . '_' . time()),
                     'is_active' => true,
                     'books_count' => 0
                 ]
             );
-
             $book->authors()->attach($author->id);
         }
     }
 
-    /**
-     * پردازش تصاویر
-     */
     private function processImages(Book $book, string $imageUrl): void
     {
         if (filter_var($imageUrl, FILTER_VALIDATE_URL)) {
@@ -481,9 +518,6 @@ class ApiDataService
         }
     }
 
-    /**
-     * پردازش hash ها
-     */
     private function processHashes(Book $book, string $contentHash): void
     {
         BookHash::create([
@@ -495,9 +529,6 @@ class ApiDataService
         ]);
     }
 
-    /**
-     * دریافت آمار
-     */
     public function getStats(): array
     {
         return $this->stats;
