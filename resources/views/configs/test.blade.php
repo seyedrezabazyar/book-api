@@ -178,219 +178,7 @@
 
     {{-- CSRF Token در meta --}}
     <meta name="csrf-token" content="{{ csrf_token() }}">
-
-    @push('scripts')
-        <script>
-            document.getElementById('testForm').addEventListener('submit', function(e) {
-                e.preventDefault();
-
-                const configId = document.getElementById('config_id').value;
-                const testUrl = document.getElementById('test_url').value;
-
-                if (!configId || !testUrl) {
-                    alert('لطفاً کانفیگ و آدرس تست را وارد کنید.');
-                    return;
-                }
-
-                runTest(configId, testUrl);
-            });
-
-            function runTest(configId, testUrl) {
-                // نمایش loading
-                const button = document.getElementById('testButton');
-                const buttonText = button.querySelector('.button-text');
-                const loadingText = button.querySelector('.loading-text');
-
-                button.disabled = true;
-                buttonText.classList.add('hidden');
-                loadingText.classList.remove('hidden');
-
-                // مخفی کردن نتایج قبلی
-                document.getElementById('testResults').classList.add('hidden');
-                document.getElementById('successResult').classList.add('hidden');
-                document.getElementById('errorResult').classList.add('hidden');
-
-                // دریافت CSRF token از کوکی یا meta tag
-                let csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-
-                // اگر از meta tag نگرفت، از کوکی بگیر
-                if (!csrfToken) {
-                    const xsrfToken = document.cookie
-                        .split('; ')
-                        .find(row => row.startsWith('XSRF-TOKEN='));
-
-                    if (xsrfToken) {
-                        csrfToken = decodeURIComponent(xsrfToken.split('=')[1]);
-                    }
-                }
-
-                // ارسال درخواست
-                fetch('{{ route("configs.test-url") }}', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json',
-                        'X-CSRF-TOKEN': csrfToken,
-                        'X-Requested-With': 'XMLHttpRequest'
-                    },
-                    credentials: 'same-origin', // مهم: برای ارسال کوکی‌ها
-                    body: JSON.stringify({
-                        config_id: configId,
-                        test_url: testUrl
-                    })
-                })
-                    .then(response => {
-                        console.log('Response status:', response.status);
-                        console.log('Response headers:', response.headers);
-
-                        if (!response.ok) {
-                            return response.text().then(text => {
-                                console.log('Error response:', text);
-                                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                            });
-                        }
-                        return response.json();
-                    })
-                    .then(data => {
-                        if (data.success) {
-                            showSuccessResult(data.data);
-                        } else {
-                            showErrorResult(data.error || 'خطای نامشخص');
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Test error:', error);
-                        showErrorResult('خطا در ارتباط با سرور: ' + error.message);
-                    })
-                    .finally(() => {
-                        // مخفی کردن loading
-                        button.disabled = false;
-                        buttonText.classList.remove('hidden');
-                        loadingText.classList.add('hidden');
-                    });
-            }
-
-            function showSuccessResult(data) {
-                document.getElementById('testResults').classList.remove('hidden');
-                document.getElementById('successResult').classList.remove('hidden');
-
-                // نمایش اطلاعات کلی
-                const testInfo = document.getElementById('testInfo');
-                testInfo.innerHTML = `
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                        <div><strong>کانفیگ:</strong> ${data.config_name}</div>
-                        <div><strong>نوع منبع:</strong> ${data.source_type}</div>
-                        <div class="md:col-span-2"><strong>URL تست:</strong> <code class="bg-gray-100 px-2 py-1 rounded">${data.test_url}</code></div>
-                        ${data.total_books_found ? `<div><strong>تعداد کتاب‌های یافته:</strong> ${data.total_books_found}</div>` : ''}
-                        ${data.page_title ? `<div><strong>عنوان صفحه:</strong> ${data.page_title}</div>` : ''}
-                        <div><strong>وضعیت پاسخ:</strong> <span class="text-green-600">${data.response_status || 200}</span></div>
-                    </div>
-                `;
-
-                // نمایش داده‌های استخراج شده
-                const extractedData = document.getElementById('extractedData');
-                let extractedHtml = '';
-
-                if (Object.keys(data.extracted_data).length > 0) {
-                    for (const [field, value] of Object.entries(data.extracted_data)) {
-                        const fieldName = getFieldDisplayName(field);
-                        extractedHtml += `
-                            <div class="border-b border-gray-200 py-2">
-                                <div class="font-medium text-gray-700">${fieldName}</div>
-                                <div class="text-gray-900">${formatValue(value)}</div>
-                            </div>
-                        `;
-                    }
-                } else {
-                    extractedHtml = '<div class="text-gray-500 text-center py-4">هیچ داده‌ای استخراج نشد</div>';
-                }
-
-                extractedData.innerHTML = extractedHtml;
-
-                // نمایش داده‌های خام
-                const rawData = document.getElementById('rawData');
-                rawData.textContent = JSON.stringify(data.raw_data, null, 2);
-            }
-
-            function showErrorResult(error) {
-                document.getElementById('testResults').classList.remove('hidden');
-                document.getElementById('errorResult').classList.remove('hidden');
-
-                const errorMessage = document.getElementById('errorMessage');
-                errorMessage.innerHTML = `
-                    <div class="text-red-800">
-                        <strong>خطا:</strong> ${error}
-                    </div>
-                `;
-            }
-
-            function clearResults() {
-                document.getElementById('testResults').classList.add('hidden');
-                document.getElementById('successResult').classList.add('hidden');
-                document.getElementById('errorResult').classList.add('hidden');
-                document.getElementById('testForm').reset();
-            }
-
-            function toggleRawData() {
-                const rawData = document.getElementById('rawData');
-                const icon = document.getElementById('rawDataIcon');
-
-                if (rawData.classList.contains('hidden')) {
-                    rawData.classList.remove('hidden');
-                    icon.style.transform = 'rotate(180deg)';
-                } else {
-                    rawData.classList.add('hidden');
-                    icon.style.transform = 'rotate(0deg)';
-                }
-            }
-
-            function getFieldDisplayName(field) {
-                const fieldNames = {
-                    'title': 'عنوان',
-                    'description': 'توضیحات',
-                    'author': 'نویسنده',
-                    'category': 'دسته‌بندی',
-                    'publisher': 'ناشر',
-                    'isbn': 'شابک',
-                    'publication_year': 'سال انتشار',
-                    'pages_count': 'تعداد صفحات',
-                    'language': 'زبان',
-                    'format': 'فرمت',
-                    'file_size': 'حجم فایل',
-                    'image_url': 'تصویر',
-                    'download_url': 'لینک دانلود',
-                    'price': 'قیمت',
-                    'rating': 'امتیاز',
-                    'tags': 'برچسب‌ها'
-                };
-
-                return fieldNames[field] || field;
-            }
-
-            function formatValue(value) {
-                if (value === null || value === undefined) {
-                    return '<span class="text-gray-400">-</span>';
-                }
-
-                if (typeof value === 'string' && (value.startsWith('http://') || value.startsWith('https://'))) {
-                    if (value.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
-                        return `<img src="${value}" alt="تصویر" class="max-w-32 max-h-32 rounded border">`;
-                    } else {
-                        return `<a href="${value}" target="_blank" class="text-blue-600 hover:underline">${value}</a>`;
-                    }
-                }
-
-                if (typeof value === 'number') {
-                    return value.toLocaleString('fa-IR');
-                }
-
-                return value;
-            }
-        </script>
-    @endpush
-@endsection>
-</div>
-</div>
+@endsection
 
 @push('scripts')
     <script>
@@ -423,27 +211,44 @@
             document.getElementById('successResult').classList.add('hidden');
             document.getElementById('errorResult').classList.add('hidden');
 
+            // دریافت CSRF token از meta tag
+            const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+
             // ارسال درخواست
             fetch('{{ route("configs.test-url") }}', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+                    'Accept': 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,
+                    'X-Requested-With': 'XMLHttpRequest'
                 },
+                credentials: 'same-origin',
                 body: JSON.stringify({
                     config_id: configId,
                     test_url: testUrl
                 })
             })
-                .then(response => response.json())
+                .then(response => {
+                    console.log('Response status:', response.status);
+
+                    if (!response.ok) {
+                        return response.text().then(text => {
+                            console.log('Error response:', text);
+                            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                        });
+                    }
+                    return response.json();
+                })
                 .then(data => {
                     if (data.success) {
                         showSuccessResult(data.data);
                     } else {
-                        showErrorResult(data.error);
+                        showErrorResult(data.error || 'خطای نامشخص');
                     }
                 })
                 .catch(error => {
+                    console.error('Test error:', error);
                     showErrorResult('خطا در ارتباط با سرور: ' + error.message);
                 })
                 .finally(() => {
@@ -461,15 +266,15 @@
             // نمایش اطلاعات کلی
             const testInfo = document.getElementById('testInfo');
             testInfo.innerHTML = `
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                        <div><strong>کانفیگ:</strong> ${data.config_name}</div>
-                        <div><strong>نوع منبع:</strong> ${data.source_type}</div>
-                        <div class="md:col-span-2"><strong>URL تست:</strong> <code class="bg-gray-100 px-2 py-1 rounded">${data.test_url}</code></div>
-                        ${data.total_books_found ? `<div><strong>تعداد کتاب‌های یافته:</strong> ${data.total_books_found}</div>` : ''}
-                        ${data.page_title ? `<div><strong>عنوان صفحه:</strong> ${data.page_title}</div>` : ''}
-                        <div><strong>وضعیت پاسخ:</strong> <span class="text-green-600">${data.response_status || 200}</span></div>
-                    </div>
-                `;
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                    <div><strong>کانفیگ:</strong> ${data.config_name}</div>
+                    <div><strong>نوع منبع:</strong> ${data.source_type}</div>
+                    <div class="md:col-span-2"><strong>URL تست:</strong> <code class="bg-gray-100 px-2 py-1 rounded">${data.test_url}</code></div>
+                    ${data.total_books_found ? `<div><strong>تعداد کتاب‌های یافته:</strong> ${data.total_books_found}</div>` : ''}
+                    ${data.page_title ? `<div><strong>عنوان صفحه:</strong> ${data.page_title}</div>` : ''}
+                    <div><strong>وضعیت پاسخ:</strong> <span class="text-green-600">${data.response_status || 200}</span></div>
+                </div>
+            `;
 
             // نمایش داده‌های استخراج شده
             const extractedData = document.getElementById('extractedData');
@@ -479,11 +284,11 @@
                 for (const [field, value] of Object.entries(data.extracted_data)) {
                     const fieldName = getFieldDisplayName(field);
                     extractedHtml += `
-                            <div class="border-b border-gray-200 py-2">
-                                <div class="font-medium text-gray-700">${fieldName}</div>
-                                <div class="text-gray-900">${formatValue(value)}</div>
-                            </div>
-                        `;
+                        <div class="border-b border-gray-200 py-2">
+                            <div class="font-medium text-gray-700">${fieldName}</div>
+                            <div class="text-gray-900">${formatValue(value)}</div>
+                        </div>
+                    `;
                 }
             } else {
                 extractedHtml = '<div class="text-gray-500 text-center py-4">هیچ داده‌ای استخراج نشد</div>';
@@ -502,10 +307,10 @@
 
             const errorMessage = document.getElementById('errorMessage');
             errorMessage.innerHTML = `
-                    <div class="text-red-800">
-                        <strong>خطا:</strong> ${error}
-                    </div>
-                `;
+                <div class="text-red-800">
+                    <strong>خطا:</strong> ${error}
+                </div>
+            `;
         }
 
         function clearResults() {
@@ -570,14 +375,5 @@
 
             return value;
         }
-
-        // افزودن CSRF token به meta
-        if (!document.querySelector('meta[name="csrf-token"]')) {
-            const meta = document.createElement('meta');
-            meta.name = 'csrf-token';
-            meta.content = '{{ csrf_token() }}';
-            document.head.appendChild(meta);
-        }
     </script>
 @endpush
-@endsection

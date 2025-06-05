@@ -427,6 +427,65 @@ class ConfigController extends Controller
     }
 
     /**
+     * صفحه تست کانفیگ
+     */
+    public function testPage(): View
+    {
+        $configs = Config::active()->get();
+        return view('configs.test', compact('configs'));
+    }
+
+    /**
+     * اجرای تست URL
+     */
+    public function testUrl(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $request->validate([
+            'config_id' => 'required|exists:configs,id',
+            'test_url' => 'required|url'
+        ]);
+
+        try {
+            $config = Config::findOrFail($request->config_id);
+            $testUrl = $request->test_url;
+
+            Log::info("شروع تست URL", [
+                'config_id' => $config->id,
+                'config_name' => $config->name,
+                'test_url' => $testUrl,
+                'source_type' => $config->data_source_type
+            ]);
+
+            // تست براساس نوع کانفیگ
+            if ($config->isApiSource()) {
+                $result = $this->testApiUrl($config, $testUrl);
+            } elseif ($config->isCrawlerSource()) {
+                $result = $this->testCrawlerUrl($config, $testUrl);
+            } else {
+                throw new \InvalidArgumentException("نوع کانفیگ پشتیبانی نشده: {$config->data_source_type}");
+            }
+
+            Log::info("تست موفق", ['result' => $result]);
+
+            return response()->json([
+                'success' => true,
+                'data' => $result
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('خطا در تست URL: ' . $e->getMessage(), [
+                'exception' => $e->getTraceAsString(),
+                'request_data' => $request->all()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * تست اتصال API
      */
     private function testApiConnection(Config $config): void
@@ -484,6 +543,388 @@ class ConfigController extends Controller
         if (!$response->successful()) {
             throw new \Exception("خطا در اتصال به وب‌سایت: HTTP {$response->status()}");
         }
+    }
+
+    /**
+     * تست URL با API
+     */
+    private function testApiUrl(Config $config, string $testUrl): array
+    {
+        $apiSettings = $config->getApiSettings();
+        $generalSettings = $config->getGeneralSettings();
+
+        // استفاده مستقیم از URL ورودی کاربر
+        $finalUrl = $testUrl;
+
+        // اگر کاربر فقط endpoint وارد کرده، با base_url ترکیب کن
+        if (!filter_var($testUrl, FILTER_VALIDATE_URL)) {
+            $baseUrl = rtrim($config->base_url, '/');
+            $endpoint = ltrim($testUrl, '/');
+            $finalUrl = $baseUrl . '/' . $endpoint;
+        }
+
+        // اضافه کردن پارامترهای اضافی از کانفیگ
+        $params = $apiSettings['params'] ?? [];
+        if (!empty($params)) {
+            $separator = strpos($finalUrl, '?') !== false ? '&' : '?';
+            $finalUrl .= $separator . http_build_query($params);
+        }
+
+        Log::info("Testing API URL: {$finalUrl}");
+
+        // ساخت درخواست HTTP
+        $httpClient = \Illuminate\Support\Facades\Http::timeout($config->timeout);
+
+        // تنظیم User Agent
+        if (!empty($generalSettings['user_agent'])) {
+            $httpClient = $httpClient->withUserAgent($generalSettings['user_agent']);
+        }
+
+        // تنظیم SSL verification
+        if (!$generalSettings['verify_ssl']) {
+            $httpClient = $httpClient->withoutVerifying();
+        }
+
+        // تنظیم احراز هویت
+        if ($apiSettings['auth_type'] === 'bearer' && !empty($apiSettings['auth_token'])) {
+            $httpClient = $httpClient->withToken($apiSettings['auth_token']);
+        } elseif ($apiSettings['auth_type'] === 'basic' && !empty($apiSettings['auth_token'])) {
+            $credentials = explode(':', $apiSettings['auth_token'], 2);
+            if (count($credentials) === 2) {
+                $httpClient = $httpClient->withBasicAuth($credentials[0], $credentials[1]);
+            }
+        }
+
+        // افزودن headers سفارشی
+        if (!empty($apiSettings['headers'])) {
+            $httpClient = $httpClient->withHeaders($apiSettings['headers']);
+        }
+
+        // ارسال درخواست
+        $response = $httpClient->get($finalUrl);
+
+        if (!$response->successful()) {
+            throw new \Exception("خطا در دریافت اطلاعات: HTTP {$response->status()} - URL: {$finalUrl}");
+        }
+
+        $data = $response->json();
+
+        if (empty($data)) {
+            throw new \Exception('پاسخ API خالی است');
+        }
+
+        // استخراج کتاب‌ها
+        $books = $this->extractBooksFromApiData($data);
+
+        if (empty($books)) {
+            throw new \Exception('هیچ کتابی در پاسخ API یافت نشد');
+        }
+
+        // پردازش اولین کتاب برای تست
+        $bookData = $books[0];
+        $extractedData = $this->extractFieldsFromApiData($bookData, $apiSettings['field_mapping'] ?? []);
+
+        return [
+            'config_name' => $config->name,
+            'source_type' => 'API',
+            'test_url' => $finalUrl,
+            'raw_data' => $bookData,
+            'extracted_data' => $extractedData,
+            'total_books_found' => count($books),
+            'response_status' => $response->status(),
+            'response_headers' => $response->headers()
+        ];
+    }
+
+    /**
+     * تست URL با Crawler
+     */
+    private function testCrawlerUrl(Config $config, string $testUrl): array
+    {
+        $crawlerSettings = $config->getCrawlerSettings();
+        $generalSettings = $config->getGeneralSettings();
+
+        // دریافت محتوای صفحه
+        $httpClient = \Illuminate\Support\Facades\Http::timeout($config->timeout);
+
+        if (!empty($generalSettings['user_agent'])) {
+            $httpClient = $httpClient->withUserAgent($generalSettings['user_agent']);
+        }
+
+        if (!$generalSettings['verify_ssl']) {
+            $httpClient = $httpClient->withoutVerifying();
+        }
+
+        $response = $httpClient->get($testUrl);
+
+        if (!$response->successful()) {
+            throw new \Exception("خطا در دریافت صفحه: HTTP {$response->status()}");
+        }
+
+        $html = $response->body();
+
+        if (empty($html)) {
+            throw new \Exception('محتوای صفحه خالی است');
+        }
+
+        // پردازش HTML با Crawler
+        $crawler = new \Symfony\Component\DomCrawler\Crawler($html);
+
+        // استخراج اطلاعات براساس سلکتورها
+        $extractedData = [];
+        $selectors = $crawlerSettings['selectors'];
+
+        foreach ($selectors as $field => $selector) {
+            if (empty($selector)) continue;
+
+            try {
+                $elements = $crawler->filter($selector);
+
+                if ($elements->count() > 0) {
+                    $value = $this->extractValueByCrawlerSelector($elements, $field);
+                    if ($value !== null) {
+                        $extractedData[$field] = $value;
+                    }
+                }
+            } catch (\Exception $e) {
+                $extractedData[$field] = "خطا: " . $e->getMessage();
+            }
+        }
+
+        // اگر سلکتور تعریف نشده، تلاش برای پیدا کردن عناصر متداول
+        if (empty($selectors)) {
+            $extractedData = $this->autoExtractFromHtml($crawler);
+        }
+
+        return [
+            'config_name' => $config->name,
+            'source_type' => 'Crawler',
+            'test_url' => $testUrl,
+            'html_preview' => substr($html, 0, 1000) . '...',
+            'extracted_data' => $extractedData,
+            'selectors_used' => $selectors,
+            'response_status' => $response->status(),
+            'page_title' => $this->extractPageTitle($crawler)
+        ];
+    }
+
+    /**
+     * استخراج کتاب‌ها از داده‌های API
+     */
+    private function extractBooksFromApiData(array $data): array
+    {
+        // بررسی ساختار پاسخ API براساس نمونه ارائه شده
+        if (isset($data['status']) && $data['status'] === 'success' && isset($data['data']['books'])) {
+            return $data['data']['books'];
+        }
+
+        // سایر ساختارهای ممکن
+        if (isset($data['data']) && is_array($data['data'])) {
+            if (isset($data['data']['books']) && is_array($data['data']['books'])) {
+                return $data['data']['books'];
+            }
+            if (isset($data['data'][0]) && is_array($data['data'][0])) {
+                return $data['data'];
+            }
+        }
+
+        if (isset($data['books']) && is_array($data['books'])) {
+            return $data['books'];
+        }
+
+        if (is_array($data) && isset($data[0]) && is_array($data[0])) {
+            return $data;
+        }
+
+        // اگر یک کتاب منفرد است
+        if (isset($data['title']) || isset($data['id'])) {
+            return [$data];
+        }
+
+        return [];
+    }
+
+    /**
+     * استخراج فیلدها از داده‌های API
+     */
+    private function extractFieldsFromApiData(array $data, array $fieldMapping): array
+    {
+        $extracted = [];
+
+        // اگر نقشه‌برداری تعریف شده
+        if (!empty($fieldMapping)) {
+            foreach ($fieldMapping as $bookField => $apiField) {
+                $value = $this->getNestedValueForTest($data, $apiField);
+                if ($value !== null) {
+                    $extracted[$bookField] = $value;
+                }
+            }
+        } else {
+            // نقشه‌برداری خودکار براساس ساختار API
+            $autoMapping = [
+                'title' => 'title',
+                'description' => ['description_en', 'description', 'desc'],
+                'author' => 'authors', // آرایه نویسندگان
+                'category' => 'category.name',
+                'publisher' => 'publisher.name',
+                'isbn' => 'isbn',
+                'publication_year' => 'publication_year',
+                'pages_count' => 'pages_count',
+                'language' => 'language',
+                'format' => 'format',
+                'file_size' => 'file_size',
+                'image_url' => 'image_url.0' // اولین تصویر از آرایه
+            ];
+
+            foreach ($autoMapping as $field => $paths) {
+                $paths = is_array($paths) ? $paths : [$paths];
+
+                foreach ($paths as $path) {
+                    $value = $this->getNestedValueForTest($data, $path);
+                    if ($value !== null) {
+                        $extracted[$field] = $value;
+                        break;
+                    }
+                }
+            }
+        }
+
+        return $extracted;
+    }
+
+    /**
+     * دریافت مقدار nested برای تست
+     */
+    private function getNestedValueForTest(array $data, string $path)
+    {
+        $keys = explode('.', $path);
+        $value = $data;
+
+        foreach ($keys as $key) {
+            if (is_array($value)) {
+                if (is_numeric($key)) {
+                    $key = (int) $key;
+                    if (isset($value[$key])) {
+                        $value = $value[$key];
+                    } else {
+                        return null;
+                    }
+                } elseif (isset($value[$key])) {
+                    $value = $value[$key];
+                } else {
+                    return null;
+                }
+            } else {
+                return null;
+            }
+        }
+
+        // پردازش خاص برای نویسندگان
+        if ($path === 'authors' && is_array($value)) {
+            $names = [];
+            foreach ($value as $author) {
+                if (is_array($author) && isset($author['name'])) {
+                    $names[] = $author['name'];
+                } elseif (is_string($author)) {
+                    $names[] = $author;
+                }
+            }
+            return implode(', ', $names);
+        }
+
+        // پردازش آرایه تصاویر
+        if (str_contains($path, 'image_url') && is_array($value)) {
+            return implode(', ', $value);
+        }
+
+        return $value;
+    }
+
+    /**
+     * استخراج مقدار با سلکتور Crawler
+     */
+    private function extractValueByCrawlerSelector($elements, string $field): ?string
+    {
+        $element = $elements->first();
+
+        switch ($field) {
+            case 'image_url':
+                if ($element->nodeName() === 'img') {
+                    return $element->attr('src') ?: $element->attr('data-src');
+                }
+                $img = $element->filter('img');
+                if ($img->count() > 0) {
+                    return $img->attr('src') ?: $img->attr('data-src');
+                }
+                break;
+
+            case 'download_url':
+                if ($element->nodeName() === 'a') {
+                    return $element->attr('href');
+                }
+                $link = $element->filter('a');
+                if ($link->count() > 0) {
+                    return $link->attr('href');
+                }
+                break;
+
+            default:
+                return trim($element->text());
+        }
+
+        return null;
+    }
+
+    /**
+     * استخراج خودکار از HTML
+     */
+    private function autoExtractFromHtml($crawler): array
+    {
+        $extracted = [];
+
+        // تلاش برای پیدا کردن عناصر متداول
+        $commonSelectors = [
+            'title' => ['h1', '.title', '#title', '.book-title'],
+            'description' => ['.description', '.summary', '.content', 'p'],
+            'author' => ['.author', '.writer', '.by'],
+            'image_url' => ['img', '.cover img', '.book-image img']
+        ];
+
+        foreach ($commonSelectors as $field => $selectors) {
+            foreach ($selectors as $selector) {
+                try {
+                    $elements = $crawler->filter($selector);
+                    if ($elements->count() > 0) {
+                        $value = $this->extractValueByCrawlerSelector($elements, $field);
+                        if ($value && !empty(trim($value))) {
+                            $extracted[$field] = trim($value);
+                            break;
+                        }
+                    }
+                } catch (\Exception $e) {
+                    continue;
+                }
+            }
+        }
+
+        return $extracted;
+    }
+
+    /**
+     * استخراج عنوان صفحه
+     */
+    private function extractPageTitle($crawler): string
+    {
+        try {
+            $title = $crawler->filter('title');
+            if ($title->count() > 0) {
+                return trim($title->text());
+            }
+        } catch (\Exception $e) {
+            // نادیده گرفتن خطا
+        }
+
+        return 'عنوان یافت نشد';
     }
 
     /**
@@ -661,422 +1102,6 @@ class ConfigController extends Controller
         }
 
         return $mapping;
-    }
-
-    /**
-     * صفحه تست کانفیگ
-     */
-    public function testPage(): View
-    {
-        $configs = Config::active()->get();
-        return view('configs.test', compact('configs'));
-    }
-
-    /**
-     * اجرای تست URL
-     */
-    public function testUrl(Request $request): \Illuminate\Http\JsonResponse
-    {
-        $request->validate([
-            'config_id' => 'required|exists:configs,id',
-            'test_url' => 'required|url'
-        ]);
-
-        try {
-            $config = Config::findOrFail($request->config_id);
-            $testUrl = $request->test_url;
-
-            // تست براساس نوع کانفیگ
-            if ($config->isApiSource()) {
-                $result = $this->testApiUrl($config, $testUrl);
-            } elseif ($config->isCrawlerSource()) {
-                $result = $this->testCrawlerUrl($config, $testUrl);
-            } else {
-                throw new \InvalidArgumentException("نوع کانفیگ پشتیبانی نشده");
-            }
-
-            return response()->json([
-                'success' => true,
-                'data' => $result
-            ]);
-
-        } catch (\Exception $e) {
-            Log::error('خطا در تست URL: ' . $e->getMessage());
-
-            return response()->json([
-                'success' => false,
-                'error' => $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * تست URL با API
-     */
-    private function testApiUrl(Config $config, string $testUrl): array
-    {
-        $apiSettings = $config->getApiSettings();
-        $generalSettings = $config->getGeneralSettings();
-
-        // استفاده مستقیم از URL ورودی کاربر
-        $finalUrl = $testUrl;
-
-        // اگر کاربر فقط endpoint وارد کرده، با base_url ترکیب کن
-        if (!filter_var($testUrl, FILTER_VALIDATE_URL)) {
-            $baseUrl = rtrim($config->base_url, '/');
-            $endpoint = ltrim($testUrl, '/');
-            $finalUrl = $baseUrl . '/' . $endpoint;
-        }
-
-        // اضافه کردن پارامترهای اضافی از کانفیگ
-        $params = $apiSettings['params'] ?? [];
-        if (!empty($params)) {
-            $separator = strpos($finalUrl, '?') !== false ? '&' : '?';
-            $finalUrl .= $separator . http_build_query($params);
-        }
-
-        Log::info("Testing API URL: {$finalUrl}");
-
-        // ساخت درخواست HTTP
-        $httpClient = \Illuminate\Support\Facades\Http::timeout($config->timeout);
-
-        // تنظیم User Agent
-        if (!empty($generalSettings['user_agent'])) {
-            $httpClient = $httpClient->withUserAgent($generalSettings['user_agent']);
-        }
-
-        // تنظیم SSL verification
-        if (!$generalSettings['verify_ssl']) {
-            $httpClient = $httpClient->withoutVerifying();
-        }
-
-        // تنظیم احراز هویت
-        if ($apiSettings['auth_type'] === 'bearer') {
-            $httpClient = $httpClient->withToken($apiSettings['auth_token']);
-        } elseif ($apiSettings['auth_type'] === 'basic') {
-            $credentials = explode(':', $apiSettings['auth_token'], 2);
-            if (count($credentials) === 2) {
-                $httpClient = $httpClient->withBasicAuth($credentials[0], $credentials[1]);
-            }
-        }
-
-        // افزودن headers سفارشی
-        if (!empty($apiSettings['headers'])) {
-            $httpClient = $httpClient->withHeaders($apiSettings['headers']);
-        }
-
-        // ارسال درخواست (بدون پارامترهای اضافی چون قبلاً در URL اضافه شده)
-        $response = $httpClient->get($finalUrl);
-
-        if (!$response->successful()) {
-            throw new \Exception("خطا در دریافت اطلاعات: HTTP {$response->status()} - URL: {$finalUrl}");
-        }
-
-        $data = $response->json();
-
-        // استخراج کتاب‌ها
-        $books = $this->extractBooksFromApiData($data);
-
-        if (empty($books)) {
-            throw new \Exception('هیچ کتابی در پاسخ API یافت نشد');
-        }
-
-        // پردازش اولین کتاب برای تست
-        $bookData = $books[0];
-        $extractedData = $this->extractFieldsFromApiData($bookData, $apiSettings['field_mapping']);
-
-        return [
-            'config_name' => $config->name,
-            'source_type' => 'API',
-            'test_url' => $finalUrl, // نمایش URL نهایی که استفاده شده
-            'raw_data' => $bookData,
-            'extracted_data' => $extractedData,
-            'total_books_found' => count($books),
-            'response_status' => $response->status(),
-            'response_headers' => $response->headers()
-        ];
-    }
-
-    /**
-     * تست URL با Crawler
-     */
-    private function testCrawlerUrl(Config $config, string $testUrl): array
-    {
-        $crawlerSettings = $config->getCrawlerSettings();
-        $generalSettings = $config->getGeneralSettings();
-
-        // دریافت محتوای صفحه
-        $httpClient = \Illuminate\Support\Facades\Http::timeout($config->timeout);
-
-        if (!empty($generalSettings['user_agent'])) {
-            $httpClient = $httpClient->withUserAgent($generalSettings['user_agent']);
-        }
-
-        if (!$generalSettings['verify_ssl']) {
-            $httpClient = $httpClient->withoutVerifying();
-        }
-
-        $response = $httpClient->get($testUrl);
-
-        if (!$response->successful()) {
-            throw new \Exception("خطا در دریافت صفحه: HTTP {$response->status()}");
-        }
-
-        $html = $response->body();
-
-        if (empty($html)) {
-            throw new \Exception('محتوای صفحه خالی است');
-        }
-
-        // پردازش HTML با Crawler
-        $crawler = new \Symfony\Component\DomCrawler\Crawler($html);
-
-        // استخراج اطلاعات براساس سلکتورها
-        $extractedData = [];
-        $selectors = $crawlerSettings['selectors'];
-
-        foreach ($selectors as $field => $selector) {
-            if (empty($selector)) continue;
-
-            try {
-                $elements = $crawler->filter($selector);
-
-                if ($elements->count() > 0) {
-                    $value = $this->extractValueByCrawlerSelector($elements, $field);
-                    if ($value !== null) {
-                        $extractedData[$field] = $value;
-                    }
-                }
-            } catch (\Exception $e) {
-                $extractedData[$field] = "خطا: " . $e->getMessage();
-            }
-        }
-
-        // اگر سلکتور تعریف نشده، تلاش برای پیدا کردن عناصر متداول
-        if (empty($selectors)) {
-            $extractedData = $this->autoExtractFromHtml($crawler);
-        }
-
-        return [
-            'config_name' => $config->name,
-            'source_type' => 'Crawler',
-            'test_url' => $testUrl,
-            'html_preview' => substr($html, 0, 1000) . '...',
-            'extracted_data' => $extractedData,
-            'selectors_used' => $selectors,
-            'response_status' => $response->status(),
-            'page_title' => $this->extractPageTitle($crawler)
-        ];
-    }
-
-    /**
-     * استخراج کتاب‌ها از داده‌های API (برای تست)
-     */
-    private function extractBooksFromApiData(array $data): array
-    {
-        // بررسی ساختار پاسخ API
-        if (isset($data['status']) && $data['status'] === 'success' && isset($data['data']['books'])) {
-            return $data['data']['books'];
-        }
-
-        if (isset($data['data']) && is_array($data['data'])) {
-            if (isset($data['data']['books']) && is_array($data['data']['books'])) {
-                return $data['data']['books'];
-            }
-            if (isset($data['data'][0]) && is_array($data['data'][0])) {
-                return $data['data'];
-            }
-        }
-
-        if (isset($data['books']) && is_array($data['books'])) {
-            return $data['books'];
-        }
-
-        if (is_array($data) && isset($data[0]) && is_array($data[0])) {
-            return $data;
-        }
-
-        if (isset($data['title'])) {
-            return [$data];
-        }
-
-        return [];
-    }
-
-    /**
-     * استخراج فیلدها از داده‌های API (برای تست)
-     */
-    private function extractFieldsFromApiData(array $data, array $fieldMapping): array
-    {
-        $extracted = [];
-
-        // اگر نقشه‌برداری تعریف شده
-        if (!empty($fieldMapping)) {
-            foreach ($fieldMapping as $bookField => $apiField) {
-                $value = $this->getNestedValueForTest($data, $apiField);
-                if ($value !== null) {
-                    $extracted[$bookField] = $value;
-                }
-            }
-        } else {
-            // نقشه‌برداری خودکار
-            $autoMapping = [
-                'title' => 'title',
-                'description' => ['description', 'description_en', 'desc'],
-                'author' => ['authors', 'author'],
-                'category' => ['category.name', 'category'],
-                'publisher' => ['publisher.name', 'publisher'],
-                'isbn' => 'isbn',
-                'publication_year' => 'publication_year',
-                'pages_count' => 'pages_count',
-                'language' => 'language',
-                'format' => 'format',
-                'file_size' => 'file_size',
-                'image_url' => ['image_url.0', 'image_url', 'cover']
-            ];
-
-            foreach ($autoMapping as $field => $paths) {
-                $paths = is_array($paths) ? $paths : [$paths];
-
-                foreach ($paths as $path) {
-                    $value = $this->getNestedValueForTest($data, $path);
-                    if ($value !== null) {
-                        $extracted[$field] = $value;
-                        break;
-                    }
-                }
-            }
-        }
-
-        return $extracted;
-    }
-
-    /**
-     * دریافت مقدار nested برای تست
-     */
-    private function getNestedValueForTest(array $data, string $path)
-    {
-        $keys = explode('.', $path);
-        $value = $data;
-
-        foreach ($keys as $key) {
-            if (is_array($value)) {
-                if (is_numeric($key)) {
-                    $key = (int) $key;
-                    if (isset($value[$key])) {
-                        $value = $value[$key];
-                    } else {
-                        return null;
-                    }
-                } elseif (isset($value[$key])) {
-                    $value = $value[$key];
-                } else {
-                    return null;
-                }
-            } else {
-                return null;
-            }
-        }
-
-        // پردازش آرایه authors
-        if (is_array($value) && $path === 'authors') {
-            $names = [];
-            foreach ($value as $author) {
-                if (is_array($author) && isset($author['name'])) {
-                    $names[] = $author['name'];
-                }
-            }
-            return implode(', ', $names);
-        }
-
-        return $value;
-    }
-
-    /**
-     * استخراج مقدار با سلکتور Crawler (برای تست)
-     */
-    private function extractValueByCrawlerSelector($elements, string $field): ?string
-    {
-        $element = $elements->first();
-
-        switch ($field) {
-            case 'image_url':
-                if ($element->nodeName() === 'img') {
-                    return $element->attr('src') ?: $element->attr('data-src');
-                }
-                $img = $element->filter('img');
-                if ($img->count() > 0) {
-                    return $img->attr('src') ?: $img->attr('data-src');
-                }
-                break;
-
-            case 'download_url':
-                if ($element->nodeName() === 'a') {
-                    return $element->attr('href');
-                }
-                $link = $element->filter('a');
-                if ($link->count() > 0) {
-                    return $link->attr('href');
-                }
-                break;
-
-            default:
-                return trim($element->text());
-        }
-
-        return null;
-    }
-
-    /**
-     * استخراج خودکار از HTML
-     */
-    private function autoExtractFromHtml($crawler): array
-    {
-        $extracted = [];
-
-        // تلاش برای پیدا کردن عناصر متداول
-        $commonSelectors = [
-            'title' => ['h1', '.title', '#title', '.book-title'],
-            'description' => ['.description', '.summary', '.content', 'p'],
-            'author' => ['.author', '.writer', '.by'],
-            'image_url' => ['img', '.cover img', '.book-image img']
-        ];
-
-        foreach ($commonSelectors as $field => $selectors) {
-            foreach ($selectors as $selector) {
-                try {
-                    $elements = $crawler->filter($selector);
-                    if ($elements->count() > 0) {
-                        $value = $this->extractValueByCrawlerSelector($elements, $field);
-                        if ($value && !empty(trim($value))) {
-                            $extracted[$field] = trim($value);
-                            break;
-                        }
-                    }
-                } catch (\Exception $e) {
-                    continue;
-                }
-            }
-        }
-
-        return $extracted;
-    }
-
-    /**
-     * استخراج عنوان صفحه
-     */
-    private function extractPageTitle($crawler): string
-    {
-        try {
-            $title = $crawler->filter('title');
-            if ($title->count() > 0) {
-                return trim($title->text());
-            }
-        } catch (\Exception $e) {
-            // نادیده گرفتن خطا
-        }
-
-        return 'عنوان یافت نشد';
     }
 
     /**
