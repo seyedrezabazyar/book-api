@@ -12,25 +12,27 @@ Route::get('/dashboard', function () {
     return redirect()->route('configs.index');
 })->middleware(['auth', 'verified'])->name('dashboard');
 
-Route::middleware('auth')->group(function () {
-    // مدیریت پروفایل
-    Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
-    Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
-    Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
+Route::middleware(['auth'])->group(function () {
 
-    // مدیریت کانفیگ‌ها
+    // Routes اصلی کانفیگ‌ها
     Route::resource('configs', ConfigController::class);
 
+    // Routes اضافی مورد نیاز
+    Route::get('configs/{config}/logs', [ConfigController::class, 'logs'])->name('configs.logs');
+
+    // اجرای بک‌گراند
+    Route::post('configs/{config}/execute-background', [ConfigController::class, 'executeBackground'])->name('configs.execute-background');
+
     // اجرای فوری
-    Route::post('configs/{config}/run-sync', [ConfigController::class, 'runSync'])
-        ->name('configs.run-sync');
+    Route::post('configs/{config}/run-sync', [ConfigController::class, 'runSync'])->name('configs.run-sync');
 
-    // مشاهده لاگ‌ها
-    Route::get('configs/{config}/logs', [ConfigController::class, 'logs'])
-        ->name('configs.logs');
+    // توقف اجرا
+    Route::post('configs/{config}/stop', [ConfigController::class, 'stop'])->name('configs.stop');
 
-    Route::get('configs/{config}/logs/{log}', [ConfigController::class, 'logDetails'])
-        ->name('configs.log-details');
+    // مدیریت Worker
+    Route::get('configs/worker/status', [ConfigController::class, 'workerStatus'])->name('configs.worker.status');
+    Route::post('configs/{config}/worker/manage', [ConfigController::class, 'manageWorker'])->name('configs.worker.manage');
+
 });
 
 require __DIR__.'/auth.php';

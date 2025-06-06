@@ -9,6 +9,7 @@ use App\Models\Category;
 use App\Models\Publisher;
 use App\Models\BookImage;
 use App\Models\ExecutionLog;
+use App\Jobs\ProcessSinglePageJob;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -17,7 +18,7 @@ use Illuminate\Support\Facades\DB;
 class ApiDataService
 {
     private Config $config;
-    private ExecutionLog $executionLog;
+    private ?ExecutionLog $executionLog = null;
     private array $stats = ['total' => 0, 'success' => 0, 'failed' => 0, 'duplicate' => 0];
 
     public function __construct(Config $config)
@@ -25,6 +26,59 @@ class ApiDataService
         $this->config = $config;
     }
 
+    /**
+     * اجرای کامل با استفاده از Job Queue (روش جدید)
+     */
+    public function fetchDataAsync(int $maxPages = 10): array
+    {
+        $this->executionLog = ExecutionLog::createNew($this->config);
+
+        try {
+            $this->config->update(['is_running' => true]);
+
+            $crawlingSettings = $this->config->getCrawlingSettings();
+            $currentPage = $this->getCurrentPage($crawlingSettings);
+
+            Log::info("شروع اجرای Async", [
+                'config_id' => $this->config->id,
+                'start_page' => $currentPage,
+                'max_pages' => $maxPages,
+                'execution_id' => $this->executionLog->execution_id
+            ]);
+
+            // ایجاد Job برای هر صفحه
+            for ($page = $currentPage; $page < $currentPage + $maxPages; $page++) {
+                ProcessSinglePageJob::dispatch(
+                    $this->config,
+                    $page,
+                    $this->executionLog->execution_id
+                );
+            }
+
+            // تنظیم Job نهایی برای تمام کردن اجرا
+            ProcessSinglePageJob::dispatch(
+                $this->config,
+                -1, // شماره صفحه منفی = پایان اجرا
+                $this->executionLog->execution_id
+            )->delay(now()->addSeconds($this->config->page_delay * $maxPages + 60));
+
+            return [
+                'status' => 'queued',
+                'execution_id' => $this->executionLog->execution_id,
+                'pages_queued' => $maxPages,
+                'message' => "تعداد {$maxPages} صفحه در صف قرار گرفت"
+            ];
+
+        } catch (\Exception $e) {
+            $this->executionLog->markFailed($e->getMessage());
+            $this->config->update(['is_running' => false]);
+            throw $e;
+        }
+    }
+
+    /**
+     * اجرای همزمان (روش قبلی برای اجرای فوری)
+     */
     public function fetchData(): array
     {
         $this->executionLog = ExecutionLog::createNew($this->config);
@@ -47,6 +101,86 @@ class ApiDataService
         }
 
         return $this->stats;
+    }
+
+    /**
+     * پردازش یک صفحه منفرد (برای استفاده در Job)
+     */
+    public function processPage(int $pageNumber, ExecutionLog $executionLog): array
+    {
+        if ($pageNumber === -1) {
+            // این Job برای پایان دادن به اجرا است
+            $executionLog->markCompleted($this->getConfigTotalStats());
+            $this->config->update(['is_running' => false]);
+            return ['action' => 'completed'];
+        }
+
+        $apiSettings = $this->config->getApiSettings();
+        $generalSettings = $this->config->getGeneralSettings();
+
+        $url = $this->buildApiUrl($apiSettings, $pageNumber);
+        $response = $this->makeHttpRequest($url, $apiSettings, $generalSettings);
+
+        if (!$response->successful()) {
+            $error = "خطای HTTP {$response->status()}: {$response->reason()}";
+            $executionLog->addLogEntry("خطا در صفحه {$pageNumber}: {$error}");
+            throw new \Exception($error);
+        }
+
+        $data = $response->json();
+        $books = $this->extractBooksFromApiData($data);
+
+        if (empty($books)) {
+            $executionLog->addLogEntry("صفحه {$pageNumber}: هیچ کتابی یافت نشد - پایان صفحات");
+            return ['action' => 'no_more_data', 'page' => $pageNumber];
+        }
+
+        $pageStats = ['total' => 0, 'success' => 0, 'failed' => 0, 'duplicate' => 0];
+
+        foreach ($books as $bookData) {
+            $pageStats['total']++;
+
+            try {
+                $result = $this->createBook($bookData, $apiSettings['field_mapping'] ?? []);
+
+                if ($result['status'] === 'created') {
+                    $pageStats['success']++;
+                } elseif ($result['status'] === 'duplicate') {
+                    $pageStats['duplicate']++;
+                }
+
+            } catch (\Exception $e) {
+                $pageStats['failed']++;
+                Log::error('خطا در پردازش کتاب', [
+                    'page' => $pageNumber,
+                    'error' => $e->getMessage(),
+                    'book_data' => $bookData
+                ]);
+            }
+
+            // تاخیر بین رکوردها
+            if ($this->config->delay_seconds > 0) {
+                sleep($this->config->delay_seconds);
+            }
+        }
+
+        $executionLog->addLogEntry("صفحه {$pageNumber} پردازش شد", $pageStats);
+
+        return $pageStats;
+    }
+
+    /**
+     * دریافت آمار کل از جدول کانفیگ
+     */
+    private function getConfigTotalStats(): array
+    {
+        return [
+            'total' => $this->config->total_processed,
+            'success' => $this->config->total_success,
+            'failed' => $this->config->total_failed,
+            'duplicate' => 0, // محاسبه در صورت نیاز
+            'execution_time' => 0
+        ];
     }
 
     private function processApiData(): void

@@ -133,7 +133,7 @@
                              x-transition:leave-end="transform opacity-0 scale-95"
                              class="absolute left-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50">
                             <div class="py-1">
-                                <a href="{{ route('profile.edit') }}"
+                                <a href="{{ route('dashboard') }}"
                                    class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
                                     👤 پروفایل
                                 </a>
