@@ -396,7 +396,7 @@ class ConfigController extends Controller
     }
 
     /**
-     * متوقف کردن اجرا - نسخه بهبود یافته
+     * متوقف کردن اجرا - نسخه بهبود یافته و قدرتمند
      */
     public function stopExecution(Config $config): JsonResponse
     {
@@ -408,15 +408,18 @@ class ConfigController extends Controller
                 ], 422);
             }
 
-            Log::info('شروع فرآیند توقف', [
+            Log::info('🛑 شروع فرآیند توقف قدرتمند', [
                 'config_id' => $config->id,
                 'config_name' => $config->name
             ]);
 
-            // 1. حذف Jobs مربوط به این کانفیگ از صف
+            // 1. فوری: کانفیگ را غیرفعال کن
+            $config->update(['is_running' => false]);
+
+            // 2. حذف همه Jobs مرتبط - چندین روش برای اطمینان
             $deletedJobs = 0;
 
-            // روش‌های مختلف برای حذف Jobs
+            // روش 1: حذف بر اساس config_id
             $patterns = [
                 '%"config_id":' . $config->id . '%',
                 '%"config":{"id":' . $config->id . '%',
@@ -427,11 +430,10 @@ class ConfigController extends Controller
             foreach ($patterns as $pattern) {
                 $deleted = DB::table('jobs')->where('payload', 'like', $pattern)->delete();
                 $deletedJobs += $deleted;
-
-                Log::info("حذف Jobs با الگو: {$pattern}", ['deleted' => $deleted]);
+                Log::info("🗑️ حذف Jobs با الگو: {$pattern}", ['deleted' => $deleted]);
             }
 
-            // 2. حذف Jobs با execution_id
+            // روش 2: حذف بر اساس execution_id
             $latestExecution = ExecutionLog::where('config_id', $config->id)
                 ->where('status', 'running')
                 ->latest()
@@ -439,60 +441,73 @@ class ConfigController extends Controller
 
             if ($latestExecution) {
                 $executionId = $latestExecution->execution_id;
+
+                // حذف Jobs با execution_id
                 $deletedByExecId = DB::table('jobs')
                     ->where('payload', 'like', '%"execution_id":"' . $executionId . '"%')
                     ->delete();
 
                 $deletedJobs += $deletedByExecId;
-
-                Log::info("حذف Jobs با execution_id", [
+                Log::info("🗑️ حذف Jobs با execution_id", [
                     'execution_id' => $executionId,
                     'deleted' => $deletedByExecId
                 ]);
-            }
 
-            // 3. علامت‌گذاری کانفیگ به عنوان متوقف شده
-            $config->update(['is_running' => false]);
-
-            Log::info('کانفیگ به عنوان متوقف علامت‌گذاری شد', ['config_id' => $config->id]);
-
-            // 4. بروزرسانی execution log
-            if ($latestExecution) {
+                // بروزرسانی execution log
                 $finalStats = [
                     'stopped_manually' => true,
                     'deleted_jobs' => $deletedJobs,
                     'stopped_at' => now()->toISOString(),
-                    'total_processed_at_stop' => $latestExecution->total_processed,
-                    'total_success_at_stop' => $latestExecution->total_success,
-                    'total_failed_at_stop' => $latestExecution->total_failed
+                    'total_processed_at_stop' => $config->total_processed,
+                    'total_success_at_stop' => $config->total_success,
+                    'total_failed_at_stop' => $config->total_failed
                 ];
 
                 $latestExecution->stop($finalStats);
-
-                Log::info('ExecutionLog بروزرسانی شد', [
-                    'execution_id' => $latestExecution->execution_id,
-                    'final_stats' => $finalStats
-                ]);
             }
 
-            // 5. اطمینان از پاک شدن کامل Jobs
-            $remainingJobs = DB::table('jobs')->count();
+            // 3. حذف اضطراری: همه Jobs مرتبط با این کانفیگ
+            $extraDeleted = DB::table('jobs')
+                ->whereRaw('payload REGEXP ?', ['config.*' . $config->id])
+                ->delete();
 
-            Log::info('فرآیند توقف تمام شد', [
+            $deletedJobs += $extraDeleted;
+            Log::info("🗑️ حذف اضطراری Jobs", ['extra_deleted' => $extraDeleted]);
+
+            // 4. کشتن Worker اگر در حال اجرا باشد
+            $this->forceKillWorker();
+
+            // 5. بررسی نهایی
+            $remainingJobs = DB::table('jobs')->count();
+            $remainingConfigJobs = DB::table('jobs')
+                ->where('payload', 'like', '%"config_id":' . $config->id . '%')
+                ->count();
+
+            Log::info('✅ فرآیند توقف تمام شد', [
                 'config_id' => $config->id,
-                'deleted_jobs' => $deletedJobs,
-                'remaining_jobs' => $remainingJobs
+                'total_deleted_jobs' => $deletedJobs,
+                'remaining_jobs' => $remainingJobs,
+                'remaining_config_jobs' => $remainingConfigJobs
             ]);
+
+            $message = "✅ اجرا متوقف شد!\n";
+            $message .= "🗑️ {$deletedJobs} Job از صف حذف شد\n";
+            $message .= "📊 Jobs باقی‌مانده: {$remainingJobs}\n";
+
+            if ($remainingConfigJobs > 0) {
+                $message .= "⚠️ هنوز {$remainingConfigJobs} Job مرتبط با این کانفیگ باقی مانده!";
+            }
 
             return response()->json([
                 'success' => true,
-                'message' => "✅ اجرا متوقف شد!\n🗑️ {$deletedJobs} Job از صف حذف شد.\n📊 Jobs باقی‌مانده: {$remainingJobs}",
+                'message' => $message,
                 'deleted_jobs' => $deletedJobs,
-                'remaining_jobs' => $remainingJobs
+                'remaining_jobs' => $remainingJobs,
+                'remaining_config_jobs' => $remainingConfigJobs
             ]);
 
         } catch (\Exception $e) {
-            Log::error('خطا در متوقف کردن اجرا', [
+            Log::error('❌ خطا در متوقف کردن اجرا', [
                 'config_id' => $config->id,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
@@ -502,6 +517,45 @@ class ConfigController extends Controller
                 'success' => false,
                 'message' => 'خطا در متوقف کردن اجرا: ' . $e->getMessage()
             ], 500);
+        }
+    }
+
+    /**
+     * کشتن اجباری Worker
+     */
+    private function forceKillWorker(): void
+    {
+        try {
+            Log::info('🔪 شروع کشتن اجباری Worker...');
+
+            // حذف فایل PID
+            $pidFile = storage_path('framework/queue_worker.pid');
+            if (File::exists($pidFile)) {
+                $pid = (int) File::get($pidFile);
+
+                // تلاش برای کشتن process
+                if ($pid > 0) {
+                    if (PHP_OS_FAMILY === 'Darwin' || PHP_OS_FAMILY === 'Linux') {
+                        exec("kill -TERM {$pid} 2>/dev/null");
+                        sleep(2);
+                        exec("kill -KILL {$pid} 2>/dev/null");
+                    }
+                    Log::info("🔪 Worker با PID {$pid} کشته شد");
+                }
+
+                File::delete($pidFile);
+            }
+
+            // کشتن همه فرآیندهای queue:work
+            if (PHP_OS_FAMILY === 'Darwin' || PHP_OS_FAMILY === 'Linux') {
+                exec("pkill -f 'queue:work' 2>/dev/null");
+                exec("pkill -f 'ProcessSinglePageJob' 2>/dev/null");
+                exec("pkill -f 'ProcessApiDataJob' 2>/dev/null");
+                Log::info('🔪 همه فرآیندهای queue کشته شدند');
+            }
+
+        } catch (\Exception $e) {
+            Log::error('❌ خطا در کشتن Worker', ['error' => $e->getMessage()]);
         }
     }
 

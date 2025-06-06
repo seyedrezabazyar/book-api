@@ -481,7 +481,7 @@
                 });
         }
 
-        // توقف اجرای کانفیگ
+        // توقف اجرای کانفیگ - اینجا route درست شد!
         function stopExecution(configId) {
             if (!confirm('آیا از توقف اجرا اطمینان دارید؟')) {
                 return;
@@ -489,7 +489,7 @@
 
             showNotification('در حال توقف اجرا...', 'warning');
 
-            fetch(`/configs/${configId}/stop`, {
+            fetch(`/configs/${configId}/stop-execution`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
