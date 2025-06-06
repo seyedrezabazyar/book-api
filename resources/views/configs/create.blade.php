@@ -16,7 +16,7 @@
                 </a>
                 <div>
                     <h1 class="text-2xl font-bold text-gray-800">ایجاد کانفیگ جدید</h1>
-                    <p class="text-gray-600">کانفیگ جدید برای اسکرپ اطلاعات</p>
+                    <p class="text-gray-600">کانفیگ جدید برای دریافت اطلاعات از API</p>
                 </div>
             </div>
         </div>
@@ -63,27 +63,6 @@
                             @enderror
                         </div>
 
-                        <!-- نوع منبع داده -->
-                        <div>
-                            <label for="data_source_type" class="block text-sm font-medium text-gray-700 mb-2">
-                                نوع منبع داده <span class="text-red-500">*</span>
-                            </label>
-                            <select
-                                id="data_source_type"
-                                name="data_source_type"
-                                required
-                                onchange="toggleSourceFields()"
-                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('data_source_type') border-red-500 @enderror"
-                            >
-                                <option value="">انتخاب کنید</option>
-                                <option value="api" {{ old('data_source_type') === 'api' ? 'selected' : '' }}>API</option>
-                                <option value="crawler" {{ old('data_source_type') === 'crawler' ? 'selected' : '' }}>وب کراولر</option>
-                            </select>
-                            @error('data_source_type')
-                            <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
-                            @enderror
-                        </div>
-
                         <!-- وضعیت -->
                         <div>
                             <label for="status" class="block text-sm font-medium text-gray-700 mb-2">
@@ -105,9 +84,9 @@
                         </div>
 
                         <!-- آدرس پایه -->
-                        <div>
+                        <div class="md:col-span-2">
                             <label for="base_url" class="block text-sm font-medium text-gray-700 mb-2">
-                                آدرس پایه <span class="text-red-500">*</span>
+                                آدرس پایه API <span class="text-red-500">*</span>
                             </label>
                             <input
                                 type="url"
@@ -147,7 +126,7 @@
                 <div class="border-b border-gray-200 pb-6">
                     <h2 class="text-lg font-medium text-gray-900 mb-4">تنظیمات اتصال</h2>
 
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         <!-- Timeout -->
                         <div>
                             <label for="timeout" class="block text-sm font-medium text-gray-700 mb-2">
@@ -168,26 +147,6 @@
                             @enderror
                         </div>
 
-                        <!-- تعداد تلاش مجدد -->
-                        <div>
-                            <label for="max_retries" class="block text-sm font-medium text-gray-700 mb-2">
-                                تعداد تلاش مجدد <span class="text-red-500">*</span>
-                            </label>
-                            <input
-                                type="number"
-                                id="max_retries"
-                                name="max_retries"
-                                value="{{ old('max_retries', 3) }}"
-                                required
-                                min="0"
-                                max="10"
-                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('max_retries') border-red-500 @enderror"
-                            >
-                            @error('max_retries')
-                            <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
-                            @enderror
-                        </div>
-
                         <!-- تاخیر بین اجراها -->
                         <div>
                             <label for="delay_seconds" class="block text-sm font-medium text-gray-700 mb-2">
@@ -203,7 +162,7 @@
                                 max="3600"
                                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('delay_seconds') border-red-500 @enderror"
                             >
-                            <p class="text-xs text-gray-500 mt-1">تاخیر بین هر دور اجرا</p>
+                            <p class="text-xs text-gray-500 mt-1">تاخیر بین هر درخواست</p>
                             @error('delay_seconds')
                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                             @enderror
@@ -224,22 +183,14 @@
                                 max="100"
                                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('records_per_run') border-red-500 @enderror"
                             >
-                            <p class="text-xs text-gray-500 mt-1">تعداد رکورد در هر دور</p>
+                            <p class="text-xs text-gray-500 mt-1">تعداد رکورد در هر اجرا</p>
                             @error('records_per_run')
                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                             @enderror
                         </div>
 
-                        <!-- سرعت محاسبه شده -->
-                        <div class="md:col-span-2 lg:col-span-4">
-                            <div id="speed-info" class="text-sm text-blue-600 bg-blue-50 rounded-lg p-3">
-                                <span class="font-medium">سرعت تخمینی:</span>
-                                <span id="speed-text">محاسبه خودکار...</span>
-                            </div>
-                        </div>
-
                         <!-- User Agent -->
-                        <div class="md:col-span-2 lg:col-span-4">
+                        <div class="md:col-span-2 lg:col-span-3">
                             <label for="user_agent" class="block text-sm font-medium text-gray-700 mb-2">
                                 User Agent
                             </label>
@@ -256,7 +207,7 @@
                         </div>
 
                         <!-- تنظیمات امنیتی -->
-                        <div class="md:col-span-2 lg:col-span-4 space-y-3">
+                        <div class="md:col-span-2 lg:col-span-3 space-y-3">
                             <div class="flex items-center">
                                 <input
                                     type="checkbox"
@@ -288,7 +239,7 @@
                 </div>
 
                 <!-- تنظیمات API -->
-                <div id="api-settings" class="border-b border-gray-200 pb-6 hidden">
+                <div class="border-b border-gray-200 pb-6">
                     <h2 class="text-lg font-medium text-gray-900 mb-4">تنظیمات API</h2>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -302,6 +253,7 @@
                                 id="api_endpoint"
                                 name="api_endpoint"
                                 value="{{ old('api_endpoint') }}"
+                                required
                                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('api_endpoint') border-red-500 @enderror"
                                 placeholder="/api/books"
                             >
@@ -374,24 +326,7 @@
                     <div class="mt-6">
                         <h3 class="text-md font-medium text-gray-900 mb-4">نقشه‌برداری فیلدهای API</h3>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            @php
-                                $apiFields = [
-                                    'title' => 'عنوان',
-                                    'description' => 'توضیحات',
-                                    'author' => 'نویسنده',
-                                    'category' => 'دسته‌بندی',
-                                    'publisher' => 'ناشر',
-                                    'isbn' => 'شابک',
-                                    'publication_year' => 'سال انتشار',
-                                    'pages_count' => 'تعداد صفحات',
-                                    'language' => 'زبان',
-                                    'format' => 'فرمت',
-                                    'file_size' => 'حجم فایل',
-                                    'image_url' => 'تصویر'
-                                ];
-                            @endphp
-
-                            @foreach($apiFields as $field => $label)
+                            @foreach($bookFields as $field => $label)
                                 <div>
                                     <label for="api_field_{{ $field }}" class="block text-sm font-medium text-gray-700 mb-1">
                                         {{ $label }}
@@ -411,77 +346,8 @@
                         <div class="mt-4 p-3 bg-blue-50 rounded-lg">
                             <p class="text-sm text-blue-800">
                                 <strong>راهنما:</strong> برای فیلدهای nested از نقطه استفاده کنید (مثال: data.book.title یا authors.0.name)
-                            </p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- تنظیمات Crawler -->
-                <div id="crawler-settings" class="border-b border-gray-200 pb-6 hidden">
-                    <h2 class="text-lg font-medium text-gray-900 mb-4">تنظیمات وب کراولر</h2>
-
-                    <!-- الگوی URL -->
-                    <div class="mb-6">
-                        <label for="url_pattern" class="block text-sm font-medium text-gray-700 mb-2">
-                            الگوی URL
-                        </label>
-                        <input
-                            type="text"
-                            id="url_pattern"
-                            name="url_pattern"
-                            value="{{ old('url_pattern') }}"
-                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent @error('url_pattern') border-red-500 @enderror"
-                            placeholder="https://example.com/book/{id} یا خالی برای فقط URL پایه"
-                        >
-                        <p class="text-sm text-gray-500 mt-1">
-                            از {id} برای شماره‌های متوالی استفاده کنید. خالی بگذارید تا فقط URL پایه استفاده شود.
-                        </p>
-                        @error('url_pattern')
-                        <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
-                        @enderror
-                    </div>
-
-                    <!-- سلکتورهای CSS -->
-                    <div>
-                        <h3 class="text-md font-medium text-gray-900 mb-4">سلکتورهای CSS</h3>
-                        <div class="grid grid-cols-1 gap-4">
-                            @php
-                                $crawlerFields = [
-                                    'title' => 'عنوان',
-                                    'description' => 'توضیحات',
-                                    'author' => 'نویسنده',
-                                    'category' => 'دسته‌بندی',
-                                    'publisher' => 'ناشر',
-                                    'isbn' => 'شابک',
-                                    'publication_year' => 'سال انتشار',
-                                    'pages_count' => 'تعداد صفحات',
-                                    'language' => 'زبان',
-                                    'format' => 'فرمت',
-                                    'file_size' => 'حجم فایل',
-                                    'image_url' => 'تصویر'
-                                ];
-                            @endphp
-
-                            @foreach($crawlerFields as $field => $label)
-                                <div>
-                                    <label for="crawler_selector_{{ $field }}" class="block text-sm font-medium text-gray-700 mb-1">
-                                        {{ $label }}
-                                    </label>
-                                    <input
-                                        type="text"
-                                        id="crawler_selector_{{ $field }}"
-                                        name="crawler_selector_{{ $field }}"
-                                        value="{{ old('crawler_selector_' . $field) }}"
-                                        class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                                        placeholder="سلکتور CSS مثل .title یا #book-title"
-                                    >
-                                </div>
-                            @endforeach
-                        </div>
-
-                        <div class="mt-4 p-3 bg-yellow-50 rounded-lg">
-                            <p class="text-sm text-yellow-800">
-                                <strong>توجه:</strong> اگر سلکتورها را خالی بگذارید، سیستم به صورت خودکار تلاش خواهد کرد فیلدها را پیدا کند.
+                                <br>
+                                اگر خالی بگذارید، از نقشه‌برداری پیش‌فرض استفاده می‌شود.
                             </p>
                         </div>
                     </div>
@@ -515,28 +381,6 @@
     </div>
 
     <script>
-        // Toggle بین تنظیمات API و Crawler
-        function toggleSourceFields() {
-            const sourceType = document.querySelector('[name="data_source_type"]').value;
-            const apiSettings = document.getElementById('api-settings');
-            const crawlerSettings = document.getElementById('crawler-settings');
-
-            // مخفی کردن همه
-            apiSettings.classList.add('hidden');
-            crawlerSettings.classList.add('hidden');
-
-            // نمایش مناسب
-            if (sourceType === 'api') {
-                apiSettings.classList.remove('hidden');
-                setFieldsRequired(['api_endpoint'], true);
-                setFieldsRequired(['url_pattern'], false);
-            } else if (sourceType === 'crawler') {
-                crawlerSettings.classList.remove('hidden');
-                setFieldsRequired(['api_endpoint'], false);
-                setFieldsRequired(['url_pattern'], false);
-            }
-        }
-
         // Toggle نمایش توکن احراز هویت
         function toggleAuthToken() {
             const authType = document.querySelector('[name="auth_type"]').value;
@@ -552,73 +396,21 @@
             }
         }
 
-        // تنظیم required برای فیلدها
-        function setFieldsRequired(fieldNames, required) {
-            fieldNames.forEach(name => {
-                const field = document.querySelector(`[name="${name}"]`);
-                if (field) {
-                    if (required) {
-                        field.setAttribute('required', 'required');
-                    } else {
-                        field.removeAttribute('required');
-                    }
-                }
-            });
-        }
-
-        // محاسبه و نمایش سرعت اسکرپ
-        function updateSpeedInfo() {
-            const delaySeconds = parseInt(document.querySelector('[name="delay_seconds"]').value) || 1;
-            const recordsPerRun = parseInt(document.querySelector('[name="records_per_run"]').value) || 1;
-
-            const recordsPerMinute = Math.round((60 / delaySeconds) * recordsPerRun);
-            const recordsPerHour = recordsPerMinute * 60;
-
-            const speedText = document.getElementById('speed-text');
-            speedText.innerHTML = `
-                <span class="font-bold">${recordsPerMinute}</span> رکورد در دقیقه،
-                <span class="font-bold">${recordsPerHour.toLocaleString()}</span> رکورد در ساعت
-            `;
-
-            // هشدار برای سرعت بالا
-            const speedInfo = document.getElementById('speed-info');
-            if (recordsPerMinute > 60) {
-                speedInfo.className = 'text-sm text-orange-600 bg-orange-50 rounded-lg p-3';
-                speedText.innerHTML += ' <span class="text-xs">(سرعت بالا - ممکن است باعث مسدود شدن شوید)</span>';
-            } else if (recordsPerMinute > 120) {
-                speedInfo.className = 'text-sm text-red-600 bg-red-50 rounded-lg p-3';
-                speedText.innerHTML += ' <span class="text-xs font-bold">(خطر مسدود شدن بالا!)</span>';
-            } else {
-                speedInfo.className = 'text-sm text-blue-600 bg-blue-50 rounded-lg p-3';
-            }
-        }
-
-        // اعتبارسنجی URL در سمت کلاینت
-        function validateUrl(input) {
-            const url = input.value;
-            const urlPattern = /^https?:\/\/.+/i;
-
-            if (url && !urlPattern.test(url)) {
-                input.setCustomValidity('لطفاً یک URL معتبر وارد کنید (باید با http:// یا https:// شروع شود)');
-            } else {
-                input.setCustomValidity('');
-            }
-        }
-
         // رویدادهای صفحه
         document.addEventListener('DOMContentLoaded', function() {
-            // محاسبه سرعت اولیه
-            updateSpeedInfo();
-
             // نمایش فیلدهای مناسب براساس مقدار قبلی
-            toggleSourceFields();
             toggleAuthToken();
 
-            // رویدادهای تغییر
-            document.querySelector('[name="delay_seconds"]').addEventListener('input', updateSpeedInfo);
-            document.querySelector('[name="records_per_run"]').addEventListener('input', updateSpeedInfo);
+            // اعتبارسنجی URL در سمت کلاینت
             document.querySelector('[name="base_url"]').addEventListener('blur', function() {
-                validateUrl(this);
+                const url = this.value;
+                const urlPattern = /^https?:\/\/.+/i;
+
+                if (url && !urlPattern.test(url)) {
+                    this.setCustomValidity('لطفاً یک URL معتبر وارد کنید (باید با http:// یا https:// شروع شود)');
+                } else {
+                    this.setCustomValidity('');
+                }
             });
 
             // رویداد ارسال فرم
@@ -632,108 +424,12 @@
                 submitText.classList.add('hidden');
                 submitLoading.classList.remove('hidden');
 
-                // اعتبارسنجی نهایی
-                const sourceType = document.querySelector('[name="data_source_type"]').value;
-
-                if (sourceType === 'api') {
-                    const endpoint = document.querySelector('[name="api_endpoint"]').value;
-                    if (!endpoint.trim()) {
-                        e.preventDefault();
-                        alert('نقطه پایانی API الزامی است');
-
-                        // بازگرداندن حالت عادی دکمه
-                        submitButton.disabled = false;
-                        submitText.classList.remove('hidden');
-                        submitLoading.classList.add('hidden');
-                        return;
-                    }
-                }
-
                 // بازگرداندن حالت عادی بعد از 10 ثانیه (fallback)
                 setTimeout(() => {
                     submitButton.disabled = false;
                     submitText.classList.remove('hidden');
                     submitLoading.classList.add('hidden');
                 }, 10000);
-            });
-
-            // کمک برای autocomplete فیلدهای API
-            const apiFieldInputs = document.querySelectorAll('[name^="api_field_"]');
-            apiFieldInputs.forEach(input => {
-                input.addEventListener('focus', function() {
-                    const fieldName = this.name.replace('api_field_', '');
-
-                    // پیشنهادات متداول براساس نوع فیلد
-                    const suggestions = {
-                        title: ['title', 'name', 'book_title', 'data.title'],
-                        description: ['description', 'summary', 'content', 'data.description'],
-                        author: ['author', 'authors', 'writer', 'data.author'],
-                        category: ['category', 'genre', 'data.category.name'],
-                        publisher: ['publisher', 'publication', 'data.publisher.name'],
-                        isbn: ['isbn', 'book_isbn', 'data.isbn'],
-                        publication_year: ['year', 'publication_year', 'publish_year', 'data.year'],
-                        image_url: ['image', 'cover', 'thumbnail', 'data.image_url']
-                    };
-
-                    if (suggestions[fieldName] && !this.value) {
-                        this.placeholder = 'مثال: ' + suggestions[fieldName][0];
-                    }
-                });
-            });
-
-            // کمک برای سلکتورهای CSS
-            const selectorInputs = document.querySelectorAll('[name^="crawler_selector_"]');
-            selectorInputs.forEach(input => {
-                input.addEventListener('focus', function() {
-                    const fieldName = this.name.replace('crawler_selector_', '');
-
-                    // پیشنهادات متداول براساس نوع فیلد
-                    const suggestions = {
-                        title: ['h1', '.title', '#title', '.book-title'],
-                        description: ['.description', '.summary', '.content'],
-                        author: ['.author', '.writer', '.by-author'],
-                        category: ['.category', '.genre', '.tag'],
-                        publisher: ['.publisher', '.publication'],
-                        image_url: ['.book-cover img', '.product-image img', 'img.cover']
-                    };
-
-                    if (suggestions[fieldName] && !this.value) {
-                        this.placeholder = 'مثال: ' + suggestions[fieldName][0];
-                    }
-                });
-            });
-
-            // ذخیره خودکار در localStorage
-            const form = document.getElementById('configForm');
-            const inputs = form.querySelectorAll('input, select, textarea');
-
-            inputs.forEach(input => {
-                // بارگذاری مقدار ذخیره شده
-                const savedValue = localStorage.getItem('config_draft_' + input.name);
-                if (savedValue && !input.value) {
-                    input.value = savedValue;
-                    if (input.type === 'checkbox') {
-                        input.checked = savedValue === 'on';
-                    }
-                }
-
-                // ذخیره تغییرات
-                input.addEventListener('input', function() {
-                    if (this.value) {
-                        localStorage.setItem('config_draft_' + this.name, this.value);
-                    } else {
-                        localStorage.removeItem('config_draft_' + this.name);
-                    }
-                });
-            });
-
-            // پاک کردن draft بعد از submit موفق
-            form.addEventListener('submit', function() {
-                setTimeout(() => {
-                    inputs.forEach(input => {
-                        localStorage.removeItem('config_draft_' + input.name);
-                    });
-                }, 1000);
             });
         });
 
@@ -743,19 +439,6 @@
             if ((e.ctrlKey || e.metaKey) && e.key === 's') {
                 e.preventDefault();
                 document.getElementById('configForm').submit();
-            }
-
-            // Tab برای جابجایی بین فیلدهای نقشه‌برداری
-            if (e.key === 'Tab') {
-                const focused = document.activeElement;
-                if (focused && (focused.name.startsWith('api_field_') || focused.name.startsWith('crawler_selector_'))) {
-                    // اتوکامل ساده
-                    if (!focused.value && focused.placeholder.includes('مثال: ')) {
-                        e.preventDefault();
-                        focused.value = focused.placeholder.replace('مثال: ', '');
-                        focused.dispatchEvent(new Event('input'));
-                    }
-                }
             }
         });
     </script>
