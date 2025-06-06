@@ -78,12 +78,6 @@
                     <span class="emoji-icon">⚙️</span>
                     <span>کانفیگ‌ها</span>
                 </a>
-
-                <a href="{{ route('configs.test') }}"
-                   class="flex items-center space-x-2 space-x-reverse px-3 py-2 text-sm font-medium text-gray-700 hover:text-blue-600 transition-colors {{ request()->routeIs('configs.test') ? 'text-blue-600 border-b-2 border-blue-600' : '' }}">
-                    <span class="emoji-icon">🧪</span>
-                    <span>تست API</span>
-                </a>
             </nav>
 
             <!-- منوی کاربر -->

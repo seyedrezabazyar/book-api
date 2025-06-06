@@ -9,7 +9,9 @@ class Config extends Model
 {
     protected $fillable = [
         'name', 'description', 'base_url', 'timeout', 'delay_seconds',
-        'records_per_run', 'config_data', 'status', 'created_by'
+        'records_per_run', 'page_delay', 'crawl_mode', 'start_page',
+        'config_data', 'status', 'created_by', 'current_page', 'total_processed',
+        'total_success', 'total_failed', 'last_run_at', 'is_running'
     ];
 
     protected $casts = [
@@ -17,49 +19,54 @@ class Config extends Model
         'timeout' => 'integer',
         'delay_seconds' => 'integer',
         'records_per_run' => 'integer',
+        'page_delay' => 'integer',
+        'start_page' => 'integer',
+        'current_page' => 'integer',
+        'total_processed' => 'integer',
+        'total_success' => 'integer',
+        'total_failed' => 'integer',
+        'last_run_at' => 'datetime',
+        'is_running' => 'boolean',
     ];
 
-    // وضعیت‌ها
     const STATUS_ACTIVE = 'active';
     const STATUS_INACTIVE = 'inactive';
     const STATUS_DRAFT = 'draft';
 
-    // روابط
+    const CRAWL_CONTINUE = 'continue';
+    const CRAWL_RESTART = 'restart';
+    const CRAWL_UPDATE = 'update';
+
     public function createdBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
     }
 
-    // Scopes
     public function scopeActive($query)
     {
         return $query->where('status', self::STATUS_ACTIVE);
     }
 
-    // متدهای کمکی
     public function isActive(): bool
     {
         return $this->status === self::STATUS_ACTIVE;
     }
 
-    public function isApiSource(): bool
-    {
-        return true; // فقط API پشتیبانی می‌کنیم
-    }
-
-    // دریافت تنظیمات API
     public function getApiSettings(): array
     {
         return $this->config_data['api'] ?? [];
     }
 
-    // دریافت تنظیمات عمومی
     public function getGeneralSettings(): array
     {
         return $this->config_data['general'] ?? [];
     }
 
-    // انواع وضعیت
+    public function getCrawlingSettings(): array
+    {
+        return $this->config_data['crawling'] ?? [];
+    }
+
     public static function getStatuses(): array
     {
         return [
@@ -69,13 +76,20 @@ class Config extends Model
         ];
     }
 
-    // متن وضعیت
+    public static function getCrawlModes(): array
+    {
+        return [
+            self::CRAWL_CONTINUE => 'ادامه از آخرین صفحه',
+            self::CRAWL_RESTART => 'شروع مجدد از ابتدا',
+            self::CRAWL_UPDATE => 'به‌روزرسانی صفحات قبلی'
+        ];
+    }
+
     public function getStatusTextAttribute(): string
     {
         return self::getStatuses()[$this->status] ?? 'نامشخص';
     }
 
-    // فیلدهای قابل استخراج
     public static function getBookFields(): array
     {
         return [
@@ -92,5 +106,27 @@ class Config extends Model
             'file_size' => 'حجم فایل',
             'image_url' => 'تصویر کتاب'
         ];
+    }
+
+    public function updateProgress(int $currentPage, array $stats): void
+    {
+        $this->update([
+            'current_page' => $currentPage,
+            'total_processed' => $stats['total'],
+            'total_success' => $stats['success'],
+            'total_failed' => $stats['failed'],
+            'last_run_at' => now(),
+        ]);
+    }
+
+    public function resetProgress(): void
+    {
+        $this->update([
+            'current_page' => $this->start_page ?? 1,
+            'total_processed' => 0,
+            'total_success' => 0,
+            'total_failed' => 0,
+            'is_running' => false,
+        ]);
     }
 }

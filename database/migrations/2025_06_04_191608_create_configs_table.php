@@ -15,14 +15,18 @@ return new class extends Migration
             // اطلاعات کلی
             $table->string('name')->unique()->index();
             $table->text('description')->nullable();
-            $table->enum('data_source_type', ['api', 'crawler'])->default('api')->index();
             $table->string('base_url', 500);
 
             // تنظیمات اتصال
             $table->unsignedSmallInteger('timeout')->default(30);
-            $table->unsignedTinyInteger('max_retries')->default(3);
             $table->unsignedSmallInteger('delay_seconds')->default(5);
             $table->unsignedTinyInteger('records_per_run')->default(10);
+            $table->unsignedTinyInteger('page_delay')->default(5);
+
+            // تنظیمات کرال
+            $table->enum('crawl_mode', ['continue', 'restart', 'update'])->default('continue');
+            $table->unsignedInteger('start_page')->nullable();
+            $table->unsignedInteger('current_page')->default(1);
 
             // داده‌های کانفیگ (JSON)
             $table->json('config_data');
@@ -30,8 +34,7 @@ return new class extends Migration
             // وضعیت
             $table->enum('status', ['active', 'inactive', 'draft'])->default('draft')->index();
 
-            // اطلاعات پیشرفت - ساده شده
-            $table->text('current_url')->nullable();
+            // اطلاعات پیشرفت
             $table->unsignedInteger('total_processed')->default(0);
             $table->unsignedInteger('total_success')->default(0);
             $table->unsignedInteger('total_failed')->default(0);
@@ -46,7 +49,7 @@ return new class extends Migration
 
             // ایندکس‌های بهینه
             $table->index(['status', 'is_running']);
-            $table->index(['data_source_type', 'status']);
+            $table->index(['crawl_mode', 'status']);
         });
     }
 
