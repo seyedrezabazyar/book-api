@@ -23,9 +23,7 @@ Route::middleware(['auth'])->group(function () {
 
     // Routes اجرا و مدیریت
     Route::post('configs/{config}/start', [ConfigController::class, 'executeBackground'])->name('configs.start');
-    Route::post('configs/{config}/start-fast', [ConfigController::class, 'runSync'])->name('configs.start-fast');
     Route::post('configs/{config}/execute-background', [ConfigController::class, 'executeBackground'])->name('configs.execute-background');
-    Route::post('configs/{config}/run-sync', [ConfigController::class, 'runSync'])->name('configs.run-sync');
     Route::post('configs/{config}/stop', [ConfigController::class, 'stopExecution'])->name('configs.stop');
 
     // مدیریت Worker

@@ -196,26 +196,6 @@ class Config extends Model
         ]);
     }
 
-    /**
-     * بروزرسانی آمار از تعداد واقعی کتاب‌ها در دیتابیس
-     */
-    public function syncStatsFromBooks(): array
-    {
-        // شمارش کتاب‌هایی که از این کانفیگ آمده‌اند
-        // فرض می‌کنیم تمام کتاب‌هایی که بعد از ایجاد این کانفیگ اضافه شده‌اند، از این کانفیگ هستند
-        $booksCreatedAfterConfig = \App\Models\Book::where('created_at', '>=', $this->created_at)->count();
-
-        // یا اگر سیستم tracking بهتری داریم، از آن استفاده کنیم
-        $actualStats = [
-            'total_books_in_db' => $booksCreatedAfterConfig,
-            'config_total_processed' => $this->total_processed,
-            'config_total_success' => $this->total_success,
-            'difference' => $booksCreatedAfterConfig - $this->total_success
-        ];
-
-        return $actualStats;
-    }
-
     public function resetProgress(): void
     {
         $this->update([

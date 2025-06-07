@@ -51,12 +51,6 @@
             <p class="text-gray-600">کانفیگ‌های API را مدیریت و اجرا کنید</p>
         </div>
         <div class="flex items-center gap-4">
-            <!-- Search -->
-            <div class="relative">
-                <input type="text" id="search" placeholder="جستجو..."
-                       class="pl-8 pr-4 py-2 border rounded-lg w-64" onkeyup="filterConfigs()">
-                <span class="absolute left-2 top-2.5 text-gray-400">🔍</span>
-            </div>
             <!-- Add New Config -->
             <a href="{{ route('configs.create') }}"
                class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
@@ -114,7 +108,7 @@
             </thead>
             <tbody class="divide-y divide-gray-200">
             @forelse($configs as $config)
-                <tr class="config-row hover:bg-gray-50" data-name="{{ strtolower($config->name) }}" data-url="{{ strtolower($config->api_url) }}">
+                <tr class="hover:bg-gray-50">
                     <!-- نام و جزئیات -->
                     <td class="p-4">
                         <div class="font-medium">{{ $config->name }}</div>
@@ -122,12 +116,12 @@
                             {{ $config->description ?: 'بدون توضیحات' }}
                         </div>
                         <div class="text-xs text-gray-500 mt-1">
-                            {{ parse_url($config->api_url, PHP_URL_HOST) ?: $config->api_url }}
+                            {{ parse_url($config->base_url, PHP_URL_HOST) ?: $config->base_url }}
                         </div>
                         <div class="text-xs text-gray-400">
                             هر {{ $config->delay_seconds }}s |
-                            {{ $config->records_per_page }} رکورد |
-                            ≈{{ round(60 / max($config->delay_seconds, 1) * $config->records_per_page) }}/دقیقه
+                            {{ $config->records_per_run }} رکورد |
+                            ≈{{ round(60 / max($config->delay_seconds, 1) * $config->records_per_run) }}/دقیقه
                         </div>
                     </td>
 
@@ -302,21 +296,6 @@
     @endif
 
     <script>
-        /**
-         * فیلتر کردن کانفیگ‌ها
-         */
-        function filterConfigs() {
-            const searchTerm = document.getElementById('search').value.toLowerCase();
-            const rows = document.querySelectorAll('.config-row');
-
-            rows.forEach(row => {
-                const name = row.dataset.name || '';
-                const url = row.dataset.url || '';
-                const isVisible = name.includes(searchTerm) || url.includes(searchTerm);
-                row.style.display = isVisible ? '' : 'none';
-            });
-        }
-
         /**
          * متوقف کردن اجرا
          */

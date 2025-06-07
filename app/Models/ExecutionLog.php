@@ -174,31 +174,6 @@ class ExecutionLog extends Model
     }
 
     /**
-     * متوقف کردن اجرا - نسخه بسیار ساده
-     */
-    public function simpleStop(): void
-    {
-        try {
-            $this->update([
-                'status' => self::STATUS_STOPPED,
-                'finished_at' => now(),
-                'stop_reason' => 'متوقف شده توسط کاربر',
-                'error_message' => 'متوقف شده توسط کاربر'
-            ]);
-
-            Log::info("⏹️ ExecutionLog ساده متوقف شد", [
-                'execution_id' => $this->execution_id
-            ]);
-
-        } catch (\Exception $e) {
-            Log::error("❌ خطا در متوقف کردن ساده ExecutionLog", [
-                'execution_id' => $this->execution_id,
-                'error' => $e->getMessage()
-            ]);
-        }
-    }
-
-    /**
      * متوقف کردن اجرا با آمار نهایی (نسخه ساده‌تر)
      */
     public function stop(array $finalStats = []): void
@@ -397,24 +372,6 @@ class ExecutionLog extends Model
         }
 
         return 0;
-    }
-
-    /**
-     * بروزرسانی زمان اجرا در صورت نیاز
-     */
-    public function fixExecutionTime(): void
-    {
-        $correctTime = $this->getCorrectExecutionTime();
-
-        if ($correctTime > 0 && ($this->execution_time === null || $this->execution_time <= 0)) {
-            $this->update(['execution_time' => $correctTime]);
-
-            $this->addLogEntry('⏱️ زمان اجرا اصلاح شد', [
-                'old_execution_time' => $this->execution_time,
-                'new_execution_time' => $correctTime,
-                'fixed_at' => now()->toISOString()
-            ]);
-        }
     }
 
     /**
