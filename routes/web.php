@@ -27,7 +27,7 @@ Route::middleware(['auth'])->group(function () {
     Route::post('configs/{config}/execute-background', [ConfigController::class, 'executeBackground'])->name('configs.execute-background');
     Route::post('configs/{config}/run-sync', [ConfigController::class, 'runSync'])->name('configs.run-sync');
     Route::post('configs/{config}/stop', [ConfigController::class, 'stopExecution'])->name('configs.stop');
-    
+
     // مدیریت Worker
     Route::post('admin/worker/start', function() {
         $result = \App\Services\QueueManagerService::startWorker();
