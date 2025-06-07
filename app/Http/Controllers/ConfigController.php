@@ -28,10 +28,10 @@ class ConfigController extends Controller
     public function index(Request $request)
     {
         // دریافت کانفیگ‌ها با eager loading
-        $configs = Config::with(['executionLogs' => function($query) {
+        $configs = Config::with(['executionLogs' => function ($query) {
             $query->latest()->limit(1);
         }])
-            ->when($request->search, function($query, $search) {
+            ->when($request->search, function ($query, $search) {
                 $query->where('name', 'like', "%{$search}%")
                     ->orWhere('base_url', 'like', "%{$search}%");
             })
@@ -41,7 +41,7 @@ class ConfigController extends Controller
         // محاسبه آمار کلی
         $stats = [
             'total_configs' => Config::count(),
-            'active_configs' => Config::where('status', 'active')->count(),
+            'active_configs' => Config::count(), // همه کانفیگ‌ها فعال هستند
             'running_configs' => Config::where('is_running', true)->count(),
             'total_books' => \App\Models\Book::count(),
         ];
@@ -96,7 +96,6 @@ class ConfigController extends Controller
 
             return redirect()->route('configs.index')
                 ->with('success', 'کانفیگ با موفقیت ایجاد شد!');
-
         } catch (\Exception $e) {
             Log::error('خطا در ایجاد کانفیگ', [
                 'error' => $e->getMessage(),
@@ -174,7 +173,6 @@ class ConfigController extends Controller
 
             return redirect()->route('configs.index')
                 ->with('success', 'کانفیگ با موفقیت به‌روزرسانی شد!');
-
         } catch (\Exception $e) {
             Log::error('خطا در بروزرسانی کانفیگ', [
                 'config_id' => $config->id,
@@ -215,7 +213,6 @@ class ConfigController extends Controller
 
             return redirect()->route('configs.index')
                 ->with('success', 'کانفیگ با موفقیت حذف شد!');
-
         } catch (\Exception $e) {
             Log::error('خطا در حذف کانفیگ', [
                 'config_id' => $config->id,
@@ -254,12 +251,12 @@ class ConfigController extends Controller
             $maxPages = $this->calculateMaxPages($config);
             $result = $service->fetchDataAsync($maxPages);
 
-            return redirect()->back()->with('success',
+            return redirect()->back()->with(
+                'success',
                 "✅ اجرا در پس‌زمینه شروع شد!
                 📄 تعداد {$result['pages_queued']} صفحه در صف قرار گرفت.
                 🆔 شناسه اجرا: {$result['execution_id']}"
             );
-
         } catch (\Exception $e) {
             Log::error('خطا در اجرای Async', [
                 'config_id' => $config->id,
@@ -279,14 +276,6 @@ class ConfigController extends Controller
     public function executeBackground(Config $config): JsonResponse
     {
         try {
-            // بررسی اینکه کانفیگ فعال باشد
-            if (!$config->isActive()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'کانفیگ غیرفعال است و قابل اجرا نیست!'
-                ], 422);
-            }
-
             // بررسی اینکه کانفیگ در حال اجرا نباشد
             if ($config->is_running) {
                 return response()->json([
@@ -337,7 +326,6 @@ class ConfigController extends Controller
                 'total_pages' => $maxPages,
                 'worker_status' => QueueManagerService::getWorkerStatus()
             ]);
-
         } catch (\Exception $e) {
             Log::error('خطا در اجرای بک‌گراند', [
                 'config_id' => $config->id,
@@ -427,7 +415,6 @@ class ConfigController extends Controller
                 if ($deletedFailedJobs > 0) {
                     Log::info("🗑️ {$deletedFailedJobs} Failed Job حذف شد");
                 }
-
             } catch (\Exception $e) {
                 Log::error('خطا در حذف Jobs', ['error' => $e->getMessage()]);
                 $deletedJobs = 0;
@@ -465,7 +452,6 @@ class ConfigController extends Controller
                 'success' => true,
                 'message' => $message
             ]);
-
         } catch (\Exception $e) {
             Log::error('❌ خطا در متوقف کردن اجرا', [
                 'config_id' => $config->id,
@@ -598,7 +584,6 @@ class ConfigController extends Controller
                 'max:255',
                 Rule::unique('configs')->ignore($configId)
             ],
-            'description' => 'nullable|string|max:1000',
             'base_url' => 'required|url|max:500',
             'timeout' => 'required|integer|min:10|max:300',
             'delay_seconds' => 'required|integer|min:1|max:3600',
@@ -606,13 +591,10 @@ class ConfigController extends Controller
             'page_delay' => 'required|integer|min:0|max:300',
             'crawl_mode' => 'required|in:continue,restart,update',
             'start_page' => 'nullable|integer|min:1|max:10000',
-            'status' => 'required|in:active,inactive,draft',
 
             // تنظیمات API
             'api_endpoint' => 'nullable|string|max:500',
             'api_method' => 'required|in:GET,POST',
-            'auth_type' => 'required|in:none,bearer,api_key',
-            'auth_token' => 'nullable|string|max:500',
 
             // تنظیمات عمومی
             'user_agent' => 'nullable|string|max:500',
@@ -651,8 +633,6 @@ class ConfigController extends Controller
             'api' => [
                 'endpoint' => $request->input('api_endpoint'),
                 'method' => $request->input('api_method', 'GET'),
-                'auth_type' => $request->input('auth_type', 'none'),
-                'auth_token' => $request->input('auth_token', ''),
                 'params' => $this->buildApiParams($request),
                 'field_mapping' => $this->buildFieldMapping($request)
             ],
@@ -760,7 +740,6 @@ class ConfigController extends Controller
                 'success' => false,
                 'message' => 'این لاگ نیاز به اصلاح ندارد'
             ]);
-
         } catch (\Exception $e) {
             Log::error('خطا در اصلاح وضعیت لاگ', [
                 'log_id' => $log->id,
@@ -841,7 +820,6 @@ class ConfigController extends Controller
                 'message' => 'آمار لاگ با موفقیت همگام‌سازی شد',
                 'stats' => $newStats
             ]);
-
         } catch (\Exception $e) {
             Log::error('خطا در همگام‌سازی آمار لاگ', [
                 'log_id' => $log->id,
@@ -853,5 +831,11 @@ class ConfigController extends Controller
                 'message' => 'خطا در همگام‌سازی آمار: ' . $e->getMessage()
             ], 500);
         }
+    }
+
+    private function calculateMaxPages(Config $config): int
+    {
+        $crawlingSettings = $config->getCrawlingSettings();
+        return min($crawlingSettings['max_pages'] ?? 50, 1000);
     }
 }

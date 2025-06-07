@@ -53,7 +53,6 @@ class ProcessApiDataJob implements ShouldQueue
                 'config_id' => $this->config->id,
                 'stats' => $stats
             ]);
-
         } catch (\Exception $e) {
             Log::error("خطا در Job", [
                 'config_id' => $this->config->id,

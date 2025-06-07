@@ -55,7 +55,6 @@ class QueueManagerService
                 'pid' => $pid,
                 'message' => 'Worker در حال اجرا'
             ];
-
         } catch (\Exception $e) {
             Log::error('خطا در بررسی وضعیت Worker', ['error' => $e->getMessage()]);
 
@@ -124,7 +123,6 @@ class QueueManagerService
                 Log::error('Worker شروع نشد', ['output' => $output]);
                 return false;
             }
-
         } catch (\Exception $e) {
             Log::error('خطا در شروع Worker', [
                 'error' => $e->getMessage(),
@@ -171,7 +169,6 @@ class QueueManagerService
                 Log::error('نتوانستیم Worker را متوقف کنیم', ['pid' => $pid]);
                 return false;
             }
-
         } catch (\Exception $e) {
             Log::error('خطا در توقف Worker', ['error' => $e->getMessage()]);
             return false;
@@ -207,7 +204,6 @@ class QueueManagerService
                 Log::error('نتوانستیم Worker را مجدداً شروع کنیم');
                 return false;
             }
-
         } catch (\Exception $e) {
             Log::error('خطا در راه‌اندازی مجدد Worker', ['error' => $e->getMessage()]);
             return false;

@@ -8,9 +8,15 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class ScrapingFailure extends Model
 {
     protected $fillable = [
-        'config_id', 'url', 'error_message', 'error_details',
-        'response_content', 'http_status', 'retry_count',
-        'is_resolved', 'last_attempt_at'
+        'config_id',
+        'url',
+        'error_message',
+        'error_details',
+        'response_content',
+        'http_status',
+        'retry_count',
+        'is_resolved',
+        'last_attempt_at'
     ];
 
     protected $casts = [

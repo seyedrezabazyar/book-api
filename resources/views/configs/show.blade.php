@@ -13,47 +13,45 @@
             </div>
 
             <div class="flex gap-3">
-                @if($config->status === 'active' && !$config->is_running)
+                @if (!$config->is_running)
                     <button onclick="executeBackground({{ $config->id }})"
-                            class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
+                        class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
                         🚀 اجرای بک‌گراند
                     </button>
                     <form method="POST" action="{{ route('configs.run-sync', $config) }}" class="inline">
                         @csrf
                         <button type="submit" class="bg-orange-600 text-white px-4 py-2 rounded hover:bg-orange-700"
-                                onclick="return confirm('اجرای فوری شروع می‌شود. ادامه می‌دهید؟')">
+                            onclick="return confirm('اجرای فوری شروع می‌شود. ادامه می‌دهید؟')">
                             ⚡ اجرای فوری
                         </button>
                     </form>
                 @endif
 
                 <a href="{{ route('configs.edit', $config) }}"
-                   class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">ویرایش</a>
+                    class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">ویرایش</a>
                 <a href="{{ route('configs.logs', $config) }}"
-                   class="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700">لاگ‌ها</a>
+                    class="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700">لاگ‌ها</a>
             </div>
         </div>
 
         <!-- Status -->
         <div class="bg-white rounded shadow p-6">
             <div class="flex items-center gap-4">
-            <span class="px-3 py-1 text-sm rounded font-medium
-                @if($config->status === 'active') bg-green-100 text-green-800
-                @elseif($config->status === 'inactive') bg-red-100 text-red-800
-                @else bg-yellow-100 text-yellow-800 @endif">
-                @if($config->status === 'active') فعال
-                @elseif($config->status === 'inactive') غیرفعال
-                @else پیش‌نویس @endif
-            </span>
-
-                @if($config->is_running)
-                    <span class="inline-flex items-center px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded">
-                    <svg class="animate-spin -ml-1 mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    در حال اجرا
+                <span class="px-3 py-1 text-sm rounded font-medium bg-green-100 text-green-800">
+                    همیشه فعال
                 </span>
+
+                @if ($config->is_running)
+                    <span class="inline-flex items-center px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded">
+                        <svg class="animate-spin -ml-1 mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor"
+                                stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor"
+                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
+                            </path>
+                        </svg>
+                        در حال اجرا
+                    </span>
                 @endif
             </div>
         </div>
@@ -87,17 +85,11 @@
                         <div class="text-sm text-gray-600">نام کانفیگ</div>
                         <div class="font-medium">{{ $config->name }}</div>
                     </div>
-                    @if($config->description)
-                        <div>
-                            <div class="text-sm text-gray-600">توضیحات</div>
-                            <div class="text-sm">{{ $config->description }}</div>
-                        </div>
-                    @endif
                     <div>
                         <div class="text-sm text-gray-600">آدرس پایه</div>
                         <div class="text-sm break-all">{{ $config->base_url }}</div>
                     </div>
-                    @if($config->last_run_at)
+                    @if ($config->last_run_at)
                         <div>
                             <div class="text-sm text-gray-600">آخرین اجرا</div>
                             <div class="text-sm">{{ $config->last_run_at->format('Y/m/d H:i:s') }}</div>
@@ -138,7 +130,7 @@
                             {{ $crawlModes[$config->crawl_mode] ?? $config->crawl_mode }}
                         </div>
                     </div>
-                    @if($config->start_page)
+                    @if ($config->start_page)
                         <div>
                             <div class="text-sm text-gray-600">صفحه شروع</div>
                             <div class="font-medium">{{ $config->start_page }}</div>
@@ -161,12 +153,8 @@
                             <div class="text-sm text-gray-600">متد HTTP</div>
                             <div class="font-medium">{{ $apiSettings['method'] ?? 'GET' }}</div>
                         </div>
-                        <div>
-                            <div class="text-sm text-gray-600">احراز هویت</div>
-                            <div class="font-medium">{{ $apiSettings['auth_type'] ?? 'none' }}</div>
-                        </div>
                     </div>
-                    @if(!empty($apiSettings['field_mapping']))
+                    @if (!empty($apiSettings['field_mapping']))
                         <div>
                             <div class="text-sm text-gray-600">نقشه‌برداری فیلدها</div>
                             <div class="text-xs bg-gray-50 p-2 rounded mt-1">
@@ -180,18 +168,18 @@
             <!-- Recent Logs -->
             <div class="bg-white rounded shadow p-6">
                 <h2 class="text-lg font-medium mb-4">آخرین اجراها</h2>
-                @if($recentLogs->count() > 0)
+                @if ($recentLogs->count() > 0)
                     <div class="space-y-3">
-                        @foreach($recentLogs as $log)
+                        @foreach ($recentLogs as $log)
                             <div class="flex items-center justify-between p-3 bg-gray-50 rounded">
                                 <div>
                                     <div class="text-sm font-medium">{{ $log->execution_id }}</div>
                                     <div class="text-xs text-gray-500">{{ $log->started_at->diffForHumans() }}</div>
                                 </div>
                                 <div class="text-right">
-                                    @if($log->status === 'completed')
+                                    @if ($log->status === 'completed')
                                         <div class="text-xs text-green-600">✅ موفق: {{ $log->total_success }}</div>
-                                        @if($log->total_failed > 0)
+                                        @if ($log->total_failed > 0)
                                             <div class="text-xs text-red-600">❌ خطا: {{ $log->total_failed }}</div>
                                         @endif
                                     @elseif($log->status === 'failed')
@@ -233,12 +221,12 @@
             if (!confirm('اجرا در پس‌زمینه شروع می‌شود. ادامه می‌دهید؟')) return;
 
             fetch(`/configs/${configId}/execute-background`, {
-                method: 'POST',
-                headers: {
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
-                    'Accept': 'application/json'
-                }
-            })
+                    method: 'POST',
+                    headers: {
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                        'Accept': 'application/json'
+                    }
+                })
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
@@ -250,8 +238,8 @@
                 .catch(() => alert('خطا در اجرا'));
         }
 
-        @if($config->is_running)
-        setTimeout(() => location.reload(), 10000);
+        @if ($config->is_running)
+            setTimeout(() => location.reload(), 10000);
         @endif
     </script>
 @endsection

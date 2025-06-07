@@ -5,14 +5,28 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class Config extends Model
 {
     protected $fillable = [
-        'name', 'description', 'base_url', 'timeout', 'delay_seconds',
-        'records_per_run', 'page_delay', 'crawl_mode', 'start_page',
-        'config_data', 'status', 'created_by', 'current_page', 'total_processed',
-        'total_success', 'total_failed', 'last_run_at', 'is_running'
+        'name',
+        'base_url',
+        'timeout',
+        'delay_seconds',
+        'records_per_run',
+        'page_delay',
+        'crawl_mode',
+        'start_page',
+        'config_data',
+        'created_by',
+        'current_page',
+        'total_processed',
+        'total_success',
+        'total_failed',
+        'last_run_at',
+        'is_running'
     ];
 
     protected $casts = [
@@ -30,10 +44,6 @@ class Config extends Model
         'is_running' => 'boolean',
     ];
 
-    const STATUS_ACTIVE = 'active';
-    const STATUS_INACTIVE = 'inactive';
-    const STATUS_DRAFT = 'draft';
-
     const CRAWL_CONTINUE = 'continue';
     const CRAWL_RESTART = 'restart';
     const CRAWL_UPDATE = 'update';
@@ -50,12 +60,12 @@ class Config extends Model
 
     public function scopeActive($query)
     {
-        return $query->where('status', self::STATUS_ACTIVE);
+        return $query; // همه کانفیگ‌ها فعال هستند
     }
 
     public function isActive(): bool
     {
-        return $this->status === self::STATUS_ACTIVE;
+        return true; // همه کانفیگ‌ها همیشه فعال هستند
     }
 
     public function getApiSettings(): array
@@ -73,15 +83,6 @@ class Config extends Model
         return $this->config_data['crawling'] ?? [];
     }
 
-    public static function getStatuses(): array
-    {
-        return [
-            self::STATUS_ACTIVE => 'فعال',
-            self::STATUS_INACTIVE => 'غیرفعال',
-            self::STATUS_DRAFT => 'پیش‌نویس'
-        ];
-    }
-
     public static function getCrawlModes(): array
     {
         return [
@@ -89,11 +90,6 @@ class Config extends Model
             self::CRAWL_RESTART => 'شروع مجدد از ابتدا',
             self::CRAWL_UPDATE => 'به‌روزرسانی صفحات قبلی'
         ];
-    }
-
-    public function getStatusTextAttribute(): string
-    {
-        return self::getStatuses()[$this->status] ?? 'نامشخص';
     }
 
     public static function getBookFields(): array
@@ -165,7 +161,6 @@ class Config extends Model
                     'total_failed' => $this->total_failed
                 ]
             ]);
-
         } catch (\Exception $e) {
             Log::error("❌ خطا در بروزرسانی progress", [
                 'config_id' => $this->id,
@@ -255,5 +250,4 @@ class Config extends Model
             'running_executions' => $this->executionLogs()->where('status', 'running')->count(),
         ];
     }
-
 }

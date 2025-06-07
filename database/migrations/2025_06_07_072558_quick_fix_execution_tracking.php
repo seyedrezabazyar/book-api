@@ -93,7 +93,7 @@ return new class extends Migration
             // یافتن logs با آمار ناقص
             $incompleteLog = DB::table('execution_logs')
                 ->where('config_id', $config->id)
-                ->where(function($query) {
+                ->where(function ($query) {
                     $query->where('total_processed', 0)
                         ->orWhere('total_success', 0);
                 })

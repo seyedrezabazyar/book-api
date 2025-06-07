@@ -114,7 +114,6 @@ class ProcessSinglePageJob implements ShouldQueue
 
             // برنامه‌ریزی صفحه بعدی (اگر لازم باشد)
             $this->scheduleNextPageIfNeeded($config, $executionLog, $result);
-
         } catch (\Exception $e) {
             Log::error("❌ خطا در ProcessSinglePageJob", [
                 'config_id' => $this->configId,

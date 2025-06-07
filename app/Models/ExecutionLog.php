@@ -90,7 +90,6 @@ class ExecutionLog extends Model
 
             // بروزرسانی بدون استفاده از increment که ممکن است مشکل ایجاد کند
             $this->update(['log_details' => $currentLogs]);
-
         } catch (\Exception $e) {
             Log::error("❌ خطا در افزودن log entry", [
                 'execution_id' => $this->execution_id,
@@ -230,7 +229,6 @@ class ExecutionLog extends Model
                 'execution_time' => $executionTime,
                 'final_stats' => $actualStats
             ]);
-
         } catch (\Exception $e) {
             Log::error("❌ خطا در متوقف کردن ExecutionLog", [
                 'execution_id' => $this->execution_id,
@@ -341,7 +339,6 @@ class ExecutionLog extends Model
                     'total_duplicate' => $this->total_duplicate
                 ]
             ]);
-
         } catch (\Exception $e) {
             Log::error("❌ خطا در بروزرسانی ExecutionLog progress", [
                 'log_id' => $this->id,
@@ -402,7 +399,7 @@ class ExecutionLog extends Model
      */
     public function getStatusColorAttribute(): string
     {
-        return match($this->status) {
+        return match ($this->status) {
             self::STATUS_COMPLETED => 'green',
             self::STATUS_FAILED => 'red',
             self::STATUS_STOPPED => 'orange',
@@ -415,7 +412,7 @@ class ExecutionLog extends Model
      */
     public function getStatusTextAttribute(): string
     {
-        return match($this->status) {
+        return match ($this->status) {
             self::STATUS_RUNNING => 'در حال اجرا',
             self::STATUS_COMPLETED => 'تمام شده',
             self::STATUS_FAILED => 'ناموفق',

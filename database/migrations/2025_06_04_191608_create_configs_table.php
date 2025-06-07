@@ -14,7 +14,6 @@ return new class extends Migration
 
             // اطلاعات کلی
             $table->string('name')->unique()->index();
-            $table->text('description')->nullable();
             $table->string('base_url', 500);
 
             // تنظیمات اتصال
@@ -31,15 +30,12 @@ return new class extends Migration
             // داده‌های کانفیگ (JSON)
             $table->json('config_data');
 
-            // وضعیت
-            $table->enum('status', ['active', 'inactive', 'draft'])->default('draft')->index();
-
             // اطلاعات پیشرفت
             $table->unsignedInteger('total_processed')->default(0);
             $table->unsignedInteger('total_success')->default(0);
             $table->unsignedInteger('total_failed')->default(0);
             $table->timestamp('last_run_at')->nullable();
-            $table->boolean('is_running')->default(false)->index();
+            $table->boolean('is_running')->default(false);
 
             // کاربر ایجادکننده
             $table->foreignId('created_by')->nullable()->constrained('users')->onDelete('set null');
@@ -48,8 +44,7 @@ return new class extends Migration
             $table->timestamps();
 
             // ایندکس‌های بهینه
-            $table->index(['status', 'is_running']);
-            $table->index(['crawl_mode', 'status']);
+            $table->index(['crawl_mode', 'is_running']);
         });
     }
 

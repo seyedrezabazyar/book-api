@@ -68,7 +68,6 @@ class ApiDataService
                 'pages_queued' => $maxPages,
                 'message' => "تعداد {$maxPages} صفحه در صف قرار گرفت"
             ];
-
         } catch (\Exception $e) {
             $this->executionLog->markFailed($e->getMessage());
             $this->config->update(['is_running' => false]);
@@ -93,7 +92,6 @@ class ApiDataService
 
             $this->executionLog->markCompleted($this->stats);
             $this->config->update(['is_running' => false]);
-
         } catch (\Exception $e) {
             $this->executionLog->markFailed($e->getMessage());
             $this->config->update(['is_running' => false]);
@@ -220,7 +218,6 @@ class ApiDataService
             ]);
 
             return $pageStats;
-
         } catch (\Exception $e) {
             Log::error("❌ خطا در پردازش صفحه {$pageNumber}", [
                 'config_id' => $this->config->id,
@@ -301,7 +298,6 @@ class ApiDataService
                 }
 
                 $bookDetails[] = $bookDetail;
-
             } catch (\Exception $e) {
                 $pageStats['failed']++;
                 $bookProcessTime = round((microtime(true) - $bookStartTime) * 1000, 2);
@@ -461,7 +457,7 @@ class ApiDataService
     {
         $mode = $crawlingSettings['mode'] ?? 'continue';
 
-        return match($mode) {
+        return match ($mode) {
             'restart' => $crawlingSettings['start_page'] ?? 1,
             'update' => $crawlingSettings['start_page'] ?? 1,
             default => $this->config->current_page ?? ($crawlingSettings['start_page'] ?? 1)
@@ -481,7 +477,6 @@ class ApiDataService
                 } elseif ($result['status'] === 'duplicate') {
                     $this->stats['duplicate']++;
                 }
-
             } catch (\Exception $e) {
                 $this->stats['failed']++;
                 Log::error('خطا در پردازش کتاب', ['error' => $e->getMessage(), 'book_data' => $bookData]);
@@ -578,7 +573,6 @@ class ApiDataService
 
             DB::commit();
             return ['status' => 'created', 'title' => $book->title, 'book_id' => $book->id];
-
         } catch (\Exception $e) {
             DB::rollBack();
             throw $e;
@@ -611,10 +605,6 @@ class ApiDataService
             $httpClient = $httpClient->withoutVerifying();
         }
 
-        if (($apiSettings['auth_type'] ?? '') === 'bearer' && !empty($apiSettings['auth_token'])) {
-            $httpClient = $httpClient->withToken($apiSettings['auth_token']);
-        }
-
         return $httpClient->get($url);
     }
 
@@ -623,7 +613,7 @@ class ApiDataService
         // لاگ ساختار داده برای debug
         Log::info("📖 ساختار پاسخ API", [
             'data_keys' => array_keys($data),
-            'data_structure' => array_map(function($value) {
+            'data_structure' => array_map(function ($value) {
                 return is_array($value) ? 'array[' . count($value) . ']' : gettype($value);
             }, $data)
         ]);
@@ -726,7 +716,7 @@ class ApiDataService
     {
         if ($value === null) return null;
 
-        return match($fieldType) {
+        return match ($fieldType) {
             'title', 'description', 'author', 'category' => trim((string) $value),
             'publisher' => $this->extractPublisherName($value),
             'publication_year' => is_numeric($value) && $value >= 1000 && $value <= date('Y') + 5 ? (int) $value : null,
