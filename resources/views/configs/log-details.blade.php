@@ -9,7 +9,56 @@
                 <h1 class="text-2xl font-semibold">جزئیات لاگ اجرا</h1>
                 <p class="text-gray-600">{{ $config->name }} - {{ $log->execution_id }}</p>
             </div>
+
+            <!-- دکمه رفرش برای بروزرسانی آمار -->
+            <button onclick="location.reload()" class="ml-auto px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">
+                🔄 رفرش
+            </button>
         </div>
+
+        @php
+            // محاسبه زمان اجرا صحیح
+            $executionTimeSeconds = 0;
+            if ($log->started_at && $log->finished_at) {
+                $executionTimeSeconds = $log->finished_at->diffInSeconds($log->started_at);
+            } elseif ($log->started_at && $log->status === 'running') {
+                $executionTimeSeconds = now()->diffInSeconds($log->started_at);
+            } elseif ($log->execution_time && $log->execution_time > 0) {
+                $executionTimeSeconds = $log->execution_time;
+            }
+
+            // اصلاح وضعیت در صورت نیاز (نمایش موقت)
+            $displayStatus = $log->status;
+            if ($log->status === 'running' && $config->is_running === false) {
+                $displayStatus = 'stopped';
+            }
+        @endphp
+
+            <!-- Alert برای مشکلات احتمالی -->
+        @if($log->status === 'running' && !$config->is_running)
+            <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                <div class="flex items-center">
+                    <span class="text-yellow-600">⚠️</span>
+                    <div class="ml-2">
+                        <h3 class="text-yellow-800 font-medium">وضعیت نامطابق شناسایی شد</h3>
+                        <p class="text-yellow-700 text-sm">این لاگ به عنوان "در حال اجرا" ثبت شده اما کانفیگ متوقف است.
+                            <button onclick="fixLogStatus({{ $log->id }})" class="underline">اصلاح خودکار</button></p>
+                    </div>
+                </div>
+            </div>
+        @endif
+
+        @if($executionTimeSeconds < 0)
+            <div class="bg-red-50 border border-red-200 rounded-lg p-4">
+                <div class="flex items-center">
+                    <span class="text-red-600">❌</span>
+                    <div class="ml-2">
+                        <h3 class="text-red-800 font-medium">زمان اجرا نامعتبر</h3>
+                        <p class="text-red-700 text-sm">زمان اجرا منفی محاسبه شده است. این نشان‌دهنده مشکل در ثبت زمان‌هاست.</p>
+                    </div>
+                </div>
+            </div>
+        @endif
 
         <!-- Basic Info -->
         <div class="bg-white rounded shadow p-6">
@@ -18,18 +67,24 @@
                 <div>
                     <div class="text-sm text-gray-600">شناسه اجرا</div>
                     <div class="text-sm font-mono">{{ $log->execution_id }}</div>
+                    <div class="text-xs text-gray-500">ID: {{ $log->id }}</div>
                 </div>
                 <div>
                     <div class="text-sm text-gray-600">وضعیت</div>
                     <div>
-                        @if($log->status === 'completed')
+                        @if($displayStatus === 'completed')
                             <span class="px-2 py-1 text-xs bg-green-100 text-green-800 rounded">✅ تمام شده</span>
-                        @elseif($log->status === 'failed')
+                        @elseif($displayStatus === 'failed')
                             <span class="px-2 py-1 text-xs bg-red-100 text-red-800 rounded">❌ ناموفق</span>
+                        @elseif($displayStatus === 'stopped')
+                            <span class="px-2 py-1 text-xs bg-orange-100 text-orange-800 rounded">⏹️ متوقف شده</span>
                         @else
                             <span class="px-2 py-1 text-xs bg-yellow-100 text-yellow-800 rounded">🔄 در حال اجرا</span>
                         @endif
                     </div>
+                    @if($log->status !== $displayStatus)
+                        <div class="text-xs text-gray-500">(وضعیت واقعی: {{ $log->status }})</div>
+                    @endif
                 </div>
                 <div>
                     <div class="text-sm text-gray-600">زمان شروع</div>
@@ -40,47 +95,87 @@
                     <div>
                         <div class="text-sm text-gray-600">زمان پایان</div>
                         <div class="text-sm">{{ $log->finished_at->format('Y/m/d H:i:s') }}</div>
+                        <div class="text-xs text-gray-500">{{ $log->finished_at->diffForHumans() }}</div>
                     </div>
                 @endif
-                @if($log->execution_time)
+                <div>
+                    <div class="text-sm text-gray-600">مدت زمان اجرا</div>
+                    @if($executionTimeSeconds > 0)
+                        <div class="text-sm font-medium">{{ round($executionTimeSeconds) }} ثانیه</div>
+                        @if($executionTimeSeconds > 60)
+                            <div class="text-xs text-gray-500">≈ {{ round($executionTimeSeconds / 60, 1) }} دقیقه</div>
+                        @endif
+                    @else
+                        <div class="text-sm text-red-600">نامعتبر ({{ round($executionTimeSeconds, 2) }}s)</div>
+                    @endif
+                </div>
+                @if($log->current_page)
                     <div>
-                        <div class="text-sm text-gray-600">مدت زمان اجرا</div>
-                        <div class="text-sm font-medium">{{ $log->execution_time }} ثانیه</div>
+                        <div class="text-sm text-gray-600">صفحه فعلی</div>
+                        <div class="text-sm">{{ $log->current_page }}</div>
+                        @if($log->total_pages)
+                            <div class="text-xs text-gray-500">از {{ $log->total_pages }}</div>
+                        @endif
                     </div>
                 @endif
             </div>
         </div>
 
         <!-- Stats -->
-        @if($log->status === 'completed')
+        @if($log->status !== 'running' || $log->total_processed > 0)
             <div class="bg-white rounded shadow p-6">
                 <h2 class="text-lg font-medium mb-4">آمار اجرا</h2>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
-                    <div class="text-center p-4 bg-blue-50 rounded">
-                        <div class="text-2xl font-bold text-blue-600">{{ number_format($log->total_processed) }}</div>
-                        <div class="text-sm text-blue-800">کل رکوردها</div>
-                    </div>
-                    <div class="text-center p-4 bg-green-50 rounded">
-                        <div class="text-2xl font-bold text-green-600">{{ number_format($log->total_success) }}</div>
-                        <div class="text-sm text-green-800">موفق</div>
-                    </div>
-                    <div class="text-center p-4 bg-yellow-50 rounded">
-                        <div class="text-2xl font-bold text-yellow-600">{{ number_format($log->total_duplicate) }}</div>
-                        <div class="text-sm text-yellow-800">تکراری</div>
-                    </div>
-                    <div class="text-center p-4 bg-red-50 rounded">
-                        <div class="text-2xl font-bold text-red-600">{{ number_format($log->total_failed) }}</div>
-                        <div class="text-sm text-red-800">خطا</div>
-                    </div>
-                </div>
 
                 @if($log->total_processed > 0)
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+                        <div class="text-center p-4 bg-blue-50 rounded">
+                            <div class="text-2xl font-bold text-blue-600">{{ number_format($log->total_processed) }}</div>
+                            <div class="text-sm text-blue-800">کل رکوردها</div>
+                        </div>
+                        <div class="text-center p-4 bg-green-50 rounded">
+                            <div class="text-2xl font-bold text-green-600">{{ number_format($log->total_success) }}</div>
+                            <div class="text-sm text-green-800">موفق</div>
+                        </div>
+                        @if($log->total_duplicate > 0)
+                            <div class="text-center p-4 bg-yellow-50 rounded">
+                                <div class="text-2xl font-bold text-yellow-600">{{ number_format($log->total_duplicate) }}</div>
+                                <div class="text-sm text-yellow-800">تکراری</div>
+                            </div>
+                        @endif
+                        <div class="text-center p-4 bg-red-50 rounded">
+                            <div class="text-2xl font-bold text-red-600">{{ number_format($log->total_failed) }}</div>
+                            <div class="text-sm text-red-800">خطا</div>
+                        </div>
+                    </div>
+
                     <div class="mt-6">
                         <div class="text-sm text-gray-500 mb-2">نرخ موفقیت</div>
                         <div class="w-full bg-gray-200 rounded-full h-2.5">
-                            <div class="bg-green-600 h-2.5 rounded-full" style="width: {{ $log->success_rate }}%"></div>
+                            <div class="bg-green-600 h-2.5 rounded-full" style="width: {{ $log->success_rate ?? ($log->total_processed > 0 ? round(($log->total_success / $log->total_processed) * 100, 1) : 0) }}%"></div>
                         </div>
-                        <div class="text-sm text-gray-600 mt-1">{{ $log->success_rate }}%</div>
+                        <div class="text-sm text-gray-600 mt-1">{{ $log->success_rate ?? ($log->total_processed > 0 ? round(($log->total_success / $log->total_processed) * 100, 1) : 0) }}%</div>
+                    </div>
+                @else
+                    <!-- نمایش آمار از کانفیگ اگر در لاگ موجود نیست -->
+                    <div class="bg-yellow-50 border border-yellow-200 rounded p-4">
+                        <h3 class="text-yellow-800 font-medium mb-2">⚠️ آمار لاگ ناقص - نمایش آمار کانفیگ:</h3>
+                        <div class="grid grid-cols-3 gap-4 text-sm">
+                            <div>
+                                <span class="text-gray-600">کل پردازش شده:</span>
+                                <span class="font-medium">{{ number_format($config->total_processed) }}</span>
+                            </div>
+                            <div>
+                                <span class="text-gray-600">موفق:</span>
+                                <span class="font-medium text-green-600">{{ number_format($config->total_success) }}</span>
+                            </div>
+                            <div>
+                                <span class="text-gray-600">خطا:</span>
+                                <span class="font-medium text-red-600">{{ number_format($config->total_failed) }}</span>
+                            </div>
+                        </div>
+                        <button onclick="syncLogStats({{ $log->id }})" class="mt-2 px-3 py-1 bg-yellow-600 text-white rounded text-sm hover:bg-yellow-700">
+                            🔄 همگام‌سازی آمار لاگ
+                        </button>
                     </div>
                 @endif
             </div>
@@ -99,11 +194,44 @@
             </div>
         @endif
 
+        <!-- Stop Reason -->
+        @if($log->status === 'stopped' && $log->stop_reason)
+            <div class="bg-white rounded shadow p-6">
+                <h2 class="text-lg font-medium text-orange-800 mb-4">دلیل توقف</h2>
+                <div class="bg-orange-50 border border-orange-200 rounded p-4">
+                    <div class="text-orange-800">
+                        <strong>دلیل:</strong> {{ $log->stop_reason }}
+                    </div>
+                </div>
+            </div>
+        @endif
+
+        <!-- Performance Stats -->
+        @if($log->performance_stats || $log->records_per_minute)
+            <div class="bg-white rounded shadow p-6">
+                <h2 class="text-lg font-medium mb-4">آمار عملکرد</h2>
+                <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                    @if($log->records_per_minute)
+                        <div>
+                            <span class="text-gray-600">سرعت پردازش:</span>
+                            <span class="font-medium">{{ $log->records_per_minute }} رکورد/دقیقه</span>
+                        </div>
+                    @endif
+                    @if($executionTimeSeconds > 0 && $log->total_processed > 0)
+                        <div>
+                            <span class="text-gray-600">میانگین زمان هر رکورد:</span>
+                            <span class="font-medium">{{ round($executionTimeSeconds / $log->total_processed, 2) }} ثانیه</span>
+                        </div>
+                    @endif
+                </div>
+            </div>
+        @endif
+
         <!-- Log Details -->
         @if($log->log_details && count($log->log_details) > 0)
             <div class="bg-white rounded shadow p-6">
                 <div class="flex items-center justify-between mb-4">
-                    <h2 class="text-lg font-medium">جزئیات لاگ اجرا</h2>
+                    <h2 class="text-lg font-medium">جزئیات لاگ اجرا ({{ count($log->log_details) }} ورودی)</h2>
                     <button onclick="toggleAllLogs()" class="text-sm text-blue-600 hover:text-blue-800">
                         باز/بسته کردن همه
                     </button>
@@ -118,6 +246,15 @@
                             {{ \Carbon\Carbon::parse($logEntry['timestamp'])->format('H:i:s') }}
                         </span>
                                     <span class="text-sm">{{ $logEntry['message'] }}</span>
+
+                                    <!-- نمایش خلاصه آمار در کنار پیام -->
+                                    @if(isset($logEntry['context']) && is_array($logEntry['context']))
+                                        @if(isset($logEntry['context']['total']) || isset($logEntry['context']['success']))
+                                            <span class="text-xs text-blue-600 mr-2">
+                                                [{{ $logEntry['context']['total'] ?? 0 }} کل، {{ $logEntry['context']['success'] ?? 0 }} موفق]
+                                            </span>
+                                        @endif
+                                    @endif
                                 </div>
                                 <svg class="w-4 h-4 text-gray-400 transform transition-transform"
                                      id="icon-{{ $index }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -133,6 +270,15 @@
                             @endif
                         </div>
                     @endforeach
+                </div>
+            </div>
+        @else
+            <div class="bg-white rounded shadow p-6">
+                <h2 class="text-lg font-medium mb-4">جزئیات لاگ اجرا</h2>
+                <div class="text-center py-8 text-gray-500">
+                    <div class="text-4xl mb-2">📝</div>
+                    <p>هیچ جزئیات لاگی ثبت نشده است</p>
+                    <p class="text-sm mt-1">این ممکن است به دلیل قطع ناگهانی اجرا باشد</p>
                 </div>
             </div>
         @endif
@@ -172,6 +318,52 @@
                     allIcons[index].style.transform = 'rotate(0deg)';
                 }
             });
+        }
+
+        function fixLogStatus(logId) {
+            if (!confirm('آیا می‌خواهید وضعیت این لاگ را اصلاح کنید؟')) return;
+
+            fetch(`/admin/logs/${logId}/fix-status`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                    'Accept': 'application/json'
+                }
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('✅ وضعیت لاگ اصلاح شد!');
+                        location.reload();
+                    } else {
+                        alert('❌ خطا: ' + data.message);
+                    }
+                })
+                .catch(() => alert('❌ خطا در اصلاح وضعیت'));
+        }
+
+        function syncLogStats(logId) {
+            if (!confirm('آیا می‌خواهید آمار این لاگ را با کانفیگ همگام‌سازی کنید؟')) return;
+
+            fetch(`/admin/logs/${logId}/sync-stats`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                    'Accept': 'application/json'
+                }
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('✅ آمار لاگ همگام‌سازی شد!');
+                        location.reload();
+                    } else {
+                        alert('❌ خطا: ' + data.message);
+                    }
+                })
+                .catch(() => alert('❌ خطا در همگام‌سازی آمار'));
         }
     </script>
 @endsection

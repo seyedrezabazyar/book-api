@@ -36,7 +36,7 @@ class ExecutionLog extends Model
     const STATUS_RUNNING = 'running';
     const STATUS_COMPLETED = 'completed';
     const STATUS_FAILED = 'failed';
-    const STATUS_STOPPED = 'stopped'; // اضافه کردیم
+    const STATUS_STOPPED = 'stopped';
 
     public function config(): BelongsTo
     {
@@ -72,60 +72,190 @@ class ExecutionLog extends Model
 
     public function addLogEntry(string $message, array $context = []): void
     {
-        $logs = $this->log_details ?? [];
-        $logs[] = [
-            'timestamp' => now()->toISOString(),
-            'message' => $message,
-            'context' => $context,
-        ];
+        try {
+            $currentLogs = $this->log_details ?? [];
 
-        $this->update(['log_details' => $logs]);
+            // اطمینان از اینکه log_details یک آرایه است
+            if (!is_array($currentLogs)) {
+                $currentLogs = [];
+            }
+
+            $newEntry = [
+                'timestamp' => now()->toISOString(),
+                'message' => (string)$message, // اطمینان از string بودن
+                'context' => $this->sanitizeContext($context) // پاکسازی context
+            ];
+
+            $currentLogs[] = $newEntry;
+
+            // بروزرسانی بدون استفاده از increment که ممکن است مشکل ایجاد کند
+            $this->update(['log_details' => $currentLogs]);
+
+        } catch (\Exception $e) {
+            Log::error("❌ خطا در افزودن log entry", [
+                'execution_id' => $this->execution_id,
+                'message' => $message,
+                'error' => $e->getMessage()
+            ]);
+        }
     }
 
+    /**
+     * پاکسازی context برای جلوگیری از خطای array to string
+     */
+    private function sanitizeContext(array $context): array
+    {
+        $sanitized = [];
+
+        foreach ($context as $key => $value) {
+            if (is_array($value)) {
+                // تبدیل آرایه‌های تو در تو به JSON string
+                $sanitized[$key] = $this->sanitizeContext($value);
+            } elseif (is_object($value)) {
+                // تبدیل object به array
+                $sanitized[$key] = json_decode(json_encode($value), true);
+            } elseif (is_resource($value)) {
+                // resource را نادیده بگیر
+                $sanitized[$key] = 'Resource';
+            } else {
+                // مقادیر ساده (string, int, bool, null)
+                $sanitized[$key] = $value;
+            }
+        }
+
+        return $sanitized;
+    }
+
+    /**
+     * تکمیل اجرا با آمار نهایی
+     */
     public function markCompleted(array $stats): void
     {
+        $executionTime = $this->started_at ? now()->diffInSeconds($this->started_at) : 0;
+
         $this->update([
             'status' => self::STATUS_COMPLETED,
             'total_processed' => $stats['total'] ?? 0,
             'total_success' => $stats['success'] ?? 0,
             'total_failed' => $stats['failed'] ?? 0,
             'total_duplicate' => $stats['duplicate'] ?? 0,
-            'execution_time' => $stats['execution_time'] ?? 0,
+            'execution_time' => $stats['execution_time'] ?? $executionTime,
             'finished_at' => now(),
+        ]);
+
+        // بروزرسانی آمار کانفیگ
+        $this->config?->syncStatsFromLogs();
+
+        $this->addLogEntry('اجرا با موفقیت تمام شد', [
+            'final_stats' => $stats,
+            'execution_time' => $executionTime
         ]);
     }
 
     public function markFailed(string $errorMessage): void
     {
+        $executionTime = $this->started_at ? now()->diffInSeconds($this->started_at) : 0;
+
         $this->update([
             'status' => self::STATUS_FAILED,
             'error_message' => $errorMessage,
+            'execution_time' => $executionTime,
             'finished_at' => now(),
+        ]);
+
+        $this->addLogEntry('اجرا با خطا متوقف شد', [
+            'error' => $errorMessage,
+            'execution_time' => $executionTime
         ]);
     }
 
     /**
-     * متوقف کردن اجرا با آمار نهایی
+     * متوقف کردن اجرا با آمار نهایی (بهبود یافته)
      */
     public function stop(array $finalStats = []): void
     {
-        $this->update([
-            'status' => self::STATUS_STOPPED,
-            'total_processed' => $finalStats['total_processed_at_stop'] ?? $this->total_processed,
-            'total_success' => $finalStats['total_success_at_stop'] ?? $this->total_success,
-            'total_failed' => $finalStats['total_failed_at_stop'] ?? $this->total_failed,
-            'total_duplicate' => $finalStats['total_duplicate_at_stop'] ?? $this->total_duplicate,
-            'execution_time' => $finalStats['execution_time'] ?? 0,
-            'error_message' => $finalStats['stopped_manually'] ?? false ? 'متوقف شده توسط کاربر' : $this->error_message,
-            'finished_at' => now(),
-            'log_details' => array_merge($this->log_details ?? [], [
-                [
-                    'timestamp' => now()->toISOString(),
-                    'message' => 'اجرا متوقف شد',
-                    'context' => $finalStats
-                ]
-            ])
+        // محاسبه زمان اجرا صحیح
+        $executionTime = $this->started_at ? now()->diffInSeconds($this->started_at) : 0;
+
+        // اطمینان از مثبت بودن زمان
+        if ($executionTime < 0) {
+            $executionTime = 0;
+            Log::warning("⚠️ زمان اجرا منفی محاسبه شد، صفر قرار داده شد", [
+                'execution_id' => $this->execution_id,
+                'started_at' => $this->started_at,
+                'now' => now()
+            ]);
+        }
+
+        // دریافت آمار واقعی از کانفیگ
+        $config = $this->config;
+        $actualStats = [
+            'total_processed' => $config ? $config->total_processed : 0,
+            'total_success' => $config ? $config->total_success : 0,
+            'total_failed' => $config ? $config->total_failed : 0
+        ];
+
+        DB::transaction(function () use ($finalStats, $executionTime, $actualStats) {
+            $this->update([
+                'status' => self::STATUS_STOPPED,
+                'total_processed' => max($finalStats['total_processed_at_stop'] ?? 0, $actualStats['total_processed']),
+                'total_success' => max($finalStats['total_success_at_stop'] ?? 0, $actualStats['total_success']),
+                'total_failed' => max($finalStats['total_failed_at_stop'] ?? 0, $actualStats['total_failed']),
+                'total_duplicate' => $finalStats['total_duplicate_at_stop'] ?? $this->total_duplicate,
+                'execution_time' => $executionTime,
+                'success_rate' => $actualStats['total_processed'] > 0
+                    ? round(($actualStats['total_success'] / $actualStats['total_processed']) * 100, 2)
+                    : 0,
+                'stop_reason' => $finalStats['stopped_manually'] ?? false ? 'متوقف شده توسط کاربر' : 'متوقف شده',
+                'error_message' => $finalStats['stopped_manually'] ?? false ? 'متوقف شده توسط کاربر' : $this->error_message,
+                'finished_at' => now(),
+                'last_activity_at' => now(),
+            ]);
+        });
+
+        // بروزرسانی آمار کانفیگ
+        if ($config) {
+            $config->syncStatsFromLogs();
+        }
+
+        $this->addLogEntry('⏹️ اجرا متوقف شد', array_merge($finalStats, [
+            'actual_stats_from_config' => $actualStats,
+            'execution_time_seconds' => $executionTime,
+            'stopped_at' => now()->toISOString(),
+            'final_log_stats' => [
+                'total_processed' => $this->total_processed,
+                'total_success' => $this->total_success,
+                'total_failed' => $this->total_failed
+            ]
+        ]));
+
+        Log::info("⏹️ ExecutionLog متوقف شد", [
+            'execution_id' => $this->execution_id,
+            'execution_time' => $executionTime,
+            'final_stats' => $actualStats,
+            'log_stats' => [
+                'total_processed' => $this->total_processed,
+                'total_success' => $this->total_success,
+                'total_failed' => $this->total_failed
+            ]
         ]);
+    }
+
+    /**
+     * دریافت آمار واقعی از کانفیگ
+     */
+    private function getActualStatsFromConfig(): array
+    {
+        $config = $this->config;
+        if (!$config) {
+            return ['total_processed' => 0, 'total_success' => 0, 'total_failed' => 0];
+        }
+
+        return [
+            'total_processed' => $config->total_processed,
+            'total_success' => $config->total_success,
+            'total_failed' => $config->total_failed
+        ];
     }
 
     /**
@@ -133,15 +263,130 @@ class ExecutionLog extends Model
      */
     public function markStopped(string $reason = 'متوقف شده توسط کاربر'): void
     {
-        $this->update([
-            'status' => self::STATUS_STOPPED,
-            'error_message' => $reason,
-            'finished_at' => now(),
-        ]);
+        $this->stop(['stopped_manually' => true]);
     }
 
     /**
-     * بررسی وضعیت اجرا
+     * بروزرسانی پیشرفت در حین اجرا
+     */
+    public function updateProgress(array $pageStats): void
+    {
+        Log::info("📊 بروزرسانی ExecutionLog progress", [
+            'log_id' => $this->id,
+            'execution_id' => $this->execution_id,
+            'incoming_stats' => $pageStats
+        ]);
+
+        try {
+            DB::transaction(function () use ($pageStats) {
+                // قفل کردن سطر
+                $log = ExecutionLog::lockForUpdate()->find($this->id);
+
+                if (!$log) {
+                    throw new \Exception("ExecutionLog {$this->id} یافت نشد");
+                }
+
+                // اطمینان از integer بودن مقادیر
+                $totalToAdd = is_numeric($pageStats['total'] ?? 0) ? (int)($pageStats['total'] ?? 0) : 0;
+                $successToAdd = is_numeric($pageStats['success'] ?? 0) ? (int)($pageStats['success'] ?? 0) : 0;
+                $failedToAdd = is_numeric($pageStats['failed'] ?? 0) ? (int)($pageStats['failed'] ?? 0) : 0;
+                $duplicateToAdd = is_numeric($pageStats['duplicate'] ?? 0) ? (int)($pageStats['duplicate'] ?? 0) : 0;
+
+                // بروزرسانی آمار تجمعی
+                $log->increment('total_processed', $totalToAdd);
+                $log->increment('total_success', $successToAdd);
+                $log->increment('total_failed', $failedToAdd);
+                $log->increment('total_duplicate', $duplicateToAdd);
+
+                // محاسبه نرخ موفقیت جدید
+                $newTotal = $log->total_processed + $totalToAdd;
+                $newSuccessRate = $newTotal > 0
+                    ? round((($log->total_success + $successToAdd) / $newTotal) * 100, 2)
+                    : 0;
+
+                // بروزرسانی آمار عملکرد
+                $log->update([
+                    'success_rate' => $newSuccessRate,
+                    'last_activity_at' => now()
+                ]);
+            });
+
+            // رفرش مدل
+            $this->refresh();
+
+            // ثبت لاگ بدون استفاده از آرایه در رشته
+            $this->addLogEntry('📊 پیشرفت بروزرسانی شد', [
+                'page_stats' => $pageStats,
+                'cumulative_stats' => [
+                    'total_processed' => $this->total_processed,
+                    'total_success' => $this->total_success,
+                    'total_failed' => $this->total_failed,
+                    'total_duplicate' => $this->total_duplicate,
+                    'success_rate' => $this->success_rate
+                ]
+            ]);
+
+            Log::info("✅ ExecutionLog progress بروزرسانی شد", [
+                'log_id' => $this->id,
+                'execution_id' => $this->execution_id,
+                'final_stats' => [
+                    'total_processed' => $this->total_processed,
+                    'total_success' => $this->total_success,
+                    'total_failed' => $this->total_failed,
+                    'total_duplicate' => $this->total_duplicate
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error("❌ خطا در بروزرسانی ExecutionLog progress", [
+                'log_id' => $this->id,
+                'error' => $e->getMessage(),
+                'pageStats' => $pageStats
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * محاسبه زمان اجرا صحیح
+     */
+    public function getCorrectExecutionTime(): float
+    {
+        if ($this->execution_time && $this->execution_time > 0) {
+            return $this->execution_time;
+        }
+
+        if ($this->started_at && $this->finished_at) {
+            return $this->finished_at->diffInSeconds($this->started_at);
+        }
+
+        if ($this->started_at && $this->status === 'running') {
+            return now()->diffInSeconds($this->started_at);
+        }
+
+        return 0;
+    }
+
+    /**
+     * بروزرسانی زمان اجرا در صورت نیاز
+     */
+    public function fixExecutionTime(): void
+    {
+        $correctTime = $this->getCorrectExecutionTime();
+
+        if ($correctTime > 0 && ($this->execution_time === null || $this->execution_time <= 0)) {
+            $this->update(['execution_time' => $correctTime]);
+
+            $this->addLogEntry('⏱️ زمان اجرا اصلاح شد', [
+                'old_execution_time' => $this->execution_time,
+                'new_execution_time' => $correctTime,
+                'fixed_at' => now()->toISOString()
+            ]);
+        }
+    }
+
+    /**
+     * بررسی وضعیت‌ها
      */
     public function isRunning(): bool
     {
@@ -188,5 +433,35 @@ class ExecutionLog extends Model
             self::STATUS_STOPPED => 'متوقف شده',
             default => 'نامشخص'
         };
+    }
+
+    /**
+     * دریافت خلاصه آمار برای نمایش
+     */
+    public function getStatsSummary(): string
+    {
+        if ($this->status === 'running') {
+            return 'در حال اجرا...';
+        }
+
+        $parts = [];
+
+        if ($this->total_processed > 0) {
+            $parts[] = "کل: " . number_format($this->total_processed);
+        }
+
+        if ($this->total_success > 0) {
+            $parts[] = "✅ " . number_format($this->total_success);
+        }
+
+        if ($this->total_failed > 0) {
+            $parts[] = "❌ " . number_format($this->total_failed);
+        }
+
+        if ($this->total_duplicate > 0) {
+            $parts[] = "🔄 " . number_format($this->total_duplicate);
+        }
+
+        return empty($parts) ? 'بدون آمار' : implode(' | ', $parts);
     }
 }

@@ -104,55 +104,214 @@ class ApiDataService
     }
 
     /**
-     * پردازش یک صفحه منفرد (برای استفاده در Job)
+     * پردازش یک صفحه منفرد (نسخه اصلاح شده)
      */
     public function processPage(int $pageNumber, ExecutionLog $executionLog): array
     {
         if ($pageNumber === -1) {
             // این Job برای پایان دادن به اجرا است
-            $executionLog->markCompleted($this->getConfigTotalStats());
-            $this->config->update(['is_running' => false]);
+            $this->completeExecution($executionLog);
             return ['action' => 'completed'];
         }
 
+        $startTime = microtime(true);
         $apiSettings = $this->config->getApiSettings();
         $generalSettings = $this->config->getGeneralSettings();
 
         $url = $this->buildApiUrl($apiSettings, $pageNumber);
-        $response = $this->makeHttpRequest($url, $apiSettings, $generalSettings);
 
-        if (!$response->successful()) {
-            $error = "خطای HTTP {$response->status()}: {$response->reason()}";
-            $executionLog->addLogEntry("خطا در صفحه {$pageNumber}: {$error}");
-            throw new \Exception($error);
+        // ثبت شروع پردازش صفحه
+        $executionLog->addLogEntry("🚀 شروع پردازش صفحه {$pageNumber}", [
+            'page' => $pageNumber,
+            'url' => $url,
+            'started_at' => now()->toISOString()
+        ]);
+
+        Log::info("🚀 شروع پردازش صفحه {$pageNumber}", [
+            'config_id' => $this->config->id,
+            'execution_id' => $executionLog->execution_id,
+            'url' => $url
+        ]);
+
+        try {
+            $response = $this->makeHttpRequest($url, $apiSettings, $generalSettings);
+
+            if (!$response->successful()) {
+                $error = "خطای HTTP {$response->status()}: {$response->reason()}";
+                $executionLog->addLogEntry("❌ خطا در صفحه {$pageNumber}: {$error}", [
+                    'page' => $pageNumber,
+                    'http_status' => $response->status(),
+                    'error' => $error,
+                    'url' => $url
+                ]);
+                throw new \Exception($error);
+            }
+
+            $data = $response->json();
+            $books = $this->extractBooksFromApiData($data);
+
+            if (empty($books)) {
+                $executionLog->addLogEntry("⚪ صفحه {$pageNumber}: هیچ کتابی یافت نشد", [
+                    'page' => $pageNumber,
+                    'books_found' => 0,
+                    'response_size' => strlen(json_encode($data))
+                ]);
+                return ['action' => 'no_more_data', 'page' => $pageNumber];
+            }
+
+            // پردازش کتاب‌ها
+            $pageStats = $this->processBooksInPage($books, $pageNumber, $executionLog, $apiSettings);
+
+            $pageProcessTime = round(microtime(true) - $startTime, 2);
+
+            // بروزرسانی آمار کانفیگ
+            Log::info("📊 قبل از بروزرسانی Config", [
+                'config_id' => $this->config->id,
+                'page' => $pageNumber,
+                'page_stats' => $pageStats,
+                'config_before' => [
+                    'total_processed' => $this->config->total_processed,
+                    'total_success' => $this->config->total_success,
+                    'total_failed' => $this->config->total_failed
+                ]
+            ]);
+
+            $this->config->updateProgress($pageNumber, $pageStats);
+
+            // بروزرسانی ExecutionLog
+            Log::info("📊 قبل از بروزرسانی ExecutionLog", [
+                'log_id' => $executionLog->id,
+                'page_stats' => $pageStats,
+                'log_before' => [
+                    'total_processed' => $executionLog->total_processed,
+                    'total_success' => $executionLog->total_success,
+                    'total_failed' => $executionLog->total_failed
+                ]
+            ]);
+
+            $executionLog->updateProgress($pageStats);
+
+            // محاسبه سرعت
+            $recordsPerMinute = $pageProcessTime > 0 ? round((count($books) / $pageProcessTime) * 60, 1) : 0;
+
+            // بروزرسانی فیلدهای اضافی ExecutionLog
+            $executionLog->update([
+                'current_page' => $pageNumber,
+                'records_per_minute' => $recordsPerMinute,
+                'last_activity_at' => now()
+            ]);
+
+            Log::info("✅ صفحه {$pageNumber} کامل شد", [
+                'config_id' => $this->config->id,
+                'execution_id' => $executionLog->execution_id,
+                'page_stats' => $pageStats,
+                'page_process_time' => $pageProcessTime,
+                'records_per_minute' => $recordsPerMinute,
+                'config_after' => [
+                    'total_processed' => $this->config->fresh()->total_processed,
+                    'total_success' => $this->config->fresh()->total_success,
+                    'total_failed' => $this->config->fresh()->total_failed
+                ],
+                'log_after' => [
+                    'total_processed' => $executionLog->fresh()->total_processed,
+                    'total_success' => $executionLog->fresh()->total_success,
+                    'total_failed' => $executionLog->fresh()->total_failed
+                ]
+            ]);
+
+            return $pageStats;
+
+        } catch (\Exception $e) {
+            Log::error("❌ خطا در پردازش صفحه {$pageNumber}", [
+                'config_id' => $this->config->id,
+                'execution_id' => $executionLog->execution_id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            $executionLog->addLogEntry("❌ خطای کلی در صفحه {$pageNumber}", [
+                'page' => $pageNumber,
+                'error' => $e->getMessage(),
+                'failed_at' => now()->toISOString()
+            ]);
+
+            throw $e;
         }
+    }
 
-        $data = $response->json();
-        $books = $this->extractBooksFromApiData($data);
-
-        if (empty($books)) {
-            $executionLog->addLogEntry("صفحه {$pageNumber}: هیچ کتابی یافت نشد - پایان صفحات");
-            return ['action' => 'no_more_data', 'page' => $pageNumber];
-        }
-
+    /**
+     * پردازش کتاب‌های یک صفحه
+     */
+    private function processBooksInPage(array $books, int $pageNumber, ExecutionLog $executionLog, array $apiSettings): array
+    {
         $pageStats = ['total' => 0, 'success' => 0, 'failed' => 0, 'duplicate' => 0];
+        $bookDetails = [];
 
-        foreach ($books as $bookData) {
+        Log::info("📚 شروع پردازش {count($books)} کتاب در صفحه {$pageNumber}", [
+            'config_id' => $this->config->id,
+            'page' => $pageNumber,
+            'books_count' => count($books)
+        ]);
+
+        foreach ($books as $index => $bookData) {
             $pageStats['total']++;
+            $bookStartTime = microtime(true);
 
             try {
                 $result = $this->createBook($bookData, $apiSettings['field_mapping'] ?? []);
+                $bookProcessTime = round((microtime(true) - $bookStartTime) * 1000, 2);
+
+                $bookDetail = [
+                    'index' => $index + 1,
+                    'title' => $result['title'] ?? 'Unknown',
+                    'status' => $result['status'],
+                    'book_id' => $result['book_id'] ?? null,
+                    'process_time_ms' => $bookProcessTime
+                ];
 
                 if ($result['status'] === 'created') {
                     $pageStats['success']++;
+                    Log::info("✅ کتاب ایجاد شد", [
+                        'page' => $pageNumber,
+                        'index' => $index + 1,
+                        'title' => $result['title'],
+                        'book_id' => $result['book_id']
+                    ]);
                 } elseif ($result['status'] === 'duplicate') {
                     $pageStats['duplicate']++;
+                    Log::info("🔄 کتاب تکراری", [
+                        'page' => $pageNumber,
+                        'index' => $index + 1,
+                        'title' => $result['title'],
+                        'book_id' => $result['book_id']
+                    ]);
+                } elseif ($result['status'] === 'updated') {
+                    $pageStats['success']++; // به عنوان موفقیت حساب می‌شود
+                    Log::info("📝 کتاب بروزرسانی شد", [
+                        'page' => $pageNumber,
+                        'index' => $index + 1,
+                        'title' => $result['title'],
+                        'book_id' => $result['book_id']
+                    ]);
                 }
+
+                $bookDetails[] = $bookDetail;
 
             } catch (\Exception $e) {
                 $pageStats['failed']++;
-                Log::error('خطا در پردازش کتاب', [
+                $bookProcessTime = round((microtime(true) - $bookStartTime) * 1000, 2);
+
+                $bookDetails[] = [
+                    'index' => $index + 1,
+                    'title' => $bookData['title'] ?? 'Unknown',
+                    'status' => 'failed',
+                    'error' => $e->getMessage(),
+                    'process_time_ms' => $bookProcessTime
+                ];
+
+                Log::error('❌ خطا در پردازش کتاب', [
                     'page' => $pageNumber,
+                    'book_index' => $index + 1,
                     'error' => $e->getMessage(),
                     'book_data' => $bookData
                 ]);
@@ -164,9 +323,47 @@ class ApiDataService
             }
         }
 
-        $executionLog->addLogEntry("صفحه {$pageNumber} پردازش شد", $pageStats);
+        // ثبت جزئیات کامل در ExecutionLog
+        $executionLog->addLogEntry("✅ صفحه {$pageNumber} پردازش شد", [
+            'page' => $pageNumber,
+            'page_stats' => $pageStats,
+            'books_found' => count($books),
+            'book_details' => $bookDetails
+        ]);
+
+        Log::info("✅ پردازش کتاب‌های صفحه {$pageNumber} تمام شد", [
+            'config_id' => $this->config->id,
+            'page' => $pageNumber,
+            'page_stats' => $pageStats,
+            'books_processed' => count($books)
+        ]);
 
         return $pageStats;
+    }
+
+    /**
+     * تکمیل اجرا
+     */
+    private function completeExecution(ExecutionLog $executionLog): void
+    {
+        // آمار نهایی از کانفیگ
+        $config = $this->config->fresh();
+        $finalStats = [
+            'total' => $config->total_processed,
+            'success' => $config->total_success,
+            'failed' => $config->total_failed,
+            'duplicate' => $executionLog->total_duplicate,
+            'execution_time' => $executionLog->started_at ? now()->diffInSeconds($executionLog->started_at) : 0
+        ];
+
+        $executionLog->markCompleted($finalStats);
+        $this->config->update(['is_running' => false]);
+
+        Log::info("🎉 اجرا کامل شد", [
+            'config_id' => $this->config->id,
+            'execution_id' => $executionLog->execution_id,
+            'final_stats' => $finalStats
+        ]);
     }
 
     /**
@@ -174,13 +371,43 @@ class ApiDataService
      */
     private function getConfigTotalStats(): array
     {
+        $config = $this->config->fresh(); // اطمینان از آخرین داده‌ها
+
         return [
-            'total' => $this->config->total_processed,
-            'success' => $this->config->total_success,
-            'failed' => $this->config->total_failed,
-            'duplicate' => 0, // محاسبه در صورت نیاز
-            'execution_time' => 0
+            'total' => $config->total_processed,
+            'success' => $config->total_success,
+            'failed' => $config->total_failed,
+            'duplicate' => 0, // این باید از execution log محاسبه شود
+            'execution_time' => 0 // این در execution log محاسبه می‌شود
         ];
+    }
+
+    /**
+     * بروزرسانی آمار با tracking بهتر
+     */
+    public function updateProgress(int $currentPage, array $stats): void
+    {
+        // اضافه کردن آمار جدید به آمار قبلی
+        $this->config->increment('total_processed', $stats['total'] ?? 0);
+        $this->config->increment('total_success', $stats['success'] ?? 0);
+        $this->config->increment('total_failed', $stats['failed'] ?? 0);
+
+        // بروزرسانی صفحه فعلی و زمان آخرین اجرا
+        $this->config->update([
+            'current_page' => $currentPage,
+            'last_run_at' => now(),
+        ]);
+
+        Log::info("📊 آمار کانفیگ بروزرسانی شد", [
+            'config_id' => $this->config->id,
+            'page' => $currentPage,
+            'page_stats' => $stats,
+            'total_stats' => [
+                'total_processed' => $this->config->fresh()->total_processed,
+                'total_success' => $this->config->fresh()->total_success,
+                'total_failed' => $this->config->fresh()->total_failed
+            ]
+        ]);
     }
 
     private function processApiData(): void

@@ -38,6 +38,10 @@ Route::middleware(['auth'])->group(function () {
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
+
+    // Routes اصلاح لاگ
+    Route::post('admin/logs/{log}/fix-status', [ConfigController::class, 'fixLogStatus'])->name('admin.logs.fix-status');
+    Route::post('admin/logs/{log}/sync-stats', [ConfigController::class, 'syncLogStats'])->name('admin.logs.sync-stats');
 });
 
 require __DIR__.'/auth.php';

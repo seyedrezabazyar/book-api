@@ -24,31 +24,31 @@ class ConfigController extends Controller
     /**
      * نمایش لیست کانفیگ‌ها با قابلیت جستجو و فیلتر
      */
-    public function index(Request $request): View
+    public function index(Request $request)
     {
-        $search = $request->query('search');
-        $status = $request->query('status');
-        $query = Config::query();
+        // دریافت کانفیگ‌ها با eager loading
+        $configs = Config::with(['executionLogs' => function($query) {
+            $query->latest()->limit(1);
+        }])
+            ->when($request->search, function($query, $search) {
+                $query->where('name', 'like', "%{$search}%")
+                    ->orWhere('api_url', 'like', "%{$search}%");
+            })
+            ->orderBy('created_at', 'desc')
+            ->paginate(15);
 
-        // جستجو در نام، توضیحات و URL
-        if ($search) {
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                    ->orWhere('description', 'like', "%{$search}%")
-                    ->orWhere('base_url', 'like', "%{$search}%");
-            });
-        }
+        // محاسبه آمار کلی
+        $stats = [
+            'total_configs' => Config::count(),
+            'active_configs' => Config::where('status', 'active')->count(),
+            'running_configs' => Config::where('is_running', true)->count(),
+            'total_books' => \App\Models\Book::count(),
+        ];
 
-        // فیلتر بر اساس وضعیت
-        if ($status && in_array($status, ['active', 'inactive', 'draft'])) {
-            $query->where('status', $status);
-        }
+        // بررسی وضعیت Worker
+        $workerStatus = $this->getWorkerStatus();
 
-        $configs = $query->orderBy('created_at', 'desc')
-            ->paginate(10)
-            ->appends($request->query());
-
-        return view('configs.index', compact('configs', 'search', 'status'));
+        return view('configs.index', compact('configs', 'stats', 'workerStatus'));
     }
 
     /**
@@ -397,7 +397,7 @@ class ConfigController extends Controller
     }
 
     /**
-     * متوقف کردن اجرا - نسخه بهبود یافته و قدرتمند
+     * متوقف کردن اجرا - نسخه اصلاح شده
      */
     public function stopExecution(Config $config): JsonResponse
     {
@@ -409,102 +409,87 @@ class ConfigController extends Controller
                 ], 422);
             }
 
-            Log::info('🛑 شروع فرآیند توقف قدرتمند', [
+            Log::info('🛑 شروع فرآیند توقف', [
                 'config_id' => $config->id,
-                'config_name' => $config->name
+                'config_name' => $config->name,
+                'current_stats' => [
+                    'total_processed' => $config->total_processed,
+                    'total_success' => $config->total_success,
+                    'total_failed' => $config->total_failed
+                ]
             ]);
 
-            // 1. فوری: کانفیگ را غیرفعال کن
-            $config->update(['is_running' => false]);
-
-            // 2. حذف همه Jobs مرتبط - چندین روش برای اطمینان
-            $deletedJobs = 0;
-
-            // روش 1: حذف بر اساس config_id
-            $patterns = [
-                '%"config_id":' . $config->id . '%',
-                '%"config":{"id":' . $config->id . '%',
-                '%ProcessSinglePageJob%"config_id":' . $config->id . '%',
-                '%ProcessApiDataJob%"config_id":' . $config->id . '%'
-            ];
-
-            foreach ($patterns as $pattern) {
-                $deleted = DB::table('jobs')->where('payload', 'like', $pattern)->delete();
-                $deletedJobs += $deleted;
-                Log::info("🗑️ حذف Jobs با الگو: {$pattern}", ['deleted' => $deleted]);
-            }
-
-            // روش 2: حذف بر اساس execution_id
-            $latestExecution = ExecutionLog::where('config_id', $config->id)
+            // 1. دریافت execution log فعال
+            $activeExecution = ExecutionLog::where('config_id', $config->id)
                 ->where('status', 'running')
                 ->latest()
                 ->first();
 
-            if ($latestExecution) {
-                $executionId = $latestExecution->execution_id;
+            // 2. فوری: کانفیگ را غیرفعال کن
+            $config->update(['is_running' => false]);
 
-                // حذف Jobs با execution_id
-                $deletedByExecId = DB::table('jobs')
-                    ->where('payload', 'like', '%"execution_id":"' . $executionId . '"%')
-                    ->delete();
+            // 3. حذف Jobs مرتبط
+            $deletedJobs = $this->deleteRelatedJobs($config, $activeExecution);
 
-                $deletedJobs += $deletedByExecId;
-                Log::info("🗑️ حذف Jobs با execution_id", [
-                    'execution_id' => $executionId,
-                    'deleted' => $deletedByExecId
-                ]);
+            // 4. متوقف کردن execution log با آمار صحیح
+            if ($activeExecution) {
+                // رفرش کانفیگ برای گرفتن آخرین آمار
+                $config->refresh();
 
-                // بروزرسانی execution log
-                $finalStats = [
-                    'stopped_manually' => true,
-                    'deleted_jobs' => $deletedJobs,
-                    'stopped_at' => now()->toISOString(),
+                // آمار واقعی در زمان توقف
+                $currentStats = [
                     'total_processed_at_stop' => $config->total_processed,
                     'total_success_at_stop' => $config->total_success,
-                    'total_failed_at_stop' => $config->total_failed
+                    'total_failed_at_stop' => $config->total_failed,
+                    'stopped_manually' => true,
+                    'stopped_at' => now()->toISOString()
                 ];
 
-                $latestExecution->stop($finalStats);
+                Log::info("⏹️ متوقف کردن ExecutionLog با آمار واقعی", [
+                    'execution_id' => $activeExecution->execution_id,
+                    'config_stats' => $currentStats
+                ]);
+
+                $activeExecution->stop($currentStats);
             }
 
-            // 3. حذف اضطراری: همه Jobs مرتبط با این کانفیگ
-            $extraDeleted = DB::table('jobs')
-                ->whereRaw('payload REGEXP ?', ['config.*' . $config->id])
-                ->delete();
-
-            $deletedJobs += $extraDeleted;
-            Log::info("🗑️ حذف اضطراری Jobs", ['extra_deleted' => $extraDeleted]);
-
-            // 4. کشتن Worker اگر در حال اجرا باشد
+            // 5. کشتن Worker
             $this->forceKillWorker();
 
-            // 5. بررسی نهایی
+            // 6. بررسی نهایی
             $remainingJobs = DB::table('jobs')->count();
-            $remainingConfigJobs = DB::table('jobs')
-                ->where('payload', 'like', '%"config_id":' . $config->id . '%')
-                ->count();
+            $actualBooksCount = \App\Models\Book::where('created_at', '>=', $config->created_at)->count();
 
             Log::info('✅ فرآیند توقف تمام شد', [
                 'config_id' => $config->id,
                 'total_deleted_jobs' => $deletedJobs,
                 'remaining_jobs' => $remainingJobs,
-                'remaining_config_jobs' => $remainingConfigJobs
+                'final_config_stats' => [
+                    'total_processed' => $config->total_processed,
+                    'total_success' => $config->total_success,
+                    'total_failed' => $config->total_failed
+                ],
+                'actual_books_in_db' => $actualBooksCount
             ]);
 
             $message = "✅ اجرا متوقف شد!\n";
             $message .= "🗑️ {$deletedJobs} Job از صف حذف شد\n";
-            $message .= "📊 Jobs باقی‌مانده: {$remainingJobs}\n";
-
-            if ($remainingConfigJobs > 0) {
-                $message .= "⚠️ هنوز {$remainingConfigJobs} Job مرتبط با این کانفیگ باقی مانده!";
-            }
+            $message .= "📊 آمار نهایی: {$config->total_success} کتاب موفق از {$config->total_processed} کل\n";
+            $message .= "📚 کتاب‌های واقعی در دیتابیس: {$actualBooksCount}";
 
             return response()->json([
                 'success' => true,
                 'message' => $message,
-                'deleted_jobs' => $deletedJobs,
-                'remaining_jobs' => $remainingJobs,
-                'remaining_config_jobs' => $remainingConfigJobs
+                'stats' => [
+                    'deleted_jobs' => $deletedJobs,
+                    'remaining_jobs' => $remainingJobs,
+                    'final_config_stats' => [
+                        'total_processed' => $config->total_processed,
+                        'total_success' => $config->total_success,
+                        'total_failed' => $config->total_failed
+                    ],
+                    'actual_books_count' => $actualBooksCount
+                ]
             ]);
 
         } catch (\Exception $e) {
@@ -519,6 +504,45 @@ class ConfigController extends Controller
                 'message' => 'خطا در متوقف کردن اجرا: ' . $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * حذف Jobs مرتبط با کانفیگ
+     */
+    private function deleteRelatedJobs(Config $config, ?ExecutionLog $activeExecution = null): int
+    {
+        $deletedJobs = 0;
+
+        // الگوهای مختلف برای یافتن Jobs
+        $patterns = [
+            '%"config_id":' . $config->id . '%',
+            '%"config":{"id":' . $config->id . '%',
+            '%ProcessSinglePageJob%"config_id":' . $config->id . '%',
+            '%ProcessApiDataJob%"config_id":' . $config->id . '%'
+        ];
+
+        foreach ($patterns as $pattern) {
+            $deleted = DB::table('jobs')->where('payload', 'like', $pattern)->delete();
+            $deletedJobs += $deleted;
+            if ($deleted > 0) {
+                Log::info("🗑️ حذف {$deleted} Job با الگو: {$pattern}");
+            }
+        }
+
+        // حذف بر اساس execution_id
+        if ($activeExecution) {
+            $executionId = $activeExecution->execution_id;
+            $deletedByExecId = DB::table('jobs')
+                ->where('payload', 'like', '%"execution_id":"' . $executionId . '"%')
+                ->delete();
+
+            $deletedJobs += $deletedByExecId;
+            if ($deletedByExecId > 0) {
+                Log::info("🗑️ حذف {$deletedByExecId} Job با execution_id: {$executionId}");
+            }
+        }
+
+        return $deletedJobs;
     }
 
     /**
@@ -794,5 +818,158 @@ class ConfigController extends Controller
         ❌ خطا: " . number_format($failed) . "
         🔄 تکراری: " . number_format($duplicate) . "
         ⏱️ زمان: {$executionTime} ثانیه";
+    }
+
+    /**
+     * اصلاح وضعیت execution log
+     */
+    public function fixLogStatus(ExecutionLog $log): JsonResponse
+    {
+        try {
+            $config = $log->config;
+
+            if (!$config) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'کانفیگ مرتبط با این لاگ یافت نشد'
+                ], 404);
+            }
+
+            // اگر کانفیگ در حال اجرا نیست، لاگ را متوقف کن
+            if (!$config->is_running && $log->status === 'running') {
+                $executionTime = $log->started_at ? now()->diffInSeconds($log->started_at) : 0;
+
+                $log->update([
+                    'status' => 'stopped',
+                    'total_processed' => $config->total_processed,
+                    'total_success' => $config->total_success,
+                    'total_failed' => $config->total_failed,
+                    'execution_time' => $executionTime,
+                    'finished_at' => now(),
+                    'last_activity_at' => now(),
+                    'stop_reason' => 'اصلاح شده توسط کاربر',
+                    'error_message' => 'وضعیت از running به stopped اصلاح شد'
+                ]);
+
+                $log->addLogEntry('وضعیت لاگ اصلاح شد', [
+                    'fixed_by' => 'user',
+                    'old_status' => 'running',
+                    'new_status' => 'stopped',
+                    'synced_stats' => [
+                        'total_processed' => $config->total_processed,
+                        'total_success' => $config->total_success,
+                        'total_failed' => $config->total_failed
+                    ]
+                ]);
+
+                Log::info("✅ وضعیت لاگ {$log->id} اصلاح شد", [
+                    'execution_id' => $log->execution_id,
+                    'old_status' => 'running',
+                    'new_status' => 'stopped'
+                ]);
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'وضعیت لاگ با موفقیت اصلاح شد'
+                ]);
+            }
+
+            return response()->json([
+                'success' => false,
+                'message' => 'این لاگ نیاز به اصلاح ندارد'
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('خطا در اصلاح وضعیت لاگ', [
+                'log_id' => $log->id,
+                'error' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'خطا در اصلاح وضعیت: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * همگام‌سازی آمار execution log با کانفیگ
+     */
+    public function syncLogStats(ExecutionLog $log): JsonResponse
+    {
+        try {
+            $config = $log->config;
+
+            if (!$config) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'کانفیگ مرتبط با این لاگ یافت نشد'
+                ], 404);
+            }
+
+            $oldStats = [
+                'total_processed' => $log->total_processed,
+                'total_success' => $log->total_success,
+                'total_failed' => $log->total_failed
+            ];
+
+            $newStats = [
+                'total_processed' => $config->total_processed,
+                'total_success' => $config->total_success,
+                'total_failed' => $config->total_failed
+            ];
+
+            // محاسبه نرخ موفقیت
+            $successRate = $newStats['total_processed'] > 0
+                ? round(($newStats['total_success'] / $newStats['total_processed']) * 100, 2)
+                : 0;
+
+            // محاسبه زمان اجرا صحیح
+            $executionTime = 0;
+            if ($log->started_at && $log->finished_at) {
+                $executionTime = $log->finished_at->diffInSeconds($log->started_at);
+            } elseif ($log->started_at) {
+                $executionTime = now()->diffInSeconds($log->started_at);
+            }
+
+            $log->update([
+                'total_processed' => $newStats['total_processed'],
+                'total_success' => $newStats['total_success'],
+                'total_failed' => $newStats['total_failed'],
+                'success_rate' => $successRate,
+                'execution_time' => $executionTime > 0 ? $executionTime : null,
+            ]);
+
+            $log->addLogEntry('آمار لاگ همگام‌سازی شد', [
+                'synced_by' => 'user',
+                'old_stats' => $oldStats,
+                'new_stats' => $newStats,
+                'success_rate' => $successRate,
+                'execution_time' => $executionTime
+            ]);
+
+            Log::info("📊 آمار لاگ {$log->id} همگام‌سازی شد", [
+                'execution_id' => $log->execution_id,
+                'old_stats' => $oldStats,
+                'new_stats' => $newStats
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'آمار لاگ با موفقیت همگام‌سازی شد',
+                'stats' => $newStats
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('خطا در همگام‌سازی آمار لاگ', [
+                'log_id' => $log->id,
+                'error' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'خطا در همگام‌سازی آمار: ' . $e->getMessage()
+            ], 500);
+        }
     }
 }
