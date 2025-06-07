@@ -25,9 +25,10 @@ class ProcessSinglePageJob implements ShouldQueue
     protected string $executionId;
     protected int $pageNumber;
 
-    public function __construct(int $configId, string $executionId, int $pageNumber)
+    public function __construct($config, int $pageNumber, string $executionId)
     {
-        $this->configId = $configId;
+        // اگر Config object باشد، ID را استخراج کن
+        $this->configId = is_object($config) ? $config->id : (int)$config;
         $this->executionId = $executionId;
         $this->pageNumber = $pageNumber;
 
@@ -157,8 +158,8 @@ class ProcessSinglePageJob implements ShouldQueue
                 'execution_id' => $this->executionId
             ]);
 
-            // Job پایان اجرا را dispatch کن
-            ProcessSinglePageJob::dispatch($this->configId, $this->executionId, -1)
+            // Job پایان اجرا را dispatch کن - اصلاح شده
+            ProcessSinglePageJob::dispatch($this->configId, -1, $this->executionId)
                 ->delay(now()->addSeconds(5));
             return;
         }
@@ -171,8 +172,8 @@ class ProcessSinglePageJob implements ShouldQueue
                 'execution_id' => $this->executionId
             ]);
 
-            // Job پایان اجرا را dispatch کن
-            ProcessSinglePageJob::dispatch($this->configId, $this->executionId, -1)
+            // Job پایان اجرا را dispatch کن - اصلاح شده
+            ProcessSinglePageJob::dispatch($this->configId, -1, $this->executionId)
                 ->delay(now()->addSeconds(5));
             return;
         }
@@ -181,7 +182,8 @@ class ProcessSinglePageJob implements ShouldQueue
         $nextPage = $this->pageNumber + 1;
         $delay = $config->delay_seconds ?? 3;
 
-        ProcessSinglePageJob::dispatch($this->configId, $this->executionId, $nextPage)
+        // اصلاح شده: ارسال ID به جای object
+        ProcessSinglePageJob::dispatch($this->configId, $nextPage, $this->executionId)
             ->delay(now()->addSeconds($delay));
 
         Log::info("📄 صفحه بعدی برنامه‌ریزی شد", [

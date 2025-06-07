@@ -21,18 +21,42 @@ Route::middleware(['auth'])->group(function () {
     Route::get('configs/{config}/logs', [ConfigController::class, 'logs'])->name('configs.logs');
     Route::get('configs/{config}/logs/{log}', [ConfigController::class, 'logDetails'])->name('configs.log-details');
 
-    // اجرای بک‌گراند
+    // Routes اجرا و مدیریت
+    Route::post('configs/{config}/start', [ConfigController::class, 'executeBackground'])->name('configs.start');
+    Route::post('configs/{config}/start-fast', [ConfigController::class, 'runSync'])->name('configs.start-fast');
     Route::post('configs/{config}/execute-background', [ConfigController::class, 'executeBackground'])->name('configs.execute-background');
-
-    // اجرای فوری
     Route::post('configs/{config}/run-sync', [ConfigController::class, 'runSync'])->name('configs.run-sync');
-
-    // توقف اجرا - اینجا مشکل بود! باید stopExecution باشه نه stop
-    Route::post('configs/{config}/stop-execution', [ConfigController::class, 'stopExecution'])->name('configs.stop-execution');
+    Route::post('configs/{config}/stop', [ConfigController::class, 'stopExecution'])->name('configs.stop');
 
     // مدیریت Worker
-    Route::get('configs/worker/status', [ConfigController::class, 'workerStatus'])->name('configs.worker.status');
-    Route::post('configs/{config}/worker/manage', [ConfigController::class, 'manageWorker'])->name('configs.worker.manage');
+    Route::post('admin/worker/start', function() {
+        $result = \App\Services\QueueManagerService::startWorker();
+        return response()->json([
+            'success' => $result,
+            'message' => $result ? '✅ Worker شروع شد' : '❌ خطا در شروع Worker',
+            'worker_status' => \App\Services\QueueManagerService::getWorkerStatus()
+        ]);
+    })->name('admin.worker.start');
+
+    Route::post('admin/worker/stop', function() {
+        $result = \App\Services\QueueManagerService::stopWorker();
+        return response()->json([
+            'success' => $result,
+            'message' => $result ? '✅ Worker متوقف شد' : '❌ خطا در توقف Worker',
+            'worker_status' => \App\Services\QueueManagerService::getWorkerStatus()
+        ]);
+    })->name('admin.worker.stop');
+
+    Route::post('admin/worker/restart', function() {
+        $result = \App\Services\QueueManagerService::restartWorker();
+        return response()->json([
+            'success' => $result,
+            'message' => $result ? '✅ Worker راه‌اندازی مجدد شد' : '❌ خطا در راه‌اندازی مجدد Worker',
+            'worker_status' => \App\Services\QueueManagerService::getWorkerStatus()
+        ]);
+    })->name('admin.worker.restart');
+
+    Route::get('admin/worker/status', [ConfigController::class, 'workerStatus'])->name('admin.worker.status');
 
     // Profile routes
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');

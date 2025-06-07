@@ -109,11 +109,15 @@ class ExecutionLog extends Model
 
         foreach ($context as $key => $value) {
             if (is_array($value)) {
-                // تبدیل آرایه‌های تو در تو به JSON string
+                // تبدیل آرایه‌های تو در تو به JSON string یا sanitize مجدد
                 $sanitized[$key] = $this->sanitizeContext($value);
             } elseif (is_object($value)) {
-                // تبدیل object به array
-                $sanitized[$key] = json_decode(json_encode($value), true);
+                // تبدیل object به array ساده
+                try {
+                    $sanitized[$key] = json_decode(json_encode($value), true);
+                } catch (\Exception $e) {
+                    $sanitized[$key] = 'Object (' . get_class($value) . ')';
+                }
             } elseif (is_resource($value)) {
                 // resource را نادیده بگیر
                 $sanitized[$key] = 'Resource';
@@ -170,32 +174,49 @@ class ExecutionLog extends Model
     }
 
     /**
-     * متوقف کردن اجرا با آمار نهایی (بهبود یافته)
+     * متوقف کردن اجرا - نسخه بسیار ساده
+     */
+    public function simpleStop(): void
+    {
+        try {
+            $this->update([
+                'status' => self::STATUS_STOPPED,
+                'finished_at' => now(),
+                'stop_reason' => 'متوقف شده توسط کاربر',
+                'error_message' => 'متوقف شده توسط کاربر'
+            ]);
+
+            Log::info("⏹️ ExecutionLog ساده متوقف شد", [
+                'execution_id' => $this->execution_id
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error("❌ خطا در متوقف کردن ساده ExecutionLog", [
+                'execution_id' => $this->execution_id,
+                'error' => $e->getMessage()
+            ]);
+        }
+    }
+
+    /**
+     * متوقف کردن اجرا با آمار نهایی (نسخه ساده‌تر)
      */
     public function stop(array $finalStats = []): void
     {
-        // محاسبه زمان اجرا صحیح
-        $executionTime = $this->started_at ? now()->diffInSeconds($this->started_at) : 0;
+        try {
+            // محاسبه زمان اجرا صحیح
+            $executionTime = $this->started_at ? now()->diffInSeconds($this->started_at) : 0;
+            $executionTime = max(0, $executionTime); // اطمینان از مثبت بودن
 
-        // اطمینان از مثبت بودن زمان
-        if ($executionTime < 0) {
-            $executionTime = 0;
-            Log::warning("⚠️ زمان اجرا منفی محاسبه شد، صفر قرار داده شد", [
-                'execution_id' => $this->execution_id,
-                'started_at' => $this->started_at,
-                'now' => now()
-            ]);
-        }
+            // دریافت آمار واقعی از کانفیگ
+            $config = $this->config;
+            $actualStats = [
+                'total_processed' => $config ? $config->total_processed : 0,
+                'total_success' => $config ? $config->total_success : 0,
+                'total_failed' => $config ? $config->total_failed : 0
+            ];
 
-        // دریافت آمار واقعی از کانفیگ
-        $config = $this->config;
-        $actualStats = [
-            'total_processed' => $config ? $config->total_processed : 0,
-            'total_success' => $config ? $config->total_success : 0,
-            'total_failed' => $config ? $config->total_failed : 0
-        ];
-
-        DB::transaction(function () use ($finalStats, $executionTime, $actualStats) {
+            // بروزرسانی ExecutionLog
             $this->update([
                 'status' => self::STATUS_STOPPED,
                 'total_processed' => max($finalStats['total_processed_at_stop'] ?? 0, $actualStats['total_processed']),
@@ -211,34 +232,43 @@ class ExecutionLog extends Model
                 'finished_at' => now(),
                 'last_activity_at' => now(),
             ]);
-        });
 
-        // بروزرسانی آمار کانفیگ
-        if ($config) {
-            $config->syncStatsFromLogs();
+            // بروزرسانی آمار کانفیگ
+            if ($config) {
+                $config->syncStatsFromLogs();
+            }
+
+            // ثبت لاگ ساده
+            $this->addLogEntry('⏹️ اجرا متوقف شد', [
+                'stopped_manually' => $finalStats['stopped_manually'] ?? false,
+                'execution_time_seconds' => $executionTime,
+                'stopped_at' => now()->toISOString(),
+                'final_stats' => [
+                    'total_processed' => $this->total_processed,
+                    'total_success' => $this->total_success,
+                    'total_failed' => $this->total_failed
+                ]
+            ]);
+
+            Log::info("⏹️ ExecutionLog متوقف شد", [
+                'execution_id' => $this->execution_id,
+                'execution_time' => $executionTime,
+                'final_stats' => $actualStats
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error("❌ خطا در متوقف کردن ExecutionLog", [
+                'execution_id' => $this->execution_id,
+                'error' => $e->getMessage()
+            ]);
+
+            // حداقل وضعیت را تغییر دهیم
+            $this->update([
+                'status' => self::STATUS_STOPPED,
+                'finished_at' => now(),
+                'error_message' => 'خطا در فرآیند توقف: ' . $e->getMessage()
+            ]);
         }
-
-        $this->addLogEntry('⏹️ اجرا متوقف شد', array_merge($finalStats, [
-            'actual_stats_from_config' => $actualStats,
-            'execution_time_seconds' => $executionTime,
-            'stopped_at' => now()->toISOString(),
-            'final_log_stats' => [
-                'total_processed' => $this->total_processed,
-                'total_success' => $this->total_success,
-                'total_failed' => $this->total_failed
-            ]
-        ]));
-
-        Log::info("⏹️ ExecutionLog متوقف شد", [
-            'execution_id' => $this->execution_id,
-            'execution_time' => $executionTime,
-            'final_stats' => $actualStats,
-            'log_stats' => [
-                'total_processed' => $this->total_processed,
-                'total_success' => $this->total_success,
-                'total_failed' => $this->total_failed
-            ]
-        ]);
     }
 
     /**
@@ -357,11 +387,13 @@ class ExecutionLog extends Model
         }
 
         if ($this->started_at && $this->finished_at) {
-            return $this->finished_at->diffInSeconds($this->started_at);
+            $diff = $this->finished_at->diffInSeconds($this->started_at);
+            return max(0, $diff); // اطمینان از مثبت بودن
         }
 
         if ($this->started_at && $this->status === 'running') {
-            return now()->diffInSeconds($this->started_at);
+            $diff = now()->diffInSeconds($this->started_at);
+            return max(0, $diff); // اطمینان از مثبت بودن
         }
 
         return 0;

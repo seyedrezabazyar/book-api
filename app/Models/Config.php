@@ -250,6 +250,9 @@ class Config extends Model
             'total_books_processed' => $this->total_processed,
             'total_books_success' => $this->total_success,
             'total_books_failed' => $this->total_failed,
+            'total_processed' => $this->total_processed,
+            'total_success' => $this->total_success,
+            'total_failed' => $this->total_failed,
             'success_rate' => $this->total_processed > 0
                 ? round(($this->total_success / $this->total_processed) * 100, 2)
                 : 0,
@@ -258,4 +261,19 @@ class Config extends Model
             'is_currently_running' => $this->is_running
         ];
     }
+
+    /**
+     * دریافت آمار execution logs
+     */
+    public function getExecutionStats(): array
+    {
+        return [
+            'total_executions' => $this->executionLogs()->count(),
+            'completed_executions' => $this->executionLogs()->where('status', 'completed')->count(),
+            'failed_executions' => $this->executionLogs()->where('status', 'failed')->count(),
+            'stopped_executions' => $this->executionLogs()->where('status', 'stopped')->count(),
+            'running_executions' => $this->executionLogs()->where('status', 'running')->count(),
+        ];
+    }
+
 }

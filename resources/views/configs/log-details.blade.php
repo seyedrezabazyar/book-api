@@ -17,14 +17,15 @@
         </div>
 
         @php
-            // محاسبه زمان اجرا صحیح
+            // محاسبه زمان اجرا صحیح - اصلاح شده
             $executionTimeSeconds = 0;
-            if ($log->started_at && $log->finished_at) {
-                $executionTimeSeconds = $log->finished_at->diffInSeconds($log->started_at);
-            } elseif ($log->started_at && $log->status === 'running') {
-                $executionTimeSeconds = now()->diffInSeconds($log->started_at);
-            } elseif ($log->execution_time && $log->execution_time > 0) {
+
+            if ($log->execution_time && $log->execution_time > 0) {
                 $executionTimeSeconds = $log->execution_time;
+            } elseif ($log->started_at && $log->finished_at) {
+                $executionTimeSeconds = max(0, $log->finished_at->diffInSeconds($log->started_at));
+            } elseif ($log->started_at && $log->status === 'running') {
+                $executionTimeSeconds = max(0, now()->diffInSeconds($log->started_at));
             }
 
             // اصلاح وضعیت در صورت نیاز (نمایش موقت)

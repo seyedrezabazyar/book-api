@@ -46,10 +46,10 @@ class ApiDataService
                 'execution_id' => $this->executionLog->execution_id
             ]);
 
-            // ایجاد Job برای هر صفحه
+            // ایجاد Jobs برای هر صفحه
             for ($page = $currentPage; $page < $currentPage + $maxPages; $page++) {
                 ProcessSinglePageJob::dispatch(
-                    $this->config,
+                    $this->config->id, // ارسال ID به جای object
                     $page,
                     $this->executionLog->execution_id
                 );
@@ -57,7 +57,7 @@ class ApiDataService
 
             // تنظیم Job نهایی برای تمام کردن اجرا
             ProcessSinglePageJob::dispatch(
-                $this->config,
+                $this->config->id, // ارسال ID به جای object
                 -1, // شماره صفحه منفی = پایان اجرا
                 $this->executionLog->execution_id
             )->delay(now()->addSeconds($this->config->page_delay * $maxPages + 60));
@@ -247,7 +247,7 @@ class ApiDataService
         $pageStats = ['total' => 0, 'success' => 0, 'failed' => 0, 'duplicate' => 0];
         $bookDetails = [];
 
-        Log::info("📚 شروع پردازش {count($books)} کتاب در صفحه {$pageNumber}", [
+        Log::info("📚 شروع پردازش " . count($books) . " کتاب در صفحه {$pageNumber}", [
             'config_id' => $this->config->id,
             'page' => $pageNumber,
             'books_count' => count($books)
@@ -258,6 +258,11 @@ class ApiDataService
             $bookStartTime = microtime(true);
 
             try {
+                // اطمینان از اینکه bookData آرایه است
+                if (!is_array($bookData)) {
+                    throw new \Exception('داده کتاب باید آرایه باشد');
+                }
+
                 $result = $this->createBook($bookData, $apiSettings['field_mapping'] ?? []);
                 $bookProcessTime = round((microtime(true) - $bookStartTime) * 1000, 2);
 
@@ -303,7 +308,7 @@ class ApiDataService
 
                 $bookDetails[] = [
                     'index' => $index + 1,
-                    'title' => $bookData['title'] ?? 'Unknown',
+                    'title' => is_array($bookData) ? ($bookData['title'] ?? 'Unknown') : 'Invalid Data',
                     'status' => 'failed',
                     'error' => $e->getMessage(),
                     'process_time_ms' => $bookProcessTime
@@ -313,7 +318,8 @@ class ApiDataService
                     'page' => $pageNumber,
                     'book_index' => $index + 1,
                     'error' => $e->getMessage(),
-                    'book_data' => $bookData
+                    'book_data_type' => gettype($bookData),
+                    'book_data' => is_array($bookData) ? $bookData : 'Non-array data'
                 ]);
             }
 
@@ -323,13 +329,15 @@ class ApiDataService
             }
         }
 
-        // ثبت جزئیات کامل در ExecutionLog
-        $executionLog->addLogEntry("✅ صفحه {$pageNumber} پردازش شد", [
+        // ثبت جزئیات کامل در ExecutionLog با context ساده
+        $simpleContext = [
             'page' => $pageNumber,
             'page_stats' => $pageStats,
             'books_found' => count($books),
-            'book_details' => $bookDetails
-        ]);
+            'books_processed' => count($bookDetails)
+        ];
+
+        $executionLog->addLogEntry("✅ صفحه {$pageNumber} پردازش شد", $simpleContext);
 
         Log::info("✅ پردازش کتاب‌های صفحه {$pageNumber} تمام شد", [
             'config_id' => $this->config->id,
@@ -612,18 +620,46 @@ class ApiDataService
 
     private function extractBooksFromApiData(array $data): array
     {
+        // لاگ ساختار داده برای debug
+        Log::info("📖 ساختار پاسخ API", [
+            'data_keys' => array_keys($data),
+            'data_structure' => array_map(function($value) {
+                return is_array($value) ? 'array[' . count($value) . ']' : gettype($value);
+            }, $data)
+        ]);
+
+        // بررسی ساختار استاندارد
         if (isset($data['status'], $data['data']['books']) && $data['status'] === 'success') {
-            return $data['data']['books'];
+            $books = $data['data']['books'];
+            Log::info("📚 کتاب‌ها از data.books استخراج شد", ['count' => count($books)]);
+            return is_array($books) ? $books : [];
         }
 
-        $possibleKeys = ['data', 'books', 'results', 'items'];
+        // بررسی کلیدهای مختلف
+        $possibleKeys = ['data', 'books', 'results', 'items', 'records', 'list'];
         foreach ($possibleKeys as $key) {
             if (isset($data[$key]) && is_array($data[$key]) && !empty($data[$key])) {
-                return $data[$key];
+                // بررسی اینکه آیا اولین عنصر شبیه کتاب است
+                $firstItem = $data[$key][0] ?? null;
+                if (is_array($firstItem) && (isset($firstItem['title']) || isset($firstItem['name']))) {
+                    Log::info("📚 کتاب‌ها از کلید '{$key}' استخراج شد", ['count' => count($data[$key])]);
+                    return $data[$key];
+                }
             }
         }
 
-        return isset($data['title']) ? [$data] : [];
+        // اگر خود data یک کتاب واحد باشد
+        if (isset($data['title']) || isset($data['name'])) {
+            Log::info("📚 یک کتاب واحد شناسایی شد");
+            return [$data];
+        }
+
+        // اگر هیچ‌کدام کار نکرد، لاگ کامل ساختار
+        Log::warning("📚 هیچ کتابی در پاسخ یافت نشد", [
+            'full_data' => $data
+        ]);
+
+        return [];
     }
 
     private function extractFieldsFromData(array $data, array $fieldMapping): array

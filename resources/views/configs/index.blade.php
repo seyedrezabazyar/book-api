@@ -156,7 +156,7 @@
                     <td class="p-4">
                         @php
                             $displayStats = $config->getDisplayStats();
-                            $executionStats = $config->getExecutionStats();
+                            $executionLogs = $config->executionLogs();
                         @endphp
 
                         <div class="text-sm">
@@ -164,9 +164,21 @@
                             <div class="text-xs text-gray-600 mt-1">
                                 🔢 پردازش شده: {{ number_format($displayStats['total_processed']) }}<br>
                                 ✅ موفق: {{ number_format($displayStats['total_success']) }}<br>
-                                🏃 اجراها: {{ $executionStats['total_executions'] }}<br>
-                                ⏹️ متوقف: {{ $executionStats['stopped_executions'] }}
+                                🏃 اجراها: {{ $displayStats['total_executions'] }}<br>
+                                @if($displayStats['total_executions'] > 0)
+                                    ⏹️ متوقف: {{ $displayStats['stopped_executions'] }}<br>
+                                    ❌ ناموفق: {{ $displayStats['failed_executions'] }}
+                                @endif
                             </div>
+
+                            @if($displayStats['total_processed'] > 0)
+                                <div class="mt-2 text-xs">
+                                    <div class="text-gray-500">نرخ موفقیت: {{ $displayStats['success_rate'] }}%</div>
+                                    <div class="w-full bg-gray-200 rounded-full h-1 mt-1">
+                                        <div class="bg-green-600 h-1 rounded-full" style="width: {{ $displayStats['success_rate'] }}%"></div>
+                                    </div>
+                                </div>
+                            @endif
                         </div>
                     </td>
 
@@ -410,34 +422,36 @@
         }
 
         /**
-         * حذف کانفیگ
+         * حذف کانفیگ - اصلاح شده
          */
         function deleteConfig(configId) {
             if (!confirm('آیا مطمئن هستید که می‌خواهید این کانفیگ را حذف کنید؟\nتمام داده‌ها و آمار مرتبط نیز حذف خواهد شد.')) {
                 return;
             }
 
-            fetch(`/configs/${configId}`, {
-                method: 'DELETE',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
-                    'Accept': 'application/json'
-                }
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        showAlert(data.message, 'success');
-                        location.reload();
-                    } else {
-                        showAlert(data.message || 'خطا در حذف کانفیگ', 'error');
-                    }
-                })
-                .catch(error => {
-                    console.error('خطا در حذف کانفیگ:', error);
-                    showAlert('خطا در ارتباط با سرور', 'error');
-                });
+            // ایجاد form برای DELETE request
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = `/configs/${configId}`;
+            form.style.display = 'none';
+
+            // اضافه کردن CSRF token
+            const csrfInput = document.createElement('input');
+            csrfInput.type = 'hidden';
+            csrfInput.name = '_token';
+            csrfInput.value = document.querySelector('meta[name="csrf-token"]').content;
+            form.appendChild(csrfInput);
+
+            // اضافه کردن method override
+            const methodInput = document.createElement('input');
+            methodInput.type = 'hidden';
+            methodInput.name = '_method';
+            methodInput.value = 'DELETE';
+            form.appendChild(methodInput);
+
+            // اضافه کردن form به DOM و submit کردن
+            document.body.appendChild(form);
+            form.submit();
         }
 
         /**
@@ -526,7 +540,8 @@
             })
                 .then(response => response.json())
                 .then(data => {
-                    const message = `وضعیت Worker:\n${data.status}\nJobs در صف: ${data.pending_jobs}\nJobs شکست خورده: ${data.failed_jobs}`;
+                    const status = data.worker_status.is_running ? 'فعال' : 'غیرفعال';
+                    const message = `وضعیت Worker: ${status}\nJobs در صف: ${data.queue_stats.pending_jobs}\nJobs شکست خورده: ${data.queue_stats.failed_jobs}`;
                     showAlert(message, 'info');
                 })
                 .catch(error => {
