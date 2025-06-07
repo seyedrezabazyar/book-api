@@ -274,58 +274,6 @@ class ConfigController extends Controller
     }
 
     /**
-     * اجرای فوری کانفیگ (روش قبلی)
-     */
-    public function runSync(Config $config): RedirectResponse
-    {
-        if (!$config->isActive()) {
-            return redirect()->back()
-                ->with('error', 'کانفیگ غیرفعال است و قابل اجرا نیست.');
-        }
-
-        if ($config->is_running) {
-            return redirect()->back()
-                ->with('warning', 'کانفیگ در حال اجرا است. لطفاً صبر کنید یا آن را متوقف کنید.');
-        }
-
-        // تنظیم timeout برای اجرای فوری
-        set_time_limit(600); // 10 دقیقه
-        ini_set('memory_limit', '512M');
-
-        try {
-            Log::info("شروع اجرای فوری", [
-                'config_id' => $config->id,
-                'config_name' => $config->name,
-                'user_id' => Auth::id()
-            ]);
-
-            $service = new ApiDataService($config);
-            $stats = $service->fetchData();
-
-            $message = $this->formatExecutionResults($stats);
-
-            Log::info("اجرای فوری تمام شد", [
-                'config_id' => $config->id,
-                'stats' => $stats,
-                'user_id' => Auth::id()
-            ]);
-
-            return redirect()->back()->with('success', $message);
-
-        } catch (\Exception $e) {
-            Log::error('خطا در اجرای فوری', [
-                'config_id' => $config->id,
-                'config_name' => $config->name,
-                'error' => $e->getMessage(),
-                'user_id' => Auth::id()
-            ]);
-
-            return redirect()->back()
-                ->with('error', 'خطا در اجرای فوری: ' . $e->getMessage());
-        }
-    }
-
-    /**
      * اجرای بک‌گراند - با شروع خودکار Worker (متد جدید)
      */
     public function executeBackground(Config $config): JsonResponse
@@ -405,7 +353,7 @@ class ConfigController extends Controller
     }
 
     /**
-     * متوقف کردن اجرا - نسخه فوق‌العاده ساده
+     * متوقف کردن اجرا - نسخه اصلاح شده و قوی‌تر
      */
     public function stopExecution(Config $config): JsonResponse
     {
@@ -422,8 +370,11 @@ class ConfigController extends Controller
                 ], 422);
             }
 
-            // 1. فوری: کانفیگ را غیرفعال کن
-            $config->update(['is_running' => false]);
+            // 1. فوری: کانفیگ را غیرفعال کن - با transaction
+            DB::transaction(function () use ($config) {
+                $config->update(['is_running' => false]);
+            });
+
             Log::info('✅ کانفیگ متوقف شد');
 
             // 2. یافتن execution log فعال
@@ -435,11 +386,20 @@ class ConfigController extends Controller
             // 3. متوقف کردن execution log
             if ($activeExecution) {
                 try {
+                    $executionTime = $activeExecution->started_at ? now()->diffInSeconds($activeExecution->started_at) : 0;
+
                     $activeExecution->update([
                         'status' => 'stopped',
                         'finished_at' => now(),
+                        'execution_time' => $executionTime,
                         'stop_reason' => 'متوقف شده توسط کاربر',
                         'error_message' => 'متوقف شده توسط کاربر'
+                    ]);
+
+                    $activeExecution->addLogEntry('⏹️ اجرا توسط کاربر متوقف شد', [
+                        'stopped_manually' => true,
+                        'stopped_at' => now()->toISOString(),
+                        'execution_time' => $executionTime
                     ]);
 
                     Log::info("⏹️ ExecutionLog متوقف شد", ['execution_id' => $activeExecution->execution_id]);
@@ -448,15 +408,53 @@ class ConfigController extends Controller
                 }
             }
 
-            // 4. حذف Jobs - ساده
+            // 4. حذف همه Jobs مرتبط با این کانفیگ - اصلاح شده
             try {
+                // حذف بر اساس configId
                 $deletedJobs = DB::table('jobs')
                     ->where('payload', 'like', '%"configId":' . $config->id . '%')
+                    ->orWhere('payload', 'like', '%"config":' . $config->id . '%')
                     ->delete();
+
                 Log::info("🗑️ {$deletedJobs} Job حذف شد");
+
+                // اضافه: پاکسازی Jobs شکست خورده مرتبط با این کانفیگ
+                $deletedFailedJobs = DB::table('failed_jobs')
+                    ->where('payload', 'like', '%"configId":' . $config->id . '%')
+                    ->orWhere('payload', 'like', '%"config":' . $config->id . '%')
+                    ->delete();
+
+                if ($deletedFailedJobs > 0) {
+                    Log::info("🗑️ {$deletedFailedJobs} Failed Job حذف شد");
+                }
+
             } catch (\Exception $e) {
                 Log::error('خطا در حذف Jobs', ['error' => $e->getMessage()]);
                 $deletedJobs = 0;
+            }
+
+            // 5. Force stop: اگر هنوز Jobs هستند، آنها را با روش دیگری حذف کن
+            try {
+                // بررسی مجدد Jobs باقی‌مانده
+                $remainingJobs = DB::table('jobs')
+                    ->where('payload', 'like', '%ProcessSinglePageJob%')
+                    ->where('payload', 'like', '%' . $config->id . '%')
+                    ->count();
+
+                if ($remainingJobs > 0) {
+                    Log::warning("⚠️ هنوز {$remainingJobs} Job باقی‌مانده وجود دارد");
+
+                    // حذف اجباری
+                    $forceDeleted = DB::table('jobs')
+                        ->where('payload', 'like', '%ProcessSinglePageJob%')
+                        ->where('payload', 'like', '%' . $config->id . '%')
+                        ->delete();
+
+                    Log::info("🔨 Force delete: {$forceDeleted} Job حذف شد");
+                    $deletedJobs += $forceDeleted;
+                }
+            } catch (\Exception $e) {
+                Log::error('خطا در Force delete Jobs', ['error' => $e->getMessage()]);
             }
 
             $message = "✅ اجرا متوقف شد!\n";
@@ -478,7 +476,7 @@ class ConfigController extends Controller
 
             // اطمینان از توقف کانفیگ حتی در صورت خطا
             try {
-                $config->update(['is_running' => false]);
+                DB::table('configs')->where('id', $config->id)->update(['is_running' => false]);
             } catch (\Exception $ex) {
                 // نادیده بگیر
             }
@@ -889,5 +887,172 @@ class ConfigController extends Controller
                 'message' => 'خطا در همگام‌سازی آمار: ' . $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * اجرای فوری کانفیگ (روش قبلی) - با timeout و interrupt handling
+     */
+    public function runSync(Config $config): RedirectResponse
+    {
+        if (!$config->isActive()) {
+            return redirect()->back()
+                ->with('error', 'کانفیگ غیرفعال است و قابل اجرا نیست.');
+        }
+
+        if ($config->is_running) {
+            return redirect()->back()
+                ->with('warning', 'کانفیگ در حال اجرا است. لطفاً صبر کنید یا آن را متوقف کنید.');
+        }
+
+        // 🔥 تنظیم timeout و memory limit محدود
+        set_time_limit(300); // 5 دقیقه maximum
+        ini_set('memory_limit', '256M'); // حداکثر 256MB
+
+        // 🔥 تنظیم signal handler برای interrupt
+        if (function_exists('pcntl_signal')) {
+            pcntl_signal(SIGTERM, [$this, 'handleInterrupt']);
+            pcntl_signal(SIGINT, [$this, 'handleInterrupt']);
+        }
+
+        try {
+            Log::info("شروع اجرای فوری با timeout", [
+                'config_id' => $config->id,
+                'config_name' => $config->name,
+                'user_id' => Auth::id(),
+                'timeout' => 300
+            ]);
+
+            $service = new ApiDataService($config);
+
+            // 🔥 اجرای محدود با check های مداوم
+            $stats = $this->runWithTimeoutCheck($service, $config);
+
+            $message = $this->formatExecutionResults($stats);
+
+            Log::info("اجرای فوری تمام شد", [
+                'config_id' => $config->id,
+                'stats' => $stats,
+                'user_id' => Auth::id()
+            ]);
+
+            return redirect()->back()->with('success', $message);
+
+        } catch (\Exception $e) {
+            Log::error('خطا در اجرای فوری', [
+                'config_id' => $config->id,
+                'config_name' => $config->name,
+                'error' => $e->getMessage(),
+                'user_id' => Auth::id()
+            ]);
+
+            // 🔥 اطمینان از توقف کانفیگ در صورت خطا
+            $config->update(['is_running' => false]);
+
+            return redirect()->back()
+                ->with('error', 'خطا در اجرای فوری: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * اجرای محدود با timeout check
+     */
+    private function runWithTimeoutCheck(ApiDataService $service, Config $config): array
+    {
+        $startTime = time();
+        $maxExecutionTime = 300; // 5 دقیقه
+        $stats = ['total' => 0, 'success' => 0, 'failed' => 0, 'duplicate' => 0];
+
+        // شروع اجرا
+        $config->update(['is_running' => true]);
+
+        try {
+            $executionLog = \App\Models\ExecutionLog::createNew($config);
+
+            $apiSettings = $config->getApiSettings();
+            $crawlingSettings = $config->getCrawlingSettings();
+            $currentPage = $crawlingSettings['start_page'] ?? 1;
+            $maxPages = min($crawlingSettings['max_pages'] ?? 10, 20); // حداکثر 20 صفحه برای sync
+
+            for ($page = $currentPage; $page <= $maxPages; $page++) {
+                // 🔥 بررسی timeout
+                if ((time() - $startTime) >= $maxExecutionTime) {
+                    Log::warning("Timeout reached در صفحه {$page}");
+                    break;
+                }
+
+                // 🔥 بررسی اینکه کانفیگ متوقف نشده باشد
+                $config->refresh();
+                if (!$config->is_running) {
+                    Log::info("کانفیگ متوقف شده، اجرای sync متوقف می‌شود");
+                    break;
+                }
+
+                // 🔥 signal check برای interrupt
+                if (function_exists('pcntl_signal_dispatch')) {
+                    pcntl_signal_dispatch();
+                }
+
+                // پردازش صفحه
+                try {
+                    $pageResult = $service->processPage($page, $executionLog);
+
+                    if (isset($pageResult['total'])) {
+                        $stats['total'] += $pageResult['total'] ?? 0;
+                        $stats['success'] += $pageResult['success'] ?? 0;
+                        $stats['failed'] += $pageResult['failed'] ?? 0;
+                        $stats['duplicate'] += $pageResult['duplicate'] ?? 0;
+                    }
+
+                    // اگر صفحه خالی بود، متوقف کن
+                    if (isset($pageResult['action']) && $pageResult['action'] === 'no_more_data') {
+                        Log::info("صفحه خالی، اجرا متوقف می‌شود");
+                        break;
+                    }
+
+                } catch (\Exception $e) {
+                    Log::error("خطا در پردازش صفحه {$page}: " . $e->getMessage());
+                    $stats['failed']++;
+                    break;
+                }
+
+                // 🔥 حد memory check
+                if (memory_get_usage(true) > 200 * 1024 * 1024) { // 200MB
+                    Log::warning("Memory limit reached");
+                    break;
+                }
+
+                // تاخیر بین صفحات
+                if ($config->page_delay > 0) {
+                    sleep(min($config->page_delay, 10)); // حداکثر 10 ثانیه delay
+                }
+            }
+
+            $executionTime = time() - $startTime;
+            $stats['execution_time'] = $executionTime;
+
+            $executionLog->markCompleted($stats);
+
+        } catch (\Exception $e) {
+            Log::error("خطا در runWithTimeoutCheck: " . $e->getMessage());
+            throw $e;
+        } finally {
+            // 🔥 اطمینان از توقف کانفیگ
+            $config->update(['is_running' => false]);
+        }
+
+        return $stats;
+    }
+
+    /**
+     * Handle interrupt signals
+     */
+    public function handleInterrupt($signal)
+    {
+        Log::warning("Signal {$signal} received, stopping execution");
+
+        // متوقف کردن همه کانفیگ‌ها
+        \App\Models\Config::where('is_running', true)->update(['is_running' => false]);
+
+        exit(0);
     }
 }

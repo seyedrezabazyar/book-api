@@ -46,19 +46,21 @@ class ProcessSinglePageJob implements ShouldQueue
                 'job_id' => $this->job?->getJobId()
             ]);
 
-            // دریافت کانفیگ و بررسی وضعیت
+            // 🔥 بررسی اولیه - اگر کانفیگ متوقف شده، Job را فوراً متوقف کن
             $config = Config::find($this->configId);
             if (!$config) {
                 Log::error("❌ کانفیگ {$this->configId} یافت نشد");
+                $this->delete(); // حذف Job از صف
                 return;
             }
 
-            // بررسی اینکه آیا کانفیگ هنوز در حال اجرا است
+            // 🔥 اگر کانفیگ در حال اجرا نیست، Job را متوقف کن
             if (!$config->is_running) {
-                Log::info("⏹️ کانفیگ {$this->configId} دیگر در حال اجرا نیست، Job متوقف می‌شود", [
+                Log::info("⏹️ کانفیگ {$this->configId} متوقف شده، Job لغو می‌شود", [
                     'execution_id' => $this->executionId,
                     'page' => $this->pageNumber
                 ]);
+                $this->delete(); // حذف Job از صف
                 return;
             }
 
@@ -66,15 +68,25 @@ class ProcessSinglePageJob implements ShouldQueue
             $executionLog = ExecutionLog::where('execution_id', $this->executionId)->first();
             if (!$executionLog) {
                 Log::error("❌ ExecutionLog با شناسه {$this->executionId} یافت نشد");
+                $this->delete();
                 return;
             }
 
-            // بررسی وضعیت ExecutionLog
+            // 🔥 بررسی وضعیت ExecutionLog
             if ($executionLog->status !== 'running') {
                 Log::info("⏹️ ExecutionLog {$this->executionId} دیگر running نیست، Job متوقف می‌شود", [
                     'status' => $executionLog->status,
                     'page' => $this->pageNumber
                 ]);
+                $this->delete();
+                return;
+            }
+
+            // 🔥 بررسی دوباره قبل از پردازش - Double Check
+            $config->refresh(); // رفرش از دیتابیس
+            if (!$config->is_running) {
+                Log::info("⏹️ Double Check: کانفیگ {$this->configId} متوقف شده، Job لغو می‌شود");
+                $this->delete();
                 return;
             }
 
@@ -84,6 +96,14 @@ class ProcessSinglePageJob implements ShouldQueue
             // ایجاد service و پردازش صفحه
             $apiService = new ApiDataService($config);
             $result = $apiService->processPage($this->pageNumber, $executionLog);
+
+            // 🔥 بررسی نهایی قبل از ثبت نتایج
+            $config->refresh();
+            if (!$config->is_running) {
+                Log::info("⏹️ کانفیگ حین پردازش متوقف شد، نتایج ثبت نمی‌شود");
+                $this->delete();
+                return;
+            }
 
             Log::info("✅ ProcessSinglePageJob تمام شد", [
                 'config_id' => $this->configId,
@@ -151,6 +171,13 @@ class ProcessSinglePageJob implements ShouldQueue
      */
     private function scheduleNextPageIfNeeded(Config $config, ExecutionLog $executionLog, array $result): void
     {
+        // 🔥 بررسی وضعیت کانفیگ قبل از برنامه‌ریزی صفحه بعدی
+        $config->refresh();
+        if (!$config->is_running) {
+            Log::info("⏹️ کانفیگ متوقف شده، صفحه بعدی برنامه‌ریزی نمی‌شود");
+            return;
+        }
+
         // اگر داده‌ای در این صفحه نبود، اجرا را تمام کن
         if (isset($result['action']) && $result['action'] === 'no_more_data') {
             Log::info("📄 صفحه {$this->pageNumber} خالی بود، اجرا تمام می‌شود", [
