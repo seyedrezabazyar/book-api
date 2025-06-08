@@ -42,7 +42,6 @@ class ConfigRequest extends FormRequest
             'status' => 'required|in:active,inactive,draft',
 
             // تنظیمات عمومی
-            'user_agent' => 'nullable|string|max:500',
             'verify_ssl' => 'nullable|boolean',
             'follow_redirects' => 'nullable|boolean',
         ];
@@ -139,7 +138,6 @@ class ConfigRequest extends FormRequest
             'api_method.in' => 'متد HTTP باید GET یا POST باشد.',
 
             // پیام‌های عمومی
-            'user_agent.max' => 'User Agent نباید بیش از 500 کاراکتر باشد.',
             'description.max' => 'توضیحات نباید بیش از 1000 کاراکتر باشد.',
             'url_pattern.max' => 'الگوی URL نباید بیش از 500 کاراکتر باشد.',
         ];
@@ -160,7 +158,6 @@ class ConfigRequest extends FormRequest
             'delay_seconds' => 'تاخیر (ثانیه)',
             'records_per_run' => 'رکورد در هر اجرا',
             'status' => 'وضعیت',
-            'user_agent' => 'User Agent',
             'verify_ssl' => 'تأیید SSL',
             'follow_redirects' => 'پیگیری ریدایرکت',
             'api_endpoint' => 'نقطه پایانی API',

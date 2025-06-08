@@ -18,7 +18,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\Schema;
-
+use App\Helpers\UserAgentHelper;
 class ConfigController extends Controller
 {
 
@@ -289,7 +289,10 @@ class ConfigController extends Controller
 
             $apiSettings = $config->getApiSettings();
             $crawlingSettings = $config->getCrawlingSettings();
-
+            $selectedUserAgent = $crawlingSettings['user_agent'] ?? null;
+            if (empty($selectedUserAgent)) {
+                $selectedUserAgent = UserAgentHelper::getRandomUserAgent();
+            }
             $maxPages = min($crawlingSettings['max_pages'] ?? 50, 1000);
             $startPage = max($crawlingSettings['start_page'] ?? 1, 1);
 
@@ -302,6 +305,7 @@ class ConfigController extends Controller
             // ایجاد execution log
             $executionLog = ExecutionLog::createNew($config);
             $executionId = $executionLog->execution_id;
+
 
             // ایجاد Jobs برای هر صفحه
             for ($page = $startPage; $page <= $maxPages; $page++) {
@@ -321,10 +325,11 @@ class ConfigController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => "✅ اجرا در پس‌زمینه شروع شد!\n📄 تعداد {$maxPages} صفحه در صف قرار گرفت.\n🆔 شناسه اجرا: {$executionId}",
+                'message' => "✅ اجرا در پس‌زمینه شروع شد!\n📄 تعداد {$maxPages} صفحه در صف قرار گرفت.\n🆔 شناسه اجرا: {$executionId}\n🕵️ User Agent: {$selectedUserAgent}",
                 'execution_id' => $executionId,
                 'total_pages' => $maxPages,
-                'worker_status' => QueueManagerService::getWorkerStatus()
+                'worker_status' => QueueManagerService::getWorkerStatus(),
+                'user_agent' => $selectedUserAgent // این خط اضافه شود
             ]);
         } catch (\Exception $e) {
             Log::error('خطا در اجرای بک‌گراند', [
@@ -597,7 +602,6 @@ class ConfigController extends Controller
             'api_method' => 'required|in:GET,POST',
 
             // تنظیمات عمومی
-            'user_agent' => 'nullable|string|max:500',
             'verify_ssl' => 'boolean',
             'follow_redirects' => 'boolean',
         ];
@@ -626,7 +630,6 @@ class ConfigController extends Controller
     {
         return [
             'general' => [
-                'user_agent' => $request->input('user_agent', 'Mozilla/5.0 (compatible; BookScraper/1.0)'),
                 'verify_ssl' => $request->boolean('verify_ssl', true),
                 'follow_redirects' => $request->boolean('follow_redirects', true),
             ],
