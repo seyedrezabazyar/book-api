@@ -15,7 +15,7 @@ use App\Jobs\ProcessSinglePageJob;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
-use Illuminate\Support\Facades\DB; // اضافه کردن این خط
+use Illuminate\Support\Facades\DB; // ✅ اضافه شد
 
 class ApiDataService
 {

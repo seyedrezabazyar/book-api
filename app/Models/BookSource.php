@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\DB; // این خط مهم است
+use Illuminate\Support\Facades\DB; // ✅ اضافه شد
 
 class BookSource extends Model
 {

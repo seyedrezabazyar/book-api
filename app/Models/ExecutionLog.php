@@ -5,7 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\DB; // اضافه کردن این خط مهم است
+use Illuminate\Support\Facades\DB;
 
 class ExecutionLog extends Model
 {
@@ -84,13 +84,12 @@ class ExecutionLog extends Model
 
             $newEntry = [
                 'timestamp' => now()->toISOString(),
-                'message' => (string)$message, // اطمینان از string بودن
-                'context' => $this->sanitizeContext($context) // پاکسازی context
+                'message' => (string)$message,
+                'context' => $this->sanitizeContext($context)
             ];
 
             $currentLogs[] = $newEntry;
 
-            // بروزرسانی بدون استفاده از increment که ممکن است مشکل ایجاد کند
             $this->update(['log_details' => $currentLogs]);
         } catch (\Exception $e) {
             Log::error("❌ خطا در افزودن log entry", [
@@ -110,20 +109,16 @@ class ExecutionLog extends Model
 
         foreach ($context as $key => $value) {
             if (is_array($value)) {
-                // تبدیل آرایه‌های تو در تو به JSON string یا sanitize مجدد
                 $sanitized[$key] = $this->sanitizeContext($value);
             } elseif (is_object($value)) {
-                // تبدیل object به array ساده
                 try {
                     $sanitized[$key] = json_decode(json_encode($value), true);
                 } catch (\Exception $e) {
                     $sanitized[$key] = 'Object (' . get_class($value) . ')';
                 }
             } elseif (is_resource($value)) {
-                // resource را نادیده بگیر
                 $sanitized[$key] = 'Resource';
             } else {
-                // مقادیر ساده (string, int, bool, null)
                 $sanitized[$key] = $value;
             }
         }
@@ -175,16 +170,14 @@ class ExecutionLog extends Model
     }
 
     /**
-     * متوقف کردن اجرا با آمار نهایی (نسخه ساده‌تر)
+     * متوقف کردن اجرا با آمار نهایی
      */
     public function stop(array $finalStats = []): void
     {
         try {
-            // محاسبه زمان اجرا صحیح
             $executionTime = $this->started_at ? now()->diffInSeconds($this->started_at) : 0;
-            $executionTime = max(0, $executionTime); // اطمینان از مثبت بودن
+            $executionTime = max(0, $executionTime);
 
-            // دریافت آمار واقعی از کانفیگ
             $config = $this->config;
             $actualStats = [
                 'total_processed' => $config ? $config->total_processed : 0,
@@ -192,7 +185,6 @@ class ExecutionLog extends Model
                 'total_failed' => $config ? $config->total_failed : 0
             ];
 
-            // بروزرسانی ExecutionLog
             $this->update([
                 'status' => self::STATUS_STOPPED,
                 'total_processed' => max($finalStats['total_processed_at_stop'] ?? 0, $actualStats['total_processed']),
@@ -209,12 +201,10 @@ class ExecutionLog extends Model
                 'last_activity_at' => now(),
             ]);
 
-            // بروزرسانی آمار کانفیگ
             if ($config) {
                 $config->syncStatsFromLogs();
             }
 
-            // ثبت لاگ ساده
             $this->addLogEntry('⏹️ اجرا متوقف شد', [
                 'stopped_manually' => $finalStats['stopped_manually'] ?? false,
                 'execution_time_seconds' => $executionTime,
@@ -237,30 +227,12 @@ class ExecutionLog extends Model
                 'error' => $e->getMessage()
             ]);
 
-            // حداقل وضعیت را تغییر دهیم
             $this->update([
                 'status' => self::STATUS_STOPPED,
                 'finished_at' => now(),
                 'error_message' => 'خطا در فرآیند توقف: ' . $e->getMessage()
             ]);
         }
-    }
-
-    /**
-     * دریافت آمار واقعی از کانفیگ
-     */
-    private function getActualStatsFromConfig(): array
-    {
-        $config = $this->config;
-        if (!$config) {
-            return ['total_processed' => 0, 'total_success' => 0, 'total_failed' => 0];
-        }
-
-        return [
-            'total_processed' => $config->total_processed,
-            'total_success' => $config->total_success,
-            'total_failed' => $config->total_failed
-        ];
     }
 
     /**
@@ -284,42 +256,35 @@ class ExecutionLog extends Model
 
         try {
             DB::transaction(function () use ($pageStats) {
-                // قفل کردن سطر
                 $log = ExecutionLog::lockForUpdate()->find($this->id);
 
                 if (!$log) {
                     throw new \Exception("ExecutionLog {$this->id} یافت نشد");
                 }
 
-                // اطمینان از integer بودن مقادیر
                 $totalToAdd = is_numeric($pageStats['total'] ?? 0) ? (int)($pageStats['total'] ?? 0) : 0;
                 $successToAdd = is_numeric($pageStats['success'] ?? 0) ? (int)($pageStats['success'] ?? 0) : 0;
                 $failedToAdd = is_numeric($pageStats['failed'] ?? 0) ? (int)($pageStats['failed'] ?? 0) : 0;
                 $duplicateToAdd = is_numeric($pageStats['duplicate'] ?? 0) ? (int)($pageStats['duplicate'] ?? 0) : 0;
 
-                // بروزرسانی آمار تجمعی
                 $log->increment('total_processed', $totalToAdd);
                 $log->increment('total_success', $successToAdd);
                 $log->increment('total_failed', $failedToAdd);
                 $log->increment('total_duplicate', $duplicateToAdd);
 
-                // محاسبه نرخ موفقیت جدید
                 $newTotal = $log->total_processed + $totalToAdd;
                 $newSuccessRate = $newTotal > 0
                     ? round((($log->total_success + $successToAdd) / $newTotal) * 100, 2)
                     : 0;
 
-                // بروزرسانی آمار عملکرد
                 $log->update([
                     'success_rate' => $newSuccessRate,
                     'last_activity_at' => now()
                 ]);
             });
 
-            // رفرش مدل
             $this->refresh();
 
-            // ثبت لاگ بدون استفاده از آرایه در رشته
             $this->addLogEntry('📊 پیشرفت بروزرسانی شد', [
                 'page_stats' => $pageStats,
                 'cumulative_stats' => [
@@ -362,12 +327,12 @@ class ExecutionLog extends Model
 
         if ($this->started_at && $this->finished_at) {
             $diff = $this->finished_at->diffInSeconds($this->started_at);
-            return max(0, $diff); // اطمینان از مثبت بودن
+            return max(0, $diff);
         }
 
         if ($this->started_at && $this->status === 'running') {
             $diff = now()->diffInSeconds($this->started_at);
-            return max(0, $diff); // اطمینان از مثبت بودن
+            return max(0, $diff);
         }
 
         return 0;
@@ -401,12 +366,16 @@ class ExecutionLog extends Model
      */
     public function getStatusColorAttribute(): string
     {
-        return match ($this->status) {
-            self::STATUS_COMPLETED => 'green',
-            self::STATUS_FAILED => 'red',
-            self::STATUS_STOPPED => 'orange',
-            default => 'yellow'
-        };
+        switch ($this->status) {
+            case self::STATUS_COMPLETED:
+                return 'green';
+            case self::STATUS_FAILED:
+                return 'red';
+            case self::STATUS_STOPPED:
+                return 'orange';
+            default:
+                return 'yellow';
+        }
     }
 
     /**
@@ -414,13 +383,18 @@ class ExecutionLog extends Model
      */
     public function getStatusTextAttribute(): string
     {
-        return match ($this->status) {
-            self::STATUS_RUNNING => 'در حال اجرا',
-            self::STATUS_COMPLETED => 'تمام شده',
-            self::STATUS_FAILED => 'ناموفق',
-            self::STATUS_STOPPED => 'متوقف شده',
-            default => 'نامشخص'
-        ];
+        switch ($this->status) {
+            case self::STATUS_RUNNING:
+                return 'در حال اجرا';
+            case self::STATUS_COMPLETED:
+                return 'تمام شده';
+            case self::STATUS_FAILED:
+                return 'ناموفق';
+            case self::STATUS_STOPPED:
+                return 'متوقف شده';
+            default:
+                return 'نامشخص';
+        }
     }
 
     /**
