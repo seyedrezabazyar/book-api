@@ -25,8 +25,7 @@ return new class extends Migration
             // تنظیمات کرال
             $table->enum('crawl_mode', ['continue', 'restart', 'update'])->default('continue');
             $table->unsignedInteger('start_page')->nullable();
-            $table->unsignedInteger('current_page')->default(1);
-
+            $table->integer('current_page')->default(0);
             // داده‌های کانفیگ (JSON)
             $table->json('config_data');
 

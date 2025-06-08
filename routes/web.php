@@ -15,12 +15,12 @@ Route::middleware(['auth'])->group(function () {
         return redirect()->route('configs.index');
     })->name('dashboard');
 
-    // Routes کانفیگ‌ها
+    // Routes کانفیگ‌های هوشمند
     Route::resource('configs', ConfigController::class);
     Route::get('configs/{config}/logs', [ConfigController::class, 'logs'])->name('configs.logs');
     Route::get('configs/{config}/logs/{log}', [ConfigController::class, 'logDetails'])->name('configs.log-details');
 
-    // Routes اجرا - این بخش مفقود بود!
+    // Routes اجرای هوشمند
     Route::post('configs/{config}/start', [ConfigController::class, 'executeBackground'])->name('configs.start');
     Route::post('configs/{config}/execute-background', [ConfigController::class, 'executeBackground'])->name('configs.execute-background');
     Route::post('configs/{config}/stop', [ConfigController::class, 'stopExecution'])->name('configs.stop');
@@ -62,6 +62,78 @@ Route::middleware(['auth'])->group(function () {
     Route::prefix('admin/logs')->name('admin.logs.')->group(function () {
         Route::post('{log}/fix-status', [ConfigController::class, 'fixLogStatus'])->name('fix-status');
         Route::post('{log}/sync-stats', [ConfigController::class, 'syncLogStats'])->name('sync-stats');
+    });
+
+    // Source ID Management - کامند‌های جدید
+    Route::prefix('admin/source-management')->name('admin.source.')->group(function () {
+        // مدیریت source ID ها
+        Route::get('analyze/{config}', function($configId) {
+            \Artisan::call('crawl:manage-sources', [
+                'action' => 'analyze',
+                '--config' => $configId
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => '📊 تحلیل source ID ها انجام شد',
+                'output' => \Artisan::output()
+            ]);
+        })->name('analyze');
+
+        Route::get('missing/{config}', function($configId) {
+            \Artisan::call('crawl:manage-sources', [
+                'action' => 'missing',
+                '--config' => $configId,
+                '--limit' => 100
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => '🔍 جستجوی ID های مفقود انجام شد',
+                'output' => \Artisan::output()
+            ]);
+        })->name('missing');
+
+        Route::post('process-missing/{config}', function($configId) {
+            \Artisan::call('crawl:missing-ids', [
+                'config' => $configId,
+                '--limit' => 50,
+                '--background' => true
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => '🚀 پردازش ID های مفقود در پس‌زمینه شروع شد',
+                'output' => \Artisan::output()
+            ]);
+        })->name('process-missing');
+
+        Route::post('cleanup/{config}', function($configId) {
+            \Artisan::call('crawl:manage-sources', [
+                'action' => 'cleanup',
+                '--config' => $configId,
+                '--fix' => true
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => '🧹 پاکسازی انجام شد',
+                'output' => \Artisan::output()
+            ]);
+        })->name('cleanup');
+
+        Route::get('report/{config}', function($configId) {
+            \Artisan::call('crawl:manage-sources', [
+                'action' => 'report',
+                '--config' => $configId
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => '📋 گزارش تولید شد',
+                'output' => \Artisan::output()
+            ]);
+        })->name('report');
     });
 
     // Profile (اگر نیاز داری)

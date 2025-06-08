@@ -14,8 +14,8 @@
                         <span class="text-red-600">❌ Worker غیرفعال</span>
                     @endif
                     <span class="text-sm text-gray-600">
-                        📊 Jobs در صف: {{ $workerStatus['pending_jobs'] }} |
-                        @if ($workerStatus['failed_jobs'] > 0)
+                        📊 Jobs در صف: {{ $workerStatus['pending_jobs'] ?? 0 }} |
+                        @if (($workerStatus['failed_jobs'] ?? 0) > 0)
                             ❌ شکست خورده: {{ $workerStatus['failed_jobs'] }}
                         @else
                             ✅ شکست خورده: 0
@@ -24,17 +24,17 @@
                 </div>
             </div>
             <div class="flex gap-2">
-                @if (!$workerStatus['is_running'])
+                @if (!($workerStatus['is_running'] ?? false))
                     <button onclick="startWorker()"
-                        class="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700">
+                            class="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700">
                         🚀 شروع
                     </button>
                 @endif
                 <button onclick="restartWorker()"
-                    class="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">
+                        class="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">
                     🔄 راه‌اندازی مجدد
                 </button>
-                @if ($workerStatus['is_running'])
+                @if ($workerStatus['is_running'] ?? false)
                     <button onclick="stopWorker()" class="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700">
                         ⏹️ توقف
                     </button>
@@ -49,13 +49,12 @@
     <!-- Header -->
     <div class="flex items-center justify-between mb-6">
         <div>
-            <h1 class="text-2xl font-semibold">مدیریت کانفیگ‌ها</h1>
-            <p class="text-gray-600">کانفیگ‌های API را مدیریت و اجرا کنید</p>
+            <h1 class="text-2xl font-semibold">مدیریت کانفیگ‌های هوشمند</h1>
+            <p class="text-gray-600">سیستم کرال هوشمند با تشخیص خودکار نقطه شروع و مدیریت تکراری‌ها</p>
         </div>
         <div class="flex items-center gap-4">
-            <!-- Add New Config -->
             <a href="{{ route('configs.create') }}" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-                ➕ کانفیگ جدید
+                ✨ کانفیگ هوشمند جدید
             </a>
         </div>
     </div>
@@ -65,17 +64,17 @@
         <div class="bg-white p-6 rounded shadow">
             <div class="flex items-center">
                 <div class="text-3xl font-bold text-blue-600">{{ $stats['total_configs'] }}</div>
-                <div class="ml-auto text-2xl">⚙️</div>
+                <div class="ml-auto text-2xl">🧠</div>
             </div>
-            <div class="text-sm text-gray-600 mt-1">کل کانفیگ‌ها</div>
+            <div class="text-sm text-gray-600 mt-1">کانفیگ‌های هوشمند</div>
         </div>
 
         <div class="bg-white p-6 rounded shadow">
             <div class="flex items-center">
-                <div class="text-3xl font-bold text-green-600">{{ $stats['active_configs'] }}</div>
-                <div class="ml-auto text-2xl">✅</div>
+                <div class="text-3xl font-bold text-green-600">{{ $stats['running_configs'] }}</div>
+                <div class="ml-auto text-2xl">🔄</div>
             </div>
-            <div class="text-sm text-gray-600 mt-1">همه فعال</div>
+            <div class="text-sm text-gray-600 mt-1">در حال اجرا</div>
         </div>
 
         <div class="bg-white p-6 rounded shadow">
@@ -83,15 +82,18 @@
                 <div class="text-3xl font-bold text-purple-600">{{ $stats['total_books'] }}</div>
                 <div class="ml-auto text-2xl">📚</div>
             </div>
-            <div class="text-sm text-gray-600 mt-1">کل کتاب‌ها در دیتابیس</div>
+            <div class="text-sm text-gray-600 mt-1">کل کتاب‌ها</div>
         </div>
 
         <div class="bg-white p-6 rounded shadow">
             <div class="flex items-center">
-                <div class="text-3xl font-bold text-yellow-600">{{ $stats['running_configs'] }}</div>
-                <div class="ml-auto text-2xl">🔄</div>
+                @php
+                    $totalSourceTypes = \App\Models\BookSource::distinct('source_type')->count();
+                @endphp
+                <div class="text-3xl font-bold text-orange-600">{{ $totalSourceTypes }}</div>
+                <div class="ml-auto text-2xl">🌐</div>
             </div>
-            <div class="text-sm text-gray-600 mt-1">در حال اجرا</div>
+            <div class="text-sm text-gray-600 mt-1">منابع مختلف</div>
         </div>
     </div>
 
@@ -99,225 +101,267 @@
     <div class="bg-white rounded shadow overflow-hidden">
         <table class="w-full" id="configsTable">
             <thead class="bg-gray-50">
-                <tr>
-                    <th class="text-right p-4 font-medium">نام کانفیگ</th>
-                    <th class="text-right p-4 font-medium">آمار کلی</th>
-                    <th class="text-right p-4 font-medium">آخرین اجرا</th>
-                    <th class="text-center p-4 font-medium">عملیات</th>
-                </tr>
+            <tr>
+                <th class="text-right p-4 font-medium">کانفیگ و منبع</th>
+                <th class="text-right p-4 font-medium">آمار هوشمند</th>
+                <th class="text-right p-4 font-medium">وضعیت اجرا</th>
+                <th class="text-center p-4 font-medium">عملیات</th>
+            </tr>
             </thead>
             <tbody class="divide-y divide-gray-200">
-                @forelse($configs as $config)
-                    <tr class="hover:bg-gray-50">
-                        <!-- نام و جزئیات -->
-                        <td class="p-4">
-                            <div class="font-medium">{{ $config->name }}</div>
-                            <div class="text-xs text-gray-500 mt-1">
-                                {{ parse_url($config->base_url, PHP_URL_HOST) ?: $config->base_url }}
-                            </div>
-                            <div class="text-xs text-gray-400">
-                                هر {{ $config->delay_seconds }}s |
-                                {{ $config->records_per_run }} رکورد |
-                                ≈{{ round((60 / max($config->delay_seconds, 1)) * $config->records_per_run) }}/دقیقه
-                            </div>
-                            @if ($config->is_running)
-                                <span
-                                    class="inline-flex items-center px-2 py-1 text-xs bg-yellow-100 text-yellow-800 rounded-full w-fit mt-1">
-                                    🔄 در حال اجرا
-                                </span>
-                            @endif
-                        </td>
-
-                        <!-- آمار -->
-                        <td class="p-4">
-                            @php
-                                $displayStats = $config->getDisplayStats();
-                                $executionLogs = $config->executionLogs();
-                            @endphp
-
-                            <div class="text-sm">
-                                <div class="font-medium text-gray-900">📊 آمار {{ $config->source_name }}:</div>
-                                <div class="text-xs text-gray-600 mt-1">
-                                    🔢 پردازش شده: {{ number_format($displayStats['total_processed']) }}<br>
-                                    ✅ موفق: {{ number_format($displayStats['total_success']) }}<br>
-                                    🆔 آخرین ID: {{ $config->last_source_id }}<br>
-                                    📄 بعدی: {{ $displayStats['next_source_id'] ?? 'تشخیص خودکار' }}<br>
-                                    🏃 اجراها: {{ $displayStats['total_executions'] }}
-                                    @if ($displayStats['total_executions'] > 0)
-                                        (⏹️{{ $displayStats['stopped_executions'] }} ❌{{ $displayStats['failed_executions'] }})
-                                    @endif
-                                </div>
-
-                                @if ($displayStats['total_processed'] > 0)
-                                    <div class="mt-2 text-xs">
-                                        <div class="text-gray-500">نرخ موفقیت: {{ $displayStats['success_rate'] }}%</div>
-                                        <div class="w-full bg-gray-200 rounded-full h-1 mt-1">
-                                            <div class="bg-green-600 h-1 rounded-full"
-                                                 style="width: {{ $displayStats['success_rate'] }}%"></div>
-                                        </div>
-                                    </div>
-                                @endif
-
-                                <!-- اطلاعات تنظیمات هوشمند -->
-                                <div class="mt-2 pt-2 border-t border-gray-200 text-xs">
-                                    <div class="flex items-center gap-2">
-                                        @if ($config->auto_resume)
-                                            <span class="text-blue-600" title="ادامه خودکار">⚡</span>
-                                        @endif
-                                        @if ($config->fill_missing_fields)
-                                            <span class="text-green-600" title="تکمیل فیلدهای خالی">🔧</span>
-                                        @endif
-                                        @if ($config->update_descriptions)
-                                            <span class="text-purple-600" title="بهبود توضیحات">📝</span>
-                                        @endif
-                                        <span class="text-gray-500">تا {{ number_format($config->max_pages) }} ID</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </td>
-
-                        <!-- Stats -->
-                        <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                            <div class="bg-white p-4 rounded shadow text-center">
-                                <div class="text-2xl font-bold text-blue-600">{{ number_format($config->total_processed ?? 0) }}</div>
-                                <div class="text-sm text-gray-600">کل پردازش شده</div>
-                            </div>
-                            <div class="bg-white p-4 rounded shadow text-center">
-                                <div class="text-2xl font-bold text-green-600">{{ number_format($config->total_success ?? 0) }}</div>
-                                <div class="text-sm text-gray-600">موفق</div>
-                            </div>
-                            <div class="bg-white p-4 rounded shadow text-center">
-                                <div class="text-2xl font-bold text-red-600">{{ number_format($config->total_failed ?? 0) }}</div>
-                                <div class="text-sm text-gray-600">خطا</div>
-                            </div>
-                            <div class="bg-white p-4 rounded shadow text-center">
-                                <div class="text-2xl font-bold text-purple-600">{{ number_format($config->last_source_id) }}</div>
-                                <div class="text-sm text-gray-600">آخرین ID</div>
-                            </div>
-                            <div class="bg-white p-4 rounded shadow text-center">
-                                <div class="text-2xl font-bold text-orange-600">{{ number_format($stats['next_source_id']) }}</div>
-                                <div class="text-sm text-gray-600">بعدی</div>
-                            </div>
-                            <div class="bg-white p-4 rounded shadow text-center">
-                                <div class="text-2xl font-bold text-indigo-600">{{ number_format($config->max_pages) }}</div>
-                                <div class="text-sm text-gray-600">حداکثر ID</div>
-                            </div>
+            @forelse($configs as $config)
+                <tr class="hover:bg-gray-50">
+                    <!-- نام و جزئیات -->
+                    <td class="p-4">
+                        <div class="font-medium">{{ $config->name }}</div>
+                        <div class="text-sm text-gray-600 mt-1">
+                            📊 منبع: <span class="font-medium text-blue-600">{{ $config->source_name }}</span>
+                        </div>
+                        <div class="text-xs text-gray-500 mt-1">
+                            🌐 {{ parse_url($config->base_url, PHP_URL_HOST) }}
+                        </div>
+                        <div class="text-xs text-gray-400 mt-1">
+                            ⏱️ {{ $config->delay_seconds }}s تاخیر |
+                            📄 حداکثر {{ number_format($config->max_pages) }} ID
                         </div>
 
-                        <!-- آخرین اجرا -->
-                        <td class="p-4">
-                            @if ($config->last_run_at)
-                                <div class="flex items-center gap-2">
-                                    @if ($config->is_running)
-                                        <span class="text-yellow-600">🔄 در حال اجرا</span>
+                        <!-- نمایش ویژگی‌های هوشمند -->
+                        <div class="flex items-center gap-2 mt-2">
+                            @if ($config->auto_resume)
+                                <span class="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded" title="ادامه خودکار">⚡ ادامه خودکار</span>
+                            @endif
+                            @if ($config->fill_missing_fields)
+                                <span class="px-2 py-1 text-xs bg-green-100 text-green-700 rounded" title="تکمیل فیلدهای خالی">🔧 تکمیل خودکار</span>
+                            @endif
+                            @if ($config->update_descriptions)
+                                <span class="px-2 py-1 text-xs bg-purple-100 text-purple-700 rounded" title="بهبود توضیحات">📝 بهبود توضیحات</span>
+                            @endif
+                        </div>
+
+                        @if ($config->is_running)
+                            <span class="inline-flex items-center px-2 py-1 text-xs bg-yellow-100 text-yellow-800 rounded-full w-fit mt-2">
+                                    🔄 در حال اجرا
+                                </span>
+                        @endif
+                    </td>
+
+                    <!-- آمار هوشمند -->
+                    <td class="p-4">
+                        <div class="text-sm space-y-2">
+                            <!-- آمار اصلی -->
+                            <div class="grid grid-cols-2 gap-4 text-xs">
+                                <div>
+                                    <span class="text-gray-600">📈 کل پردازش:</span>
+                                    <span class="font-bold text-blue-600">{{ number_format($config->total_processed) }}</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-600">✅ موفق:</span>
+                                    <span class="font-bold text-green-600">{{ number_format($config->total_success) }}</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-600">❌ خطا:</span>
+                                    <span class="font-bold text-red-600">{{ number_format($config->total_failed) }}</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-600">🔄 تکراری:</span>
+                                    @php
+                                        $duplicateCount = \App\Models\ExecutionLog::where('config_id', $config->id)
+                                            ->sum('total_duplicate');
+                                    @endphp
+                                    <span class="font-bold text-orange-600">{{ number_format($duplicateCount) }}</span>
+                                </div>
+                            </div>
+
+                            <!-- آمار source ID -->
+                            <div class="pt-2 border-t border-gray-200">
+                                <div class="grid grid-cols-2 gap-4 text-xs">
+                                    <div>
+                                        <span class="text-gray-600">🆔 آخرین ID:</span>
+                                        <span class="font-bold text-purple-600">{{ number_format($config->last_source_id) }}</span>
+                                    </div>
+                                    <div>
+                                        <span class="text-gray-600">📍 بعدی:</span>
+                                        <span class="font-bold text-indigo-600">{{ number_format($config->getSmartStartPage()) }}</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- نرخ موفقیت -->
+                            @if ($config->total_processed > 0)
+                                @php
+                                    $successRate = round(($config->total_success / $config->total_processed) * 100, 1);
+                                @endphp
+                                <div class="pt-2 border-t border-gray-200">
+                                    <div class="text-xs text-gray-600 mb-1">نرخ موفقیت: {{ $successRate }}%</div>
+                                    <div class="w-full bg-gray-200 rounded-full h-1.5">
+                                        <div class="bg-green-600 h-1.5 rounded-full" style="width: {{ $successRate }}%"></div>
+                                    </div>
+                                </div>
+                            @endif
+                        </div>
+                    </td>
+
+                    <!-- وضعیت اجرا -->
+                    <td class="p-4">
+                        @if ($config->last_run_at)
+                            <div class="flex items-center gap-2">
+                                @if ($config->is_running)
+                                    <span class="text-yellow-600">🔄 در حال اجرا</span>
+                                @else
+                                    <span class="text-green-600">⏹️ آماده</span>
+                                @endif
+                            </div>
+                            <div class="text-xs text-gray-500 mt-1">
+                                آخرین اجرا: {{ $config->last_run_at->diffForHumans() }}
+                            </div>
+
+                            @php
+                                $latestLog = $config->executionLogs()->latest()->first();
+                            @endphp
+                            @if ($latestLog)
+                                <div class="text-xs text-gray-400 mt-1">
+                                    @if ($latestLog->total_processed > 0)
+                                        🎯 {{ number_format($latestLog->total_success) }}/{{ number_format($latestLog->total_processed) }} موفق
                                     @else
-                                        <span class="text-orange-600">⏹️ متوقف شده</span>
+                                        📊 بدون آمار
+                                    @endif
+                                    @if ($latestLog->execution_time > 0)
+                                        <br>⏱️ {{ round($latestLog->execution_time) }}s
                                     @endif
                                 </div>
-                                <div class="text-xs text-gray-500 mt-1">
-                                    {{ $config->last_run_at->diffForHumans() }}
-                                </div>
-                                @if ($config->latestExecutionLog)
-                                    @php
-                                        $latestLog = $config->latestExecutionLog;
-                                        $executionTime = $latestLog->execution_time;
-                                        if ($executionTime <= 0 && $latestLog->started_at) {
-                                            $executionTime = $latestLog->finished_at
-                                                ? $latestLog->finished_at->diffInSeconds($latestLog->started_at)
-                                                : now()->diffInSeconds($latestLog->started_at);
-                                        }
-                                    @endphp
-                                    <div class="text-xs text-gray-400">
-                                        @if ($latestLog->total_processed > 0)
-                                            {{ number_format($latestLog->total_success) }}/{{ number_format($latestLog->total_processed) }}
-                                            موفق
-                                        @else
-                                            بدون آمار
-                                        @endif
-                                        <br>
-                                        ⏱️ {{ $executionTime > 0 ? round($executionTime) . 's' : 'نامعلوم' }}
-                                    </div>
-                                @endif
-                            @else
-                                <span class="text-gray-400 text-sm">هرگز اجرا نشده</span>
                             @endif
-                        </td>
-
-                        <!-- دکمه‌های عملیات -->
-                        <td class="p-4">
-                            <div class="flex items-center justify-center gap-2">
-                                <!-- مشاهده جزئیات -->
-                                <a href="{{ route('configs.show', $config) }}" class="text-blue-600 hover:text-blue-800"
-                                    title="مشاهده جزئیات">
-                                    👁️
-                                </a>
-
-                                <!-- مشاهده آمار -->
-                                <a href="{{ route('configs.logs', $config) }}" class="text-green-600 hover:text-green-800"
-                                    title="مشاهده آمار">
-                                    📊
-                                </a>
-
-                                <!-- دکمه‌های اجرا/توقف -->
-                                @if ($config->is_running)
-                                    <!-- دکمه توقف -->
-                                    <button onclick="stopExecution({{ $config->id }})"
-                                        class="text-red-600 hover:text-red-800" title="متوقف کردن اجرا"
-                                        id="stop-btn-{{ $config->id }}">
-                                        ⏹️
-                                    </button>
-
-                                    <!-- نمایشگر در حال اجرا -->
-                                    <span class="text-yellow-600" title="در حال اجرا">🔄</span>
-                                @else
-                                    <!-- دکمه اجرا -->
-                                    <button onclick="startExecution({{ $config->id }})"
-                                        class="text-green-600 hover:text-green-800" title="شروع اجرا"
-                                        id="start-btn-{{ $config->id }}">
-                                        🚀
-                                    </button>
-                                @endif
-
-                                <!-- ویرایش -->
-                                <a href="{{ route('configs.edit', $config) }}"
-                                    class="text-yellow-600 hover:text-yellow-800" title="ویرایش">
-                                    ✏️
-                                </a>
-
-                                <!-- حذف -->
-                                <button onclick="deleteConfig({{ $config->id }})"
-                                    class="text-red-600 hover:text-red-800" title="حذف">
-                                    🗑️
-                                </button>
+                        @else
+                            <span class="text-gray-400 text-sm">🆕 آماده اولین اجرا</span>
+                            <div class="text-xs text-blue-600 mt-1">
+                                شروع از ID {{ $config->getSmartStartPage() }}
                             </div>
-                        </td>
-                    </tr>
-                @empty
-                    <tr>
-                        <td colspan="4" class="text-center py-8 text-gray-500">
-                            <div class="text-4xl mb-2">📋</div>
-                            <p>هیچ کانفیگی یافت نشد</p>
-                            <a href="{{ route('configs.create') }}"
-                                class="text-blue-600 hover:underline mt-2 inline-block">
-                                اولین کانفیگ خود را ایجاد کنید
+                        @endif
+
+                        <!-- تخمین زمان اجرای بعدی -->
+                        @if (!$config->is_running)
+                            @php
+                                $nextRunEstimate = $config->max_pages * $config->delay_seconds;
+                                $estimateText = '';
+                                if ($nextRunEstimate > 3600) {
+                                    $estimateText = '≈' . round($nextRunEstimate / 3600, 1) . 'ساعت';
+                                } elseif ($nextRunEstimate > 60) {
+                                    $estimateText = '≈' . round($nextRunEstimate / 60) . 'دقیقه';
+                                } else {
+                                    $estimateText = '≈' . $nextRunEstimate . 'ثانیه';
+                                }
+                            @endphp
+                            <div class="text-xs text-gray-400 mt-1">
+                                ⏱️ تخمین اجرای بعدی: {{ $estimateText }}
+                            </div>
+                        @endif
+                    </td>
+
+                    <!-- عملیات -->
+                    <td class="p-4">
+                        <div class="flex items-center justify-center gap-2">
+                            <!-- مشاهده جزئیات -->
+                            <a href="{{ route('configs.show', $config) }}"
+                               class="text-blue-600 hover:text-blue-800 text-lg" title="مشاهده جزئیات">
+                                👁️
                             </a>
-                        </td>
-                    </tr>
-                @endforelse
+
+                            <!-- مشاهده لاگ‌ها -->
+                            <a href="{{ route('configs.logs', $config) }}"
+                               class="text-green-600 hover:text-green-800 text-lg" title="لاگ‌ها و آمار">
+                                📊
+                            </a>
+
+                            <!-- اجرا/توقف -->
+                            @if ($config->is_running)
+                                <button onclick="stopExecution({{ $config->id }})"
+                                        class="text-red-600 hover:text-red-800 text-lg"
+                                        title="متوقف کردن اجرا"
+                                        id="stop-btn-{{ $config->id }}">
+                                    ⏹️
+                                </button>
+                            @else
+                                <button onclick="startExecution({{ $config->id }})"
+                                        class="text-green-600 hover:text-green-800 text-lg"
+                                        title="شروع اجرای هوشمند"
+                                        id="start-btn-{{ $config->id }}">
+                                    🚀
+                                </button>
+                            @endif
+
+                            <!-- ویرایش -->
+                            <a href="{{ route('configs.edit', $config) }}"
+                               class="text-yellow-600 hover:text-yellow-800 text-lg" title="ویرایش">
+                                ✏️
+                            </a>
+
+                            <!-- حذف -->
+                            <button onclick="deleteConfig({{ $config->id }})"
+                                    class="text-red-600 hover:text-red-800 text-lg" title="حذف">
+                                🗑️
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            @empty
+                <tr>
+                    <td colspan="4" class="text-center py-12 text-gray-500">
+                        <div class="text-6xl mb-4">🧠</div>
+                        <h3 class="text-lg font-medium text-gray-900 mb-2">هیچ کانفیگ هوشمندی یافت نشد!</h3>
+                        <p class="text-gray-500 mb-6">اولین کانفیگ هوشمند خود را ایجاد کنید</p>
+                        <a href="{{ route('configs.create') }}"
+                           class="inline-flex items-center px-6 py-3 bg-blue-600 text-white rounded hover:bg-blue-700">
+                            ✨ ایجاد کانفیگ هوشمند
+                        </a>
+                    </td>
+                </tr>
+            @endforelse
             </tbody>
         </table>
     </div>
 
     <!-- Pagination -->
-    @if ($configs instanceof \Illuminate\Pagination\LengthAwarePaginator)
+    @if ($configs instanceof \Illuminate\Pagination\LengthAwarePaginator && $configs->hasPages())
         <div class="mt-6">
             {{ $configs->links() }}
         </div>
     @endif
 
+    <!-- Bottom Info Panel -->
+    <div class="mt-6 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg p-4">
+        <h3 class="text-blue-800 font-medium mb-2">🧠 ویژگی‌های سیستم کرال هوشمند:</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm text-blue-700">
+            <div class="space-y-1">
+                <div class="font-medium">⚡ تشخیص خودکار نقطه شروع:</div>
+                <ul class="text-xs space-y-1 text-blue-600">
+                    <li>• اگر قبلاً از منبع کتاب نگرفته: از ID 1</li>
+                    <li>• اگر قبلاً گرفته: از آخرین ID + 1</li>
+                    <li>• اگر start_page مشخص شده: از همان ID</li>
+                </ul>
+            </div>
+            <div class="space-y-1">
+                <div class="font-medium">🔧 مدیریت هوشمند تکراری‌ها:</div>
+                <ul class="text-xs space-y-1 text-blue-600">
+                    <li>• تشخیص بر اساس MD5 محتوا</li>
+                    <li>• تکمیل فیلدهای خالی</li>
+                    <li>• بهبود توضیحات ناقص</li>
+                    <li>• حفظ کیفیت اطلاعات</li>
+                </ul>
+            </div>
+            <div class="space-y-1">
+                <div class="font-medium">📊 ردیابی دقیق منابع:</div>
+                <ul class="text-xs space-y-1 text-blue-600">
+                    <li>• ثبت دقیق source_id</li>
+                    <li>• مدیریت ID های مفقود</li>
+                    <li>• گزارش‌گیری تفصیلی</li>
+                    <li>• بازیابی ID های ناموفق</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
     <script>
         /**
-         * متوقف کردن اجرا
+         * توابع مدیریت اجرا
          */
         function stopExecution(configId) {
             const stopBtn = document.getElementById(`stop-btn-${configId}`);
@@ -326,36 +370,25 @@
                 return;
             }
 
-            // غیرفعال کردن دکمه تا جلوی کلیک‌های مکرر را بگیریم
             stopBtn.disabled = true;
             stopBtn.innerHTML = '⏳';
             stopBtn.title = 'در حال متوقف کردن...';
 
             fetch(`/configs/${configId}/stop`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
-                        'Accept': 'application/json'
-                    }
-                })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                    }
-                    return response.json();
-                })
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                    'Accept': 'application/json'
+                }
+            })
+                .then(response => response.json())
                 .then(data => {
                     if (data.success) {
                         showAlert(data.message, 'success');
-
-                        // بروزرسانی UI
-                        setTimeout(() => {
-                            location.reload();
-                        }, 1000);
+                        setTimeout(() => location.reload(), 1000);
                     } else {
                         showAlert(data.message || 'خطا در متوقف کردن اجرا', 'error');
-                        // بازگرداندن دکمه به حالت اولیه
                         stopBtn.disabled = false;
                         stopBtn.innerHTML = '⏹️';
                         stopBtn.title = 'متوقف کردن اجرا';
@@ -364,31 +397,23 @@
                 .catch(error => {
                     console.error('خطا در درخواست توقف:', error);
                     showAlert('خطا در ارتباط با سرور: ' + error.message, 'error');
-
-                    // بازگرداندن دکمه به حالت اولیه
                     stopBtn.disabled = false;
                     stopBtn.innerHTML = '⏹️';
                     stopBtn.title = 'متوقف کردن اجرا';
                 });
         }
 
-        /**
-         * شروع اجرا
-         */
         function startExecution(configId) {
             const startBtn = document.getElementById(`start-btn-${configId}`);
 
-            if (!confirm('شروع اجرا عادی؟')) {
+            if (!confirm('🧠 اجرای هوشمند شروع می‌شود. سیستم خودکار بهترین نقطه شروع را تشخیص می‌دهد. ادامه می‌دهید؟')) {
                 return;
             }
 
-            // غیرفعال کردن دکمه
             startBtn.disabled = true;
             startBtn.innerHTML = '⏳';
 
-            const url = `/configs/${configId}/start`;
-
-            fetch(url, {
+            fetch(`/configs/${configId}/start`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -415,52 +440,44 @@
                 });
         }
 
-        /**
-         * حذف کانفیگ - اصلاح شده
-         */
         function deleteConfig(configId) {
-            if (!confirm(
-                    'آیا مطمئن هستید که می‌خواهید این کانفیگ را حذف کنید؟\nتمام داده‌ها و آمار مرتبط نیز حذف خواهد شد.')) {
+            if (!confirm('⚠️ حذف کانفیگ هوشمند\n\nآیا مطمئن هستید؟ تمام داده‌ها و آمار مرتبط حذف خواهد شد.')) {
                 return;
             }
 
-            // ایجاد form برای DELETE request
             const form = document.createElement('form');
             form.method = 'POST';
             form.action = `/configs/${configId}`;
             form.style.display = 'none';
 
-            // اضافه کردن CSRF token
             const csrfInput = document.createElement('input');
             csrfInput.type = 'hidden';
             csrfInput.name = '_token';
             csrfInput.value = document.querySelector('meta[name="csrf-token"]').content;
             form.appendChild(csrfInput);
 
-            // اضافه کردن method override
             const methodInput = document.createElement('input');
             methodInput.type = 'hidden';
             methodInput.name = '_method';
             methodInput.value = 'DELETE';
             form.appendChild(methodInput);
 
-            // اضافه کردن form به DOM و submit کردن
             document.body.appendChild(form);
             form.submit();
         }
 
         /**
-         * مدیریت Worker
+         * توابع مدیریت Worker
          */
         function startWorker() {
             fetch('/admin/worker/start', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
-                        'Accept': 'application/json'
-                    }
-                })
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                    'Accept': 'application/json'
+                }
+            })
                 .then(response => response.json())
                 .then(data => {
                     showAlert(data.message, data.success ? 'success' : 'error');
@@ -475,18 +492,16 @@
         }
 
         function stopWorker() {
-            if (!confirm('آیا مطمئن هستید که می‌خواهید Worker را متوقف کنید؟')) {
-                return;
-            }
+            if (!confirm('آیا مطمئن هستید که می‌خواهید Worker را متوقف کنید؟')) return;
 
             fetch('/admin/worker/stop', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
-                        'Accept': 'application/json'
-                    }
-                })
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                    'Accept': 'application/json'
+                }
+            })
                 .then(response => response.json())
                 .then(data => {
                     showAlert(data.message, data.success ? 'success' : 'error');
@@ -495,24 +510,21 @@
                     }
                 })
                 .catch(error => {
-                    console.error('خطا در توقف Worker:', error);
                     showAlert('خطا در ارتباط با سرور', 'error');
                 });
         }
 
         function restartWorker() {
-            if (!confirm('آیا مطمئن هستید که می‌خواهید Worker را راه‌اندازی مجدد کنید؟')) {
-                return;
-            }
+            if (!confirm('راه‌اندازی مجدد Worker؟')) return;
 
             fetch('/admin/worker/restart', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
-                        'Accept': 'application/json'
-                    }
-                })
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                    'Accept': 'application/json'
+                }
+            })
                 .then(response => response.json())
                 .then(data => {
                     showAlert(data.message, data.success ? 'success' : 'error');
@@ -521,27 +533,22 @@
                     }
                 })
                 .catch(error => {
-                    console.error('خطا در راه‌اندازی مجدد Worker:', error);
                     showAlert('خطا در ارتباط با سرور', 'error');
                 });
         }
 
         function checkWorker() {
             fetch('/admin/worker/status', {
-                    method: 'GET',
-                    headers: {
-                        'Accept': 'application/json'
-                    }
-                })
+                method: 'GET',
+                headers: { 'Accept': 'application/json' }
+            })
                 .then(response => response.json())
                 .then(data => {
                     const status = data.worker_status.is_running ? 'فعال' : 'غیرفعال';
-                    const message =
-                        `وضعیت Worker: ${status}\nJobs در صف: ${data.queue_stats.pending_jobs}\nJobs شکست خورده: ${data.queue_stats.failed_jobs}`;
+                    const message = `وضعیت Worker: ${status}\nJobs در صف: ${data.queue_stats.pending_jobs}\nJobs شکست خورده: ${data.queue_stats.failed_jobs}`;
                     showAlert(message, 'info');
                 })
                 .catch(error => {
-                    console.error('خطا در بررسی Worker:', error);
                     showAlert('خطا در ارتباط با سرور', 'error');
                 });
         }
@@ -550,7 +557,6 @@
          * نمایش پیام
          */
         function showAlert(message, type = 'info') {
-            // ایجاد alert box
             const alertBox = document.createElement('div');
             alertBox.className = `fixed top-4 right-4 z-50 p-4 rounded shadow-lg max-w-md ${
                 type === 'success' ? 'bg-green-100 border border-green-400 text-green-700' :
@@ -559,17 +565,16 @@
             }`;
 
             alertBox.innerHTML = `
-        <div class="flex items-center justify-between">
-            <div class="flex-1">
-                <pre class="whitespace-pre-wrap text-sm">${message}</pre>
-            </div>
-            <button onclick="this.parentElement.parentElement.remove()" class="ml-2 text-lg leading-none">&times;</button>
-        </div>
-    `;
+                <div class="flex items-center justify-between">
+                    <div class="flex-1">
+                        <pre class="whitespace-pre-wrap text-sm">${message}</pre>
+                    </div>
+                    <button onclick="this.parentElement.parentElement.remove()" class="ml-2 text-lg leading-none">&times;</button>
+                </div>
+            `;
 
             document.body.appendChild(alertBox);
 
-            // حذف خودکار بعد از 5 ثانیه
             setTimeout(() => {
                 if (alertBox.parentElement) {
                     alertBox.remove();
@@ -577,7 +582,7 @@
             }, 5000);
         }
 
-        // رفرش خودکار هر 30 ثانیه برای نمایش وضعیت به‌روز
+        // رفرش خودکار برای نمایش وضعیت به‌روز
         setInterval(() => {
             const runningConfigs = document.querySelectorAll('[id^="stop-btn-"]');
             if (runningConfigs.length > 0) {
