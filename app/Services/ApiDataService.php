@@ -15,7 +15,7 @@ use App\Jobs\ProcessSinglePageJob;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\DB; // اضافه کردن این خط
 
 class ApiDataService
 {
@@ -31,7 +31,7 @@ class ApiDataService
     /**
      * اجرای کامل با استفاده از Job Queue (روش جدید - بر اساس source ID)
      */
-    public function fetchDataAsync(int $maxIds = null): array
+    public function fetchDataAsync(?int $maxIds = null): array
     {
         $this->executionLog = ExecutionLog::createNew($this->config);
         $maxIds = $maxIds ?: $this->config->max_pages;
@@ -451,6 +451,11 @@ class ApiDataService
      */
     private function extractBookFromApiData(array $data, int $sourceId): array
     {
+        // بررسی status
+        if (isset($data['status']) && $data['status'] === 'success' && isset($data['data']['book'])) {
+            return $data['data']['book'];
+        }
+
         // اگر خود data یک کتاب است
         if (isset($data['id']) || isset($data['title'])) {
             return $data;
@@ -495,7 +500,7 @@ class ApiDataService
         ]);
     }
 
-    // متدهای کمکی (مشابه قبل)
+    // متدهای کمکی
     private function makeHttpRequest(string $url, array $apiSettings, array $generalSettings)
     {
         $httpClient = Http::timeout($this->config->timeout)->retry(3, 1000);
@@ -516,17 +521,17 @@ class ApiDataService
         if (empty($fieldMapping)) {
             $fieldMapping = [
                 'title' => 'title',
-                'description' => 'description',
-                'author' => 'author',
-                'category' => 'category',
-                'publisher' => 'publisher',
+                'description' => 'description_en',
+                'author' => 'authors',
+                'category' => 'category.name',
+                'publisher' => 'publisher.name',
                 'isbn' => 'isbn',
-                'publication_year' => 'year',
-                'pages_count' => 'pages',
+                'publication_year' => 'publication_year',
+                'pages_count' => 'pages_count',
                 'language' => 'language',
                 'format' => 'format',
-                'file_size' => 'size',
-                'image_url' => 'image'
+                'file_size' => 'file_size',
+                'image_url' => 'image_url.0'
             ];
         }
 
@@ -564,16 +569,55 @@ class ApiDataService
         if ($value === null) return null;
 
         return match ($fieldType) {
-            'title', 'description', 'author', 'category' => trim((string) $value),
-            'publisher' => $this->extractPublisherName($value),
+            'title', 'description', 'category' => trim((string) $value),
+            'author' => $this->extractAuthors($value),
+            'publisher' => is_array($value) && isset($value['name']) ? trim($value['name']) : $this->extractPublisherName($value),
             'publication_year' => is_numeric($value) && $value >= 1000 && $value <= date('Y') + 5 ? (int) $value : null,
             'pages_count', 'file_size' => is_numeric($value) && $value > 0 ? (int) $value : null,
             'isbn' => preg_replace('/[^0-9X-]/', '', (string) $value),
             'language' => $this->normalizeLanguage((string) $value),
             'format' => $this->normalizeFormat((string) $value),
-            'image_url' => filter_var(trim((string) $value), FILTER_VALIDATE_URL) ?: null,
+            'image_url' => $this->extractImageUrl($value),
             default => trim((string) $value)
         };
+    }
+
+    private function extractAuthors($authorsData): ?string
+    {
+        if (is_string($authorsData)) {
+            return trim($authorsData);
+        }
+
+        if (is_array($authorsData)) {
+            $names = [];
+            foreach ($authorsData as $author) {
+                if (is_array($author) && isset($author['name'])) {
+                    $names[] = trim($author['name']);
+                } elseif (is_string($author)) {
+                    $names[] = trim($author);
+                }
+            }
+            return !empty($names) ? implode(', ', $names) : null;
+        }
+
+        return null;
+    }
+
+    private function extractImageUrl($imageData): ?string
+    {
+        if (is_string($imageData)) {
+            return filter_var(trim($imageData), FILTER_VALIDATE_URL) ?: null;
+        }
+
+        if (is_array($imageData)) {
+            foreach ($imageData as $url) {
+                if (is_string($url) && filter_var(trim($url), FILTER_VALIDATE_URL)) {
+                    return trim($url);
+                }
+            }
+        }
+
+        return null;
     }
 
     private function normalizeLanguage(string $language): string

@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB; // این خط مهم است
 
 class BookSource extends Model
 {
@@ -55,7 +56,7 @@ class BookSource extends Model
     /**
      * یافتن آخرین source_id برای یک منبع خاص
      */
-    public static function getLastSourceIdForType(string $sourceType, string $sourceName = null): int
+    public static function getLastSourceIdForType(string $sourceType, ?string $sourceName = null): int
     {
         $query = static::where('source_type', $sourceType)
             ->whereNotNull('source_id')
@@ -63,12 +64,8 @@ class BookSource extends Model
 
         // اگر source_name مشخص شده، فیلتر کن
         if ($sourceName) {
-            // فیلتر بر اساس URL pattern یا سایر روش‌ها
             $query->where(function ($q) use ($sourceName) {
-                $q->where('source_url', 'like', "%{$sourceName}%")
-                    ->orWhereHas('book', function ($bookQuery) use ($sourceName) {
-                        // یا هر فیلتر دیگری که نیاز داشته باشیم
-                    });
+                $q->where('source_url', 'like', "%{$sourceName}%");
             });
         }
 
@@ -88,7 +85,7 @@ class BookSource extends Model
     /**
      * بررسی وجود source_id برای یک منبع خاص
      */
-    public static function sourceIdExists(string $sourceType, string $sourceId, string $sourceName = null): bool
+    public static function sourceIdExists(string $sourceType, string $sourceId, ?string $sourceName = null): bool
     {
         $query = static::where('source_type', $sourceType)
             ->where('source_id', $sourceId)
@@ -106,7 +103,7 @@ class BookSource extends Model
     /**
      * دریافت لیست source_id های موجود برای یک بازه
      */
-    public static function getExistingSourceIds(string $sourceType, int $startId, int $endId, string $sourceName = null): array
+    public static function getExistingSourceIds(string $sourceType, int $startId, int $endId, ?string $sourceName = null): array
     {
         $query = static::where('source_type', $sourceType)
             ->whereRaw('CAST(source_id AS UNSIGNED) BETWEEN ? AND ?', [$startId, $endId])
@@ -130,7 +127,7 @@ class BookSource extends Model
     /**
      * یافتن source_id های مفقود در یک بازه
      */
-    public static function getMissingSourceIds(string $sourceType, int $startId, int $endId, string $sourceName = null): array
+    public static function getMissingSourceIds(string $sourceType, int $startId, int $endId, ?string $sourceName = null): array
     {
         $existingIds = static::getExistingSourceIds($sourceType, $startId, $endId, $sourceName);
         $allIds = range($startId, $endId);
@@ -152,7 +149,7 @@ class BookSource extends Model
     /**
      * آمار کلی یک منبع
      */
-    public static function getSourceStats(string $sourceType, string $sourceName = null): array
+    public static function getSourceStats(string $sourceType, ?string $sourceName = null): array
     {
         $query = static::where('source_type', $sourceType);
 
@@ -288,7 +285,7 @@ class BookSource extends Model
     {
         try {
             // اجرای کوئری‌های بهینه‌سازی
-            \DB::statement('ANALYZE TABLE book_sources');
+            DB::statement('ANALYZE TABLE book_sources');
 
             Log::info("🔧 ایندکس‌های book_sources بازسازی شد");
         } catch (\Exception $e) {

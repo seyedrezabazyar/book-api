@@ -1,40 +1,47 @@
 #!/bin/bash
 
-echo "🚨 EMERGENCY STOP - کشتن همه processes مرتبط با Laravel"
+# اسکریپت اصلاح import های DB در همه فایل‌ها
 
-# 1. کشتن همه PHP processes مرتبط با artisan
-echo "⏹️ کشتن PHP artisan processes..."
-pkill -f "php.*artisan" 2>/dev/null || echo "هیچ PHP artisan process یافت نشد"
+echo "🔧 شروع اصلاح import های DB..."
 
-# 2. کشتن processes مرتبط با queue
-echo "⏹️ کشتن queue processes..."
-pkill -f "queue:work" 2>/dev/null || echo "هیچ queue process یافت نشد"
-pkill -f "queue:listen" 2>/dev/null || echo "هیچ queue listen process یافت نشد"
+# لیست فایل‌هایی که باید اصلاح شوند
+files=(
+    "app/Models/ExecutionLog.php"
+    "app/Models/BookSource.php"
+    "app/Models/Config.php"
+    "app/Http/Controllers/ConfigController.php"
+    "app/Jobs/ProcessSinglePageJob.php"
+    "app/Helpers/SourceIdManager.php"
+    "app/Services/ApiDataService.php"
+    "app/Services/QueueManagerService.php"
+)
 
-# 3. کشتن processes طولانی‌مدت PHP
-echo "⏹️ بررسی PHP processes طولانی‌مدت..."
-ps aux | grep php | grep -v grep | awk '{print $2}' | while read pid; do
-    # اگر process بیش از 5 دقیقه اجرا شده، آن را بکش
-    runtime=$(ps -o etime= -p $pid 2>/dev/null | tr -d ' ')
-    if [[ ! -z "$runtime" ]]; then
-        echo "Process $pid runtime: $runtime"
-        # اگر runtime شامل : است و بیش از 05:00 است
-        if [[ $runtime == *":"* ]]; then
-            minutes=$(echo $runtime | cut -d: -f1)
-            if [[ $minutes -gt 5 ]]; then
-                echo "کشتن process طولانی‌مدت: $pid"
-                kill -9 $pid 2>/dev/null
+for file in "${files[@]}"; do
+    if [ -f "$file" ]; then
+        echo "🔧 اصلاح فایل: $file"
+
+        # بررسی اینکه آیا قبلاً import دارد
+        if ! grep -q "use Illuminate\Support\Facades\DB;" "$file"; then
+            # یافتن خط namespace
+            if grep -q "^namespace " "$file"; then
+                # اضافه کردن import بعد از آخرین use statement یا بعد از namespace
+                if grep -q "^use " "$file"; then
+                    # اضافه کردن بعد از آخرین use
+                    sed -i '/^use /a use Illuminate\Support\Facades\DB;' "$file"
+                else
+                    # اضافه کردن بعد از namespace
+                    sed -i '/^namespace /a\\nuse Illuminate\Support\Facades\DB;' "$file"
+                fi
+                echo "   ✅ Import اضافه شد"
+            else
+                echo "   ⚠️ namespace یافت نشد"
             fi
+        else
+            echo "   ✅ Import قبلاً موجود است"
         fi
+    else
+        echo "   ❌ فایل یافت نشد: $file"
     fi
 done
 
-# 4. پاک کردن Jobs و cache
-echo "🧹 پاک کردن cache و Jobs..."
-php artisan cache:clear 2>/dev/null || echo "خطا در cache:clear"
-php artisan config:clear 2>/dev/null || echo "خطا در config:clear"
-php artisan queue:clear 2>/dev/null || echo "خطا در queue:clear"
-
-echo "✅ Emergency stop تمام شد!"
-echo "🔍 processes باقی‌مانده:"
-ps aux | grep -E "(php|artisan|queue)" | grep -v grep | head -5
+echo "🎉 اصلاح import ها تمام شد!"

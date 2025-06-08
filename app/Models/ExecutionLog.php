@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB; // اضافه کردن این خط مهم است
 
 class ExecutionLog extends Model
 {
@@ -419,7 +420,7 @@ class ExecutionLog extends Model
             self::STATUS_FAILED => 'ناموفق',
             self::STATUS_STOPPED => 'متوقف شده',
             default => 'نامشخص'
-        };
+        ];
     }
 
     /**
