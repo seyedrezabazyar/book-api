@@ -14,6 +14,6 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        Paginator::useBootstrapFour(); // یا هر pagination view که می‌خوای
+        Paginator::useBootstrapFour();
     }
 }

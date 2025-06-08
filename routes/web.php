@@ -20,9 +20,14 @@ Route::middleware(['auth'])->group(function () {
     Route::get('configs/{config}/logs', [ConfigController::class, 'logs'])->name('configs.logs');
     Route::get('configs/{config}/logs/{log}', [ConfigController::class, 'logDetails'])->name('configs.log-details');
 
-    // Routes اجرا
+    // Routes اجرا - این بخش مفقود بود!
+    Route::post('configs/{config}/start', [ConfigController::class, 'executeBackground'])->name('configs.start');
+    Route::post('configs/{config}/start-fast', [ConfigController::class, 'executeBackground'])->name('configs.start-fast');
     Route::post('configs/{config}/execute-background', [ConfigController::class, 'executeBackground'])->name('configs.execute-background');
     Route::post('configs/{config}/stop', [ConfigController::class, 'stopExecution'])->name('configs.stop');
+
+    // Routes قدیمی (اختیاری - برای سازگاری)
+    Route::post('configs/{config}/run-sync', [ConfigController::class, 'runAsync'])->name('configs.run-sync');
 
     // Worker management
     Route::prefix('admin/worker')->name('admin.worker.')->group(function () {
