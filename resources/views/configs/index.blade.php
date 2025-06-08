@@ -231,13 +231,6 @@
                                         id="start-btn-{{ $config->id }}">
                                         🚀
                                     </button>
-
-                                    <!-- دکمه اجرا سریع -->
-                                    <button onclick="startExecution({{ $config->id }}, true)"
-                                        class="text-blue-600 hover:text-blue-800" title="اجرا سریع"
-                                        id="fast-start-btn-{{ $config->id }}">
-                                        ⚡
-                                    </button>
                                 @endif
 
                                 <!-- ویرایش -->
@@ -337,10 +330,10 @@
         /**
          * شروع اجرا
          */
-        function startExecution(configId, fastMode = false) {
-            const startBtn = document.getElementById(fastMode ? `fast-start-btn-${configId}` : `start-btn-${configId}`);
+        function startExecution(configId) {
+            const startBtn = document.getElementById(`start-btn-${configId}`);
 
-            if (!confirm(fastMode ? 'شروع اجرا سریع؟' : 'شروع اجرا عادی؟')) {
+            if (!confirm('شروع اجرا عادی؟')) {
                 return;
             }
 
@@ -348,25 +341,21 @@
             startBtn.disabled = true;
             startBtn.innerHTML = '⏳';
 
-            const url = fastMode ? `/configs/${configId}/start-fast` : `/configs/${configId}/start`;
+            const url = `/configs/${configId}/start`;
 
             fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
-                        'Accept': 'application/json'
-                    }
-                })
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                    'Accept': 'application/json'
+                }
+            })
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
                         showAlert(data.message, 'success');
-
-                        // بروزرسانی UI
-                        setTimeout(() => {
-                            location.reload();
-                        }, 1000);
+                        setTimeout(() => location.reload(), 1000);
                     } else {
                         showAlert(data.message || 'خطا در شروع اجرا', 'error');
                     }
@@ -376,9 +365,8 @@
                     showAlert('خطا در ارتباط با سرور', 'error');
                 })
                 .finally(() => {
-                    // بازگرداندن دکمه
                     startBtn.disabled = false;
-                    startBtn.innerHTML = fastMode ? '⚡' : '🚀';
+                    startBtn.innerHTML = '🚀';
                 });
         }
 

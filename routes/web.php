@@ -22,7 +22,6 @@ Route::middleware(['auth'])->group(function () {
 
     // Routes اجرا - این بخش مفقود بود!
     Route::post('configs/{config}/start', [ConfigController::class, 'executeBackground'])->name('configs.start');
-    Route::post('configs/{config}/start-fast', [ConfigController::class, 'executeBackground'])->name('configs.start-fast');
     Route::post('configs/{config}/execute-background', [ConfigController::class, 'executeBackground'])->name('configs.execute-background');
     Route::post('configs/{config}/stop', [ConfigController::class, 'stopExecution'])->name('configs.stop');
 

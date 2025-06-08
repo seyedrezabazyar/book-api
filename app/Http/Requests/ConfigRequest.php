@@ -52,8 +52,6 @@ class ConfigRequest extends FormRequest
             $rules = array_merge($rules, [
                 'api_endpoint' => 'required|string|max:255',
                 'api_method' => 'required|in:GET,POST',
-                'auth_type' => 'required|in:none,bearer,basic',
-                'auth_token' => 'required_if:auth_type,bearer,basic|nullable|string|max:500',
 
                 // نقشه‌برداری فیلدهای API
                 'api_field_title' => 'nullable|string|max:100',
@@ -139,9 +137,6 @@ class ConfigRequest extends FormRequest
             'api_endpoint.required' => 'نقطه پایانی API الزامی است.',
             'api_method.required' => 'متد HTTP الزامی است.',
             'api_method.in' => 'متد HTTP باید GET یا POST باشد.',
-            'auth_type.required' => 'نوع احراز هویت الزامی است.',
-            'auth_type.in' => 'نوع احراز هویت نامعتبر است.',
-            'auth_token.required_if' => 'توکن احراز هویت الزامی است.',
 
             // پیام‌های عمومی
             'user_agent.max' => 'User Agent نباید بیش از 500 کاراکتر باشد.',
@@ -170,8 +165,6 @@ class ConfigRequest extends FormRequest
             'follow_redirects' => 'پیگیری ریدایرکت',
             'api_endpoint' => 'نقطه پایانی API',
             'api_method' => 'متد HTTP',
-            'auth_type' => 'نوع احراز هویت',
-            'auth_token' => 'توکن احراز هویت',
             'url_pattern' => 'الگوی URL',
         ];
     }
@@ -220,12 +213,6 @@ class ConfigRequest extends FormRequest
         if ($dataSourceType === 'api') {
             if (empty($this->input('api_endpoint'))) {
                 $validator->errors()->add('api_endpoint', 'نقطه پایانی API برای نوع API الزامی است.');
-            }
-
-            // بررسی توکن احراز هویت
-            $authType = $this->input('auth_type');
-            if (in_array($authType, ['bearer', 'basic']) && empty($this->input('auth_token'))) {
-                $validator->errors()->add('auth_token', 'توکن احراز هویت برای این نوع احراز الزامی است.');
             }
         }
 
