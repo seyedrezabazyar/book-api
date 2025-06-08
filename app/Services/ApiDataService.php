@@ -8,7 +8,9 @@ use App\Models\Author;
 use App\Models\Category;
 use App\Models\Publisher;
 use App\Models\BookImage;
+use App\Models\BookSource;
 use App\Models\ExecutionLog;
+use App\Models\ScrapingFailure;
 use App\Jobs\ProcessSinglePageJob;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -19,7 +21,7 @@ class ApiDataService
 {
     private Config $config;
     private ?ExecutionLog $executionLog = null;
-    private array $stats = ['total' => 0, 'success' => 0, 'failed' => 0, 'duplicate' => 0];
+    private array $stats = ['total' => 0, 'success' => 0, 'failed' => 0, 'duplicate' => 0, 'updated' => 0];
 
     public function __construct(Config $config)
     {
@@ -27,46 +29,51 @@ class ApiDataService
     }
 
     /**
-     * اجرای کامل با استفاده از Job Queue (روش جدید)
+     * اجرای کامل با استفاده از Job Queue (روش جدید - بر اساس source ID)
      */
-    public function fetchDataAsync(int $maxPages = 10): array
+    public function fetchDataAsync(int $maxIds = null): array
     {
         $this->executionLog = ExecutionLog::createNew($this->config);
+        $maxIds = $maxIds ?: $this->config->max_pages;
 
         try {
             $this->config->update(['is_running' => true]);
 
-            $crawlingSettings = $this->config->getCrawlingSettings();
-            $currentPage = $this->getCurrentPage($crawlingSettings);
+            $startId = $this->config->getSmartStartPage();
+            $endId = $startId + $maxIds - 1;
 
-            Log::info("شروع اجرای Async", [
+            Log::info("🚀 شروع اجرای Async با source ID", [
                 'config_id' => $this->config->id,
-                'start_page' => $currentPage,
-                'max_pages' => $maxPages,
+                'source_name' => $this->config->source_name,
+                'start_id' => $startId,
+                'end_id' => $endId,
+                'total_ids' => $maxIds,
                 'execution_id' => $this->executionLog->execution_id
             ]);
 
-            // ایجاد Jobs برای هر صفحه
-            for ($page = $currentPage; $page < $currentPage + $maxPages; $page++) {
+            // ایجاد Jobs برای هر source ID
+            for ($sourceId = $startId; $sourceId <= $endId; $sourceId++) {
                 ProcessSinglePageJob::dispatch(
-                    $this->config->id, // ارسال ID به جای object
-                    $page,
+                    $this->config->id,
+                    $sourceId, // حالا بجای page number، source ID ارسال می‌شود
                     $this->executionLog->execution_id
                 );
             }
 
-            // تنظیم Job نهایی برای تمام کردن اجرا
+            // Job نهایی برای تمام کردن اجرا
             ProcessSinglePageJob::dispatch(
-                $this->config->id, // ارسال ID به جای object
-                -1, // شماره صفحه منفی = پایان اجرا
+                $this->config->id,
+                -1, // شماره منفی = پایان اجرا
                 $this->executionLog->execution_id
-            )->delay(now()->addSeconds($this->config->page_delay * $maxPages + 60));
+            )->delay(now()->addSeconds($this->config->delay_seconds * $maxIds + 60));
 
             return [
                 'status' => 'queued',
                 'execution_id' => $this->executionLog->execution_id,
-                'pages_queued' => $maxPages,
-                'message' => "تعداد {$maxPages} صفحه در صف قرار گرفت"
+                'ids_queued' => $maxIds,
+                'start_id' => $startId,
+                'end_id' => $endId,
+                'message' => "تعداد {$maxIds} ID منبع ({$startId} تا {$endId}) در صف قرار گرفت"
             ];
         } catch (\Exception $e) {
             $this->executionLog->markFailed($e->getMessage());
@@ -76,37 +83,11 @@ class ApiDataService
     }
 
     /**
-     * اجرای همزمان (روش قبلی برای اجرای فوری)
+     * پردازش یک source ID منفرد
      */
-    public function fetchData(): array
+    public function processSourceId(int $sourceId, ExecutionLog $executionLog): array
     {
-        $this->executionLog = ExecutionLog::createNew($this->config);
-        $startTime = microtime(true);
-
-        try {
-            $this->config->update(['is_running' => true]);
-            $this->processApiData();
-
-            $executionTime = round(microtime(true) - $startTime, 2);
-            $this->stats['execution_time'] = $executionTime;
-
-            $this->executionLog->markCompleted($this->stats);
-            $this->config->update(['is_running' => false]);
-        } catch (\Exception $e) {
-            $this->executionLog->markFailed($e->getMessage());
-            $this->config->update(['is_running' => false]);
-            throw $e;
-        }
-
-        return $this->stats;
-    }
-
-    /**
-     * پردازش یک صفحه منفرد (نسخه اصلاح شده)
-     */
-    public function processPage(int $pageNumber, ExecutionLog $executionLog): array
-    {
-        if ($pageNumber === -1) {
+        if ($sourceId === -1) {
             // این Job برای پایان دادن به اجرا است
             $this->completeExecution($executionLog);
             return ['action' => 'completed'];
@@ -116,118 +97,105 @@ class ApiDataService
         $apiSettings = $this->config->getApiSettings();
         $generalSettings = $this->config->getGeneralSettings();
 
-        $url = $this->buildApiUrl($apiSettings, $pageNumber);
+        // ساخت URL برای source ID خاص
+        $url = $this->buildApiUrlForSourceId($sourceId);
 
-        // ثبت شروع پردازش صفحه
-        $executionLog->addLogEntry("🚀 شروع پردازش صفحه {$pageNumber}", [
-            'page' => $pageNumber,
+        $executionLog->addLogEntry("🔍 پردازش source ID {$sourceId}", [
+            'source_id' => $sourceId,
             'url' => $url,
             'started_at' => now()->toISOString()
         ]);
 
-        Log::info("🚀 شروع پردازش صفحه {$pageNumber}", [
+        Log::info("🔍 شروع پردازش source ID {$sourceId}", [
             'config_id' => $this->config->id,
             'execution_id' => $executionLog->execution_id,
             'url' => $url
         ]);
 
         try {
+            // بررسی اینکه آیا این ID قبلاً پردازش شده
+            if ($this->config->isSourceIdProcessed($sourceId)) {
+                $executionLog->addLogEntry("⏭️ Source ID {$sourceId} قبلاً پردازش شده", [
+                    'source_id' => $sourceId,
+                    'action' => 'skipped'
+                ]);
+
+                // بروزرسانی last_source_id
+                $this->config->updateLastSourceId($sourceId);
+
+                return [
+                    'source_id' => $sourceId,
+                    'action' => 'skipped',
+                    'reason' => 'already_processed'
+                ];
+            }
+
             $response = $this->makeHttpRequest($url, $apiSettings, $generalSettings);
 
             if (!$response->successful()) {
                 $error = "خطای HTTP {$response->status()}: {$response->reason()}";
-                $executionLog->addLogEntry("❌ خطا در صفحه {$pageNumber}: {$error}", [
-                    'page' => $pageNumber,
+
+                // ثبت شکست
+                $this->config->logSourceIdFailure($sourceId, "HTTP {$response->status()}");
+
+                $executionLog->addLogEntry("❌ خطا در source ID {$sourceId}: {$error}", [
+                    'source_id' => $sourceId,
                     'http_status' => $response->status(),
                     'error' => $error,
                     'url' => $url
                 ]);
+
                 throw new \Exception($error);
             }
 
             $data = $response->json();
-            $books = $this->extractBooksFromApiData($data);
+            $bookData = $this->extractBookFromApiData($data, $sourceId);
 
-            if (empty($books)) {
-                $executionLog->addLogEntry("⚪ صفحه {$pageNumber}: هیچ کتابی یافت نشد", [
-                    'page' => $pageNumber,
-                    'books_found' => 0,
-                    'response_size' => strlen(json_encode($data))
+            if (empty($bookData)) {
+                // این ID کتابی ندارد - ثبت شکست
+                $this->config->logSourceIdFailure($sourceId, 'No book data found');
+
+                $executionLog->addLogEntry("📭 Source ID {$sourceId}: کتابی یافت نشد", [
+                    'source_id' => $sourceId,
+                    'response_size' => strlen(json_encode($data)),
+                    'action' => 'no_book_found'
                 ]);
-                return ['action' => 'no_more_data', 'page' => $pageNumber];
+
+                return [
+                    'source_id' => $sourceId,
+                    'action' => 'no_book_found',
+                    'stats' => ['total' => 1, 'success' => 0, 'failed' => 1, 'duplicate' => 0]
+                ];
             }
 
-            // پردازش کتاب‌ها
-            $pageStats = $this->processBooksInPage($books, $pageNumber, $executionLog, $apiSettings);
-
-            $pageProcessTime = round(microtime(true) - $startTime, 2);
+            // پردازش کتاب
+            $bookResult = $this->processBookWithSource($bookData, $sourceId, $executionLog, $apiSettings);
+            $processTime = round(microtime(true) - $startTime, 2);
 
             // بروزرسانی آمار کانفیگ
-            Log::info("📊 قبل از بروزرسانی Config", [
-                'config_id' => $this->config->id,
-                'page' => $pageNumber,
-                'page_stats' => $pageStats,
-                'config_before' => [
-                    'total_processed' => $this->config->total_processed,
-                    'total_success' => $this->config->total_success,
-                    'total_failed' => $this->config->total_failed
-                ]
-            ]);
-
-            $this->config->updateProgress($pageNumber, $pageStats);
+            $this->config->updateProgress($sourceId, $bookResult['stats']);
 
             // بروزرسانی ExecutionLog
-            Log::info("📊 قبل از بروزرسانی ExecutionLog", [
-                'log_id' => $executionLog->id,
-                'page_stats' => $pageStats,
-                'log_before' => [
-                    'total_processed' => $executionLog->total_processed,
-                    'total_success' => $executionLog->total_success,
-                    'total_failed' => $executionLog->total_failed
-                ]
-            ]);
+            $executionLog->updateProgress($bookResult['stats']);
 
-            $executionLog->updateProgress($pageStats);
-
-            // محاسبه سرعت
-            $recordsPerMinute = $pageProcessTime > 0 ? round((count($books) / $pageProcessTime) * 60, 1) : 0;
-
-            // بروزرسانی فیلدهای اضافی ExecutionLog
-            $executionLog->update([
-                'current_page' => $pageNumber,
-                'records_per_minute' => $recordsPerMinute,
-                'last_activity_at' => now()
-            ]);
-
-            Log::info("✅ صفحه {$pageNumber} کامل شد", [
+            Log::info("✅ Source ID {$sourceId} کامل شد", [
                 'config_id' => $this->config->id,
                 'execution_id' => $executionLog->execution_id,
-                'page_stats' => $pageStats,
-                'page_process_time' => $pageProcessTime,
-                'records_per_minute' => $recordsPerMinute,
-                'config_after' => [
-                    'total_processed' => $this->config->fresh()->total_processed,
-                    'total_success' => $this->config->fresh()->total_success,
-                    'total_failed' => $this->config->fresh()->total_failed
-                ],
-                'log_after' => [
-                    'total_processed' => $executionLog->fresh()->total_processed,
-                    'total_success' => $executionLog->fresh()->total_success,
-                    'total_failed' => $executionLog->fresh()->total_failed
-                ]
+                'result' => $bookResult,
+                'process_time' => $processTime
             ]);
 
-            return $pageStats;
+            return $bookResult;
         } catch (\Exception $e) {
-            Log::error("❌ خطا در پردازش صفحه {$pageNumber}", [
+            Log::error("❌ خطا در پردازش source ID {$sourceId}", [
                 'config_id' => $this->config->id,
                 'execution_id' => $executionLog->execution_id,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
 
-            $executionLog->addLogEntry("❌ خطای کلی در صفحه {$pageNumber}", [
-                'page' => $pageNumber,
+            $executionLog->addLogEntry("❌ خطای کلی در source ID {$sourceId}", [
+                'source_id' => $sourceId,
                 'error' => $e->getMessage(),
                 'failed_at' => now()->toISOString()
             ]);
@@ -237,120 +205,276 @@ class ApiDataService
     }
 
     /**
-     * پردازش کتاب‌های یک صفحه
+     * پردازش کتاب با منبع
      */
-    private function processBooksInPage(array $books, int $pageNumber, ExecutionLog $executionLog, array $apiSettings): array
+    private function processBookWithSource(array $bookData, int $sourceId, ExecutionLog $executionLog, array $apiSettings): array
     {
-        $pageStats = ['total' => 0, 'success' => 0, 'failed' => 0, 'duplicate' => 0];
-        $bookDetails = [];
+        $stats = ['total' => 1, 'success' => 0, 'failed' => 0, 'duplicate' => 0, 'updated' => 0];
 
-        Log::info("📚 شروع پردازش " . count($books) . " کتاب در صفحه {$pageNumber}", [
-            'config_id' => $this->config->id,
-            'page' => $pageNumber,
-            'books_count' => count($books)
-        ]);
+        try {
+            $extractedData = $this->extractFieldsFromData($bookData, $apiSettings['field_mapping'] ?? []);
 
-        foreach ($books as $index => $bookData) {
-            $pageStats['total']++;
-            $bookStartTime = microtime(true);
+            if (empty($extractedData['title'])) {
+                throw new \Exception('عنوان کتاب یافت نشد');
+            }
 
-            try {
-                // اطمینان از اینکه bookData آرایه است
-                if (!is_array($bookData)) {
-                    throw new \Exception('داده کتاب باید آرایه باشد');
-                }
+            // محاسبه MD5 برای کتاب
+            $contentHash = $this->calculateBookHash($extractedData);
 
-                $result = $this->createBook($bookData, $apiSettings['field_mapping'] ?? []);
-                $bookProcessTime = round((microtime(true) - $bookStartTime) * 1000, 2);
+            // بررسی وجود کتاب با همین MD5
+            $existingBook = Book::where('content_hash', $contentHash)->first();
 
-                $bookDetail = [
-                    'index' => $index + 1,
-                    'title' => $result['title'] ?? 'Unknown',
-                    'status' => $result['status'],
-                    'book_id' => $result['book_id'] ?? null,
-                    'process_time_ms' => $bookProcessTime
-                ];
+            if ($existingBook) {
+                // کتاب با همین MD5 وجود دارد
+                $result = $this->handleExistingBook($existingBook, $extractedData, $sourceId);
+                $stats[$result['action']]++;
 
-                if ($result['status'] === 'created') {
-                    $pageStats['success']++;
-                    Log::info("✅ کتاب ایجاد شد", [
-                        'page' => $pageNumber,
-                        'index' => $index + 1,
-                        'title' => $result['title'],
-                        'book_id' => $result['book_id']
-                    ]);
-                } elseif ($result['status'] === 'duplicate') {
-                    $pageStats['duplicate']++;
-                    Log::info("🔄 کتاب تکراری", [
-                        'page' => $pageNumber,
-                        'index' => $index + 1,
-                        'title' => $result['title'],
-                        'book_id' => $result['book_id']
-                    ]);
-                } elseif ($result['status'] === 'updated') {
-                    $pageStats['success']++; // به عنوان موفقیت حساب می‌شود
-                    Log::info("📝 کتاب بروزرسانی شد", [
-                        'page' => $pageNumber,
-                        'index' => $index + 1,
-                        'title' => $result['title'],
-                        'book_id' => $result['book_id']
-                    ]);
-                }
-
-                $bookDetails[] = $bookDetail;
-            } catch (\Exception $e) {
-                $pageStats['failed']++;
-                $bookProcessTime = round((microtime(true) - $bookStartTime) * 1000, 2);
-
-                $bookDetails[] = [
-                    'index' => $index + 1,
-                    'title' => is_array($bookData) ? ($bookData['title'] ?? 'Unknown') : 'Invalid Data',
-                    'status' => 'failed',
-                    'error' => $e->getMessage(),
-                    'process_time_ms' => $bookProcessTime
-                ];
-
-                Log::error('❌ خطا در پردازش کتاب', [
-                    'page' => $pageNumber,
-                    'book_index' => $index + 1,
-                    'error' => $e->getMessage(),
-                    'book_data_type' => gettype($bookData),
-                    'book_data' => is_array($bookData) ? $bookData : 'Non-array data'
+                $executionLog->addLogEntry("🔄 کتاب موجود پردازش شد", [
+                    'source_id' => $sourceId,
+                    'book_id' => $existingBook->id,
+                    'title' => $existingBook->title,
+                    'action' => $result['action'],
+                    'changes' => $result['changes'] ?? []
                 ]);
-            }
 
-            // تاخیر بین رکوردها
-            if ($this->config->delay_seconds > 0) {
-                sleep($this->config->delay_seconds);
+                return [
+                    'source_id' => $sourceId,
+                    'action' => $result['action'],
+                    'book_id' => $existingBook->id,
+                    'title' => $existingBook->title,
+                    'stats' => $stats
+                ];
+            } else {
+                // کتاب جدید
+                $book = $this->createNewBookWithSource($extractedData, $sourceId, $contentHash);
+                $stats['success']++;
+
+                $executionLog->addLogEntry("✨ کتاب جدید ایجاد شد", [
+                    'source_id' => $sourceId,
+                    'book_id' => $book->id,
+                    'title' => $book->title,
+                    'content_hash' => $contentHash
+                ]);
+
+                return [
+                    'source_id' => $sourceId,
+                    'action' => 'created',
+                    'book_id' => $book->id,
+                    'title' => $book->title,
+                    'stats' => $stats
+                ];
             }
+        } catch (\Exception $e) {
+            $stats['failed']++;
+            Log::error('❌ خطا در پردازش کتاب', [
+                'source_id' => $sourceId,
+                'error' => $e->getMessage(),
+                'book_data' => $bookData
+            ]);
+
+            return [
+                'source_id' => $sourceId,
+                'action' => 'failed',
+                'error' => $e->getMessage(),
+                'stats' => $stats
+            ];
         }
-
-        // ثبت جزئیات کامل در ExecutionLog با context ساده
-        $simpleContext = [
-            'page' => $pageNumber,
-            'page_stats' => $pageStats,
-            'books_found' => count($books),
-            'books_processed' => count($bookDetails)
-        ];
-
-        $executionLog->addLogEntry("✅ صفحه {$pageNumber} پردازش شد", $simpleContext);
-
-        Log::info("✅ پردازش کتاب‌های صفحه {$pageNumber} تمام شد", [
-            'config_id' => $this->config->id,
-            'page' => $pageNumber,
-            'page_stats' => $pageStats,
-            'books_processed' => count($books)
-        ]);
-
-        return $pageStats;
     }
 
     /**
-     * تکمیل اجرا
+     * مدیریت کتاب موجود
      */
+    private function handleExistingBook(Book $existingBook, array $newData, int $sourceId): array
+    {
+        $changes = [];
+        $needsUpdate = false;
+
+        // اضافه کردن منبع جدید
+        $this->addBookSource($existingBook, $sourceId);
+
+        // بررسی فیلدهای قابل تکمیل
+        if ($this->config->fill_missing_fields) {
+            $fillableFields = ['description', 'isbn', 'publication_year', 'pages_count', 'file_size', 'language', 'format'];
+
+            foreach ($fillableFields as $field) {
+                if (empty($existingBook->$field) && !empty($newData[$field])) {
+                    $existingBook->$field = $newData[$field];
+                    $changes[] = "filled_{$field}";
+                    $needsUpdate = true;
+                }
+            }
+        }
+
+        // بررسی توضیحات بهتر
+        if ($this->config->update_descriptions && !empty($newData['description'])) {
+            $existingLength = strlen($existingBook->description ?? '');
+            $newLength = strlen($newData['description']);
+
+            if ($newLength > $existingLength * 1.2) { // 20% بیشتر
+                $existingBook->description = $newData['description'];
+                $changes[] = 'updated_description';
+                $needsUpdate = true;
+            }
+        }
+
+        // پردازش تصاویر جدید
+        if (!empty($newData['image_url'])) {
+            $this->processImages($existingBook, $newData['image_url']);
+            $changes[] = 'updated_images';
+        }
+
+        // پردازش نویسندگان جدید
+        if (!empty($newData['author'])) {
+            $this->processAuthors($existingBook, $newData['author']);
+            $changes[] = 'updated_authors';
+        }
+
+        if ($needsUpdate) {
+            $existingBook->save();
+            return ['action' => 'updated', 'changes' => $changes];
+        } else {
+            return ['action' => 'duplicate', 'changes' => ['added_source']];
+        }
+    }
+
+    /**
+     * ایجاد کتاب جدید با منبع
+     */
+    private function createNewBookWithSource(array $extractedData, int $sourceId, string $contentHash): Book
+    {
+        return DB::transaction(function () use ($extractedData, $sourceId, $contentHash) {
+            // ایجاد category و publisher
+            $category = $this->findOrCreateCategory($extractedData['category'] ?? 'عمومی');
+            $publisher = null;
+
+            if (!empty($extractedData['publisher'])) {
+                $publisherName = $this->extractPublisherName($extractedData['publisher']);
+                if ($publisherName) {
+                    $publisher = $this->findOrCreatePublisher($publisherName);
+                }
+            }
+
+            // ایجاد کتاب
+            $book = Book::create([
+                'title' => $extractedData['title'],
+                'description' => $extractedData['description'] ?? null,
+                'excerpt' => Str::limit($extractedData['description'] ?? $extractedData['title'], 200),
+                'slug' => Str::slug($extractedData['title'] . '_' . time()),
+                'isbn' => $extractedData['isbn'] ?? null,
+                'publication_year' => $extractedData['publication_year'] ?? null,
+                'pages_count' => $extractedData['pages_count'] ?? null,
+                'language' => $extractedData['language'] ?? 'fa',
+                'format' => $extractedData['format'] ?? 'pdf',
+                'file_size' => $extractedData['file_size'] ?? null,
+                'content_hash' => $contentHash,
+                'category_id' => $category->id,
+                'publisher_id' => $publisher?->id,
+                'downloads_count' => 0,
+                'status' => 'active'
+            ]);
+
+            // اضافه کردن منبع
+            $this->addBookSource($book, $sourceId);
+
+            // پردازش نویسندگان
+            if (!empty($extractedData['author'])) {
+                $this->processAuthors($book, $extractedData['author']);
+            }
+
+            // پردازش تصاویر
+            if (!empty($extractedData['image_url'])) {
+                $this->processImages($book, $extractedData['image_url']);
+            }
+
+            return $book;
+        });
+    }
+
+    /**
+     * اضافه کردن منبع کتاب
+     */
+    private function addBookSource(Book $book, int $sourceId): void
+    {
+        BookSource::updateOrCreate(
+            [
+                'book_id' => $book->id,
+                'source_type' => $this->config->source_type,
+                'source_id' => (string) $sourceId
+            ],
+            [
+                'source_url' => $this->buildApiUrlForSourceId($sourceId),
+                'source_updated_at' => now(),
+                'is_active' => true,
+                'priority' => 1
+            ]
+        );
+
+        Log::info("📝 منبع کتاب ثبت شد", [
+            'book_id' => $book->id,
+            'source_type' => $this->config->source_type,
+            'source_id' => $sourceId,
+            'source_name' => $this->config->source_name
+        ]);
+    }
+
+    /**
+     * محاسبه hash کتاب بر اساس اطلاعات اصلی
+     */
+    private function calculateBookHash(array $data): string
+    {
+        $hashData = [
+            'title' => $data['title'] ?? '',
+            'author' => $data['author'] ?? '',
+            'isbn' => $data['isbn'] ?? '',
+            'publication_year' => $data['publication_year'] ?? '',
+            'pages_count' => $data['pages_count'] ?? ''
+        ];
+
+        // حذف فاصله‌های اضافی و تبدیل به lowercase
+        $normalizedData = array_map(function ($value) {
+            return strtolower(trim(preg_replace('/\s+/', ' ', $value)));
+        }, $hashData);
+
+        return md5(json_encode($normalizedData, JSON_UNESCAPED_UNICODE));
+    }
+
+    /**
+     * ساخت URL API برای source ID خاص
+     */
+    private function buildApiUrlForSourceId(int $sourceId): string
+    {
+        return $this->config->buildApiUrl($sourceId);
+    }
+
+    /**
+     * استخراج داده کتاب از پاسخ API
+     */
+    private function extractBookFromApiData(array $data, int $sourceId): array
+    {
+        // اگر خود data یک کتاب است
+        if (isset($data['id']) || isset($data['title'])) {
+            return $data;
+        }
+
+        // بررسی ساختارهای مختلف
+        $possibleKeys = ['data', 'book', 'result', 'item'];
+        foreach ($possibleKeys as $key) {
+            if (isset($data[$key]) && is_array($data[$key])) {
+                return $data[$key];
+            }
+        }
+
+        Log::warning("📚 ساختار نامعلوم برای source ID {$sourceId}", [
+            'data_keys' => array_keys($data),
+            'source_id' => $sourceId
+        ]);
+
+        return [];
+    }
+
+    // تکمیل اجرا
     private function completeExecution(ExecutionLog $executionLog): void
     {
-        // آمار نهایی از کانفیگ
         $config = $this->config->fresh();
         $finalStats = [
             'total' => $config->total_processed,
@@ -366,233 +490,12 @@ class ApiDataService
         Log::info("🎉 اجرا کامل شد", [
             'config_id' => $this->config->id,
             'execution_id' => $executionLog->execution_id,
-            'final_stats' => $finalStats
+            'final_stats' => $finalStats,
+            'last_source_id' => $this->config->last_source_id
         ]);
     }
 
-    /**
-     * دریافت آمار کل از جدول کانفیگ
-     */
-    private function getConfigTotalStats(): array
-    {
-        $config = $this->config->fresh(); // اطمینان از آخرین داده‌ها
-
-        return [
-            'total' => $config->total_processed,
-            'success' => $config->total_success,
-            'failed' => $config->total_failed,
-            'duplicate' => 0, // این باید از execution log محاسبه شود
-            'execution_time' => 0 // این در execution log محاسبه می‌شود
-        ];
-    }
-
-    /**
-     * بروزرسانی آمار با tracking بهتر
-     */
-    public function updateProgress(int $currentPage, array $stats): void
-    {
-        // اضافه کردن آمار جدید به آمار قبلی
-        $this->config->increment('total_processed', $stats['total'] ?? 0);
-        $this->config->increment('total_success', $stats['success'] ?? 0);
-        $this->config->increment('total_failed', $stats['failed'] ?? 0);
-
-        // بروزرسانی صفحه فعلی و زمان آخرین اجرا
-        $this->config->update([
-            'current_page' => $currentPage,
-            'last_run_at' => now(),
-        ]);
-
-        Log::info("📊 آمار کانفیگ بروزرسانی شد", [
-            'config_id' => $this->config->id,
-            'page' => $currentPage,
-            'page_stats' => $stats,
-            'total_stats' => [
-                'total_processed' => $this->config->fresh()->total_processed,
-                'total_success' => $this->config->fresh()->total_success,
-                'total_failed' => $this->config->fresh()->total_failed
-            ]
-        ]);
-    }
-
-    private function processApiData(): void
-    {
-        $apiSettings = $this->config->getApiSettings();
-        $generalSettings = $this->config->getGeneralSettings();
-        $crawlingSettings = $this->config->getCrawlingSettings();
-
-        $currentPage = $this->getCurrentPage($crawlingSettings);
-        $hasMorePages = true;
-
-        while ($hasMorePages && $currentPage <= ($crawlingSettings['max_pages'] ?? 1000)) {
-            $this->executionLog->addLogEntry("پردازش صفحه {$currentPage}");
-
-            $url = $this->buildApiUrl($apiSettings, $currentPage);
-            $response = $this->makeHttpRequest($url, $apiSettings, $generalSettings);
-
-            if (!$response->successful()) {
-                throw new \Exception("خطای HTTP {$response->status()}: {$response->reason()}");
-            }
-
-            $data = $response->json();
-            $books = $this->extractBooksFromApiData($data);
-
-            if (empty($books)) {
-                $hasMorePages = false;
-                break;
-            }
-
-            $this->processBooksPage($books, $apiSettings['field_mapping'] ?? []);
-            $this->config->updateProgress($currentPage, $this->stats);
-
-            // تاخیر بین صفحات
-            if ($this->config->page_delay > 0) {
-                sleep($this->config->page_delay);
-            }
-
-            $currentPage++;
-        }
-    }
-
-    private function getCurrentPage(array $crawlingSettings): int
-    {
-        $mode = $crawlingSettings['mode'] ?? 'continue';
-
-        return match ($mode) {
-            'restart' => $crawlingSettings['start_page'] ?? 1,
-            'update' => $crawlingSettings['start_page'] ?? 1,
-            default => $this->config->current_page ?? ($crawlingSettings['start_page'] ?? 1)
-        };
-    }
-
-    private function processBooksPage(array $books, array $fieldMapping): void
-    {
-        foreach ($books as $bookData) {
-            $this->stats['total']++;
-
-            try {
-                $result = $this->createBook($bookData, $fieldMapping);
-
-                if ($result['status'] === 'created') {
-                    $this->stats['success']++;
-                } elseif ($result['status'] === 'duplicate') {
-                    $this->stats['duplicate']++;
-                }
-            } catch (\Exception $e) {
-                $this->stats['failed']++;
-                Log::error('خطا در پردازش کتاب', ['error' => $e->getMessage(), 'book_data' => $bookData]);
-            }
-
-            if ($this->config->delay_seconds > 0) {
-                sleep($this->config->delay_seconds);
-            }
-        }
-    }
-
-    private function createBook(array $bookData, array $fieldMapping): array
-    {
-        $extractedData = $this->extractFieldsFromData($bookData, $fieldMapping);
-
-        if (empty($extractedData['title'])) {
-            throw new \Exception('عنوان کتاب یافت نشد');
-        }
-
-        $crawlingSettings = $this->config->getCrawlingSettings();
-        if ($crawlingSettings['mode'] === 'update') {
-            $existingBook = Book::where('title', $extractedData['title'])->first();
-            if ($existingBook) {
-                $this->updateExistingBook($existingBook, $extractedData);
-                return ['status' => 'updated', 'title' => $extractedData['title'], 'book_id' => $existingBook->id];
-            }
-        } else {
-            $existingBook = Book::where('title', $extractedData['title'])->first();
-            if ($existingBook) {
-                return ['status' => 'duplicate', 'title' => $extractedData['title'], 'book_id' => $existingBook->id];
-            }
-        }
-
-        return $this->createNewBook($extractedData);
-    }
-
-    private function updateExistingBook(Book $book, array $extractedData): void
-    {
-        DB::transaction(function () use ($book, $extractedData) {
-            $book->update([
-                'description' => $extractedData['description'] ?? $book->description,
-                'isbn' => $extractedData['isbn'] ?? $book->isbn,
-                'publication_year' => $extractedData['publication_year'] ?? $book->publication_year,
-                'pages_count' => $extractedData['pages_count'] ?? $book->pages_count,
-                'file_size' => $extractedData['file_size'] ?? $book->file_size,
-            ]);
-
-            if (!empty($extractedData['image_url'])) {
-                $this->processImages($book, $extractedData['image_url']);
-            }
-        });
-    }
-
-    private function createNewBook(array $extractedData): array
-    {
-        DB::beginTransaction();
-
-        try {
-            $category = $this->findOrCreateCategory($extractedData['category'] ?? 'عمومی');
-            $publisher = null;
-
-            if (!empty($extractedData['publisher'])) {
-                $publisherName = $this->extractPublisherName($extractedData['publisher']);
-                if ($publisherName) {
-                    $publisher = $this->findOrCreatePublisher($publisherName);
-                }
-            }
-
-            $book = Book::create([
-                'title' => $extractedData['title'],
-                'description' => $extractedData['description'] ?? null,
-                'excerpt' => Str::limit($extractedData['description'] ?? $extractedData['title'], 200),
-                'slug' => Str::slug($extractedData['title'] . '_' . time()),
-                'isbn' => $extractedData['isbn'] ?? null,
-                'publication_year' => $extractedData['publication_year'] ?? null,
-                'pages_count' => $extractedData['pages_count'] ?? null,
-                'language' => $extractedData['language'] ?? 'fa',
-                'format' => $extractedData['format'] ?? 'pdf',
-                'file_size' => $extractedData['file_size'] ?? null,
-                'content_hash' => md5($extractedData['title'] . time() . rand()),
-                'category_id' => $category->id,
-                'publisher_id' => $publisher?->id,
-                'downloads_count' => 0,
-                'status' => 'active'
-            ]);
-
-            if (!empty($extractedData['author'])) {
-                $this->processAuthors($book, $extractedData['author']);
-            }
-
-            if (!empty($extractedData['image_url'])) {
-                $this->processImages($book, $extractedData['image_url']);
-            }
-
-            DB::commit();
-            return ['status' => 'created', 'title' => $book->title, 'book_id' => $book->id];
-        } catch (\Exception $e) {
-            DB::rollBack();
-            throw $e;
-        }
-    }
-
-    private function buildApiUrl(array $apiSettings, int $page): string
-    {
-        $baseUrl = rtrim($this->config->base_url, '/');
-        $endpoint = $apiSettings['endpoint'] ?? '';
-        $fullUrl = $baseUrl . ($endpoint ? '/' . ltrim($endpoint, '/') : '');
-
-        $params = ['page' => $page, 'limit' => $this->config->records_per_run];
-        if (!empty($apiSettings['params'])) {
-            $params = array_merge($params, $apiSettings['params']);
-        }
-
-        return $fullUrl . '?' . http_build_query($params);
-    }
-
+    // متدهای کمکی (مشابه قبل)
     private function makeHttpRequest(string $url, array $apiSettings, array $generalSettings)
     {
         $httpClient = Http::timeout($this->config->timeout)->retry(3, 1000);
@@ -608,66 +511,22 @@ class ApiDataService
         return $httpClient->get($url);
     }
 
-    private function extractBooksFromApiData(array $data): array
-    {
-        // لاگ ساختار داده برای debug
-        Log::info("📖 ساختار پاسخ API", [
-            'data_keys' => array_keys($data),
-            'data_structure' => array_map(function ($value) {
-                return is_array($value) ? 'array[' . count($value) . ']' : gettype($value);
-            }, $data)
-        ]);
-
-        // بررسی ساختار استاندارد
-        if (isset($data['status'], $data['data']['books']) && $data['status'] === 'success') {
-            $books = $data['data']['books'];
-            Log::info("📚 کتاب‌ها از data.books استخراج شد", ['count' => count($books)]);
-            return is_array($books) ? $books : [];
-        }
-
-        // بررسی کلیدهای مختلف
-        $possibleKeys = ['data', 'books', 'results', 'items', 'records', 'list'];
-        foreach ($possibleKeys as $key) {
-            if (isset($data[$key]) && is_array($data[$key]) && !empty($data[$key])) {
-                // بررسی اینکه آیا اولین عنصر شبیه کتاب است
-                $firstItem = $data[$key][0] ?? null;
-                if (is_array($firstItem) && (isset($firstItem['title']) || isset($firstItem['name']))) {
-                    Log::info("📚 کتاب‌ها از کلید '{$key}' استخراج شد", ['count' => count($data[$key])]);
-                    return $data[$key];
-                }
-            }
-        }
-
-        // اگر خود data یک کتاب واحد باشد
-        if (isset($data['title']) || isset($data['name'])) {
-            Log::info("📚 یک کتاب واحد شناسایی شد");
-            return [$data];
-        }
-
-        // اگر هیچ‌کدام کار نکرد، لاگ کامل ساختار
-        Log::warning("📚 هیچ کتابی در پاسخ یافت نشد", [
-            'full_data' => $data
-        ]);
-
-        return [];
-    }
-
     private function extractFieldsFromData(array $data, array $fieldMapping): array
     {
         if (empty($fieldMapping)) {
             $fieldMapping = [
                 'title' => 'title',
-                'description' => 'description_en',
-                'author' => 'authors',
-                'category' => 'category.name',
+                'description' => 'description',
+                'author' => 'author',
+                'category' => 'category',
                 'publisher' => 'publisher',
                 'isbn' => 'isbn',
-                'publication_year' => 'publication_year',
-                'pages_count' => 'pages_count',
+                'publication_year' => 'year',
+                'pages_count' => 'pages',
                 'language' => 'language',
                 'format' => 'format',
-                'file_size' => 'file_size',
-                'image_url' => 'image_url.0'
+                'file_size' => 'size',
+                'image_url' => 'image'
             ];
         }
 
@@ -695,18 +554,6 @@ class ApiDataService
             } else {
                 return null;
             }
-        }
-
-        if ($path === 'authors' && is_array($value)) {
-            $names = [];
-            foreach ($value as $author) {
-                if (is_array($author) && isset($author['name'])) {
-                    $names[] = $author['name'];
-                } elseif (is_string($author)) {
-                    $names[] = $author;
-                }
-            }
-            return implode(', ', $names);
         }
 
         return $value;

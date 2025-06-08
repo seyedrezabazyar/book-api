@@ -23,14 +23,14 @@ class ProcessSinglePageJob implements ShouldQueue
 
     protected int $configId;
     protected string $executionId;
-    protected int $pageNumber;
+    protected int $sourceId; // تغییر نام از pageNumber به sourceId
 
-    public function __construct($config, int $pageNumber, string $executionId)
+    public function __construct($config, int $sourceId, string $executionId)
     {
         // اگر Config object باشد، ID را استخراج کن
         $this->configId = is_object($config) ? $config->id : (int)$config;
         $this->executionId = $executionId;
-        $this->pageNumber = $pageNumber;
+        $this->sourceId = $sourceId; // حالا source ID است نه page number
 
         // تنظیم صف بر اساس اولویت
         $this->onQueue('default');
@@ -39,18 +39,18 @@ class ProcessSinglePageJob implements ShouldQueue
     public function handle(): void
     {
         try {
-            Log::info("🚀 شروع ProcessSinglePageJob", [
+            Log::info("🚀 شروع ProcessSinglePageJob برای source ID", [
                 'config_id' => $this->configId,
                 'execution_id' => $this->executionId,
-                'page' => $this->pageNumber,
+                'source_id' => $this->sourceId,
                 'job_id' => $this->job?->getJobId()
             ]);
 
-            // 🔥 بررسی اولیه - اگر کانفیگ متوقف شده، Job را فوراً متوقف کن
+            // 🔥 بررسی اولیه
             $config = Config::find($this->configId);
             if (!$config) {
                 Log::error("❌ کانفیگ {$this->configId} یافت نشد");
-                $this->delete(); // حذف Job از صف
+                $this->delete();
                 return;
             }
 
@@ -58,9 +58,9 @@ class ProcessSinglePageJob implements ShouldQueue
             if (!$config->is_running) {
                 Log::info("⏹️ کانفیگ {$this->configId} متوقف شده، Job لغو می‌شود", [
                     'execution_id' => $this->executionId,
-                    'page' => $this->pageNumber
+                    'source_id' => $this->sourceId
                 ]);
-                $this->delete(); // حذف Job از صف
+                $this->delete();
                 return;
             }
 
@@ -76,26 +76,23 @@ class ProcessSinglePageJob implements ShouldQueue
             if ($executionLog->status !== 'running') {
                 Log::info("⏹️ ExecutionLog {$this->executionId} دیگر running نیست، Job متوقف می‌شود", [
                     'status' => $executionLog->status,
-                    'page' => $this->pageNumber
+                    'source_id' => $this->sourceId
                 ]);
                 $this->delete();
                 return;
             }
 
-            // 🔥 بررسی دوباره قبل از پردازش - Double Check
-            $config->refresh(); // رفرش از دیتابیس
+            // 🔥 بررسی دوباره قبل از پردازش
+            $config->refresh();
             if (!$config->is_running) {
                 Log::info("⏹️ Double Check: کانفیگ {$this->configId} متوقف شده، Job لغو می‌شود");
                 $this->delete();
                 return;
             }
 
-            // بررسی تکراری نبودن پردازش همین صفحه
-            $this->checkDuplicateProcessing();
-
-            // ایجاد service و پردازش صفحه
+            // ایجاد service و پردازش source ID
             $apiService = new ApiDataService($config);
-            $result = $apiService->processPage($this->pageNumber, $executionLog);
+            $result = $apiService->processSourceId($this->sourceId, $executionLog);
 
             // 🔥 بررسی نهایی قبل از ثبت نتایج
             $config->refresh();
@@ -108,17 +105,17 @@ class ProcessSinglePageJob implements ShouldQueue
             Log::info("✅ ProcessSinglePageJob تمام شد", [
                 'config_id' => $this->configId,
                 'execution_id' => $this->executionId,
-                'page' => $this->pageNumber,
+                'source_id' => $this->sourceId,
                 'result' => $result
             ]);
 
-            // برنامه‌ریزی صفحه بعدی (اگر لازم باشد)
-            $this->scheduleNextPageIfNeeded($config, $executionLog, $result);
+            // برنامه‌ریزی source ID بعدی (اگر لازم باشد)
+            $this->scheduleNextSourceIdIfNeeded($config, $executionLog, $result);
         } catch (\Exception $e) {
             Log::error("❌ خطا در ProcessSinglePageJob", [
                 'config_id' => $this->configId,
                 'execution_id' => $this->executionId,
-                'page' => $this->pageNumber,
+                'source_id' => $this->sourceId,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
@@ -126,7 +123,7 @@ class ProcessSinglePageJob implements ShouldQueue
             // ثبت خطا در ExecutionLog
             $executionLog = ExecutionLog::where('execution_id', $this->executionId)->first();
             if ($executionLog) {
-                $executionLog->addLogEntry("❌ خطای Job در صفحه {$this->pageNumber}", [
+                $executionLog->addLogEntry("❌ خطای Job در source ID {$this->sourceId}", [
                     'error' => $e->getMessage(),
                     'job_attempt' => $this->attempts(),
                     'max_attempts' => $this->tries
@@ -144,81 +141,93 @@ class ProcessSinglePageJob implements ShouldQueue
     }
 
     /**
-     * بررسی تکراری نبودن پردازش
+     * برنامه‌ریزی source ID بعدی در صورت نیاز
      */
-    private function checkDuplicateProcessing(): void
+    private function scheduleNextSourceIdIfNeeded(Config $config, ExecutionLog $executionLog, array $result): void
     {
-        // بررسی اینکه آیا Job مشابهی در صف وجود دارد
-        $duplicateJobs = DB::table('jobs')
-            ->where('payload', 'like', '%"configId":' . $this->configId . '%')
-            ->where('payload', 'like', '%"pageNumber":' . $this->pageNumber . '%')
-            ->where('payload', 'like', '%"executionId":"' . $this->executionId . '"%')
-            ->count();
+        // 🔥 بررسی وضعیت کانفیگ قبل از برنامه‌ریزی بعدی
+        $config->refresh();
+        if (!$config->is_running) {
+            Log::info("⏹️ کانفیگ متوقف شده، source ID بعدی برنامه‌ریزی نمی‌شود");
+            return;
+        }
 
-        if ($duplicateJobs > 1) {
-            Log::warning("⚠️ Job تکراری شناسایی شد", [
+        // اگر این source ID موجود نبود، Job پایان اجرا را dispatch کن
+        if (isset($result['action']) && $result['action'] === 'no_book_found') {
+            // چند source ID پشت سر هم خالی بود؟
+            $recentFailures = $this->countRecentFailures($config, $this->sourceId);
+
+            if ($recentFailures >= 5) {
+                Log::info("📄 {$recentFailures} source ID پشت سر هم خالی بود، اجرا تمام می‌شود", [
+                    'config_id' => $this->configId,
+                    'execution_id' => $this->executionId,
+                    'last_source_id' => $this->sourceId
+                ]);
+
+                // Job پایان اجرا را dispatch کن
+                ProcessSinglePageJob::dispatch($this->configId, -1, $this->executionId)
+                    ->delay(now()->addSeconds(5));
+                return;
+            }
+        }
+
+        // بررسی محدودیت تعداد IDs
+        $maxIds = $config->max_pages ?? 1000;
+        $startId = $config->getSmartStartPage();
+        $maxSourceId = $startId + $maxIds - 1;
+
+        if ($this->sourceId >= $maxSourceId) {
+            Log::info("📄 حداکثر source IDs ({$maxIds}) پردازش شد", [
                 'config_id' => $this->configId,
                 'execution_id' => $this->executionId,
-                'page' => $this->pageNumber,
-                'duplicate_count' => $duplicateJobs
+                'last_id' => $this->sourceId,
+                'max_id' => $maxSourceId
             ]);
+
+            // Job پایان اجرا را dispatch کن
+            ProcessSinglePageJob::dispatch($this->configId, -1, $this->executionId)
+                ->delay(now()->addSeconds(5));
+            return;
         }
+
+        // برنامه‌ریزی source ID بعدی
+        $nextSourceId = $this->sourceId + 1;
+        $delay = $config->delay_seconds ?? 3;
+
+        ProcessSinglePageJob::dispatch($this->configId, $nextSourceId, $this->executionId)
+            ->delay(now()->addSeconds($delay));
+
+        Log::info("📄 Source ID بعدی برنامه‌ریزی شد", [
+            'config_id' => $this->configId,
+            'execution_id' => $this->executionId,
+            'current_source_id' => $this->sourceId,
+            'next_source_id' => $nextSourceId,
+            'delay' => $delay
+        ]);
     }
 
     /**
-     * برنامه‌ریزی صفحه بعدی در صورت نیاز
+     * شمارش شکست‌های اخیر
      */
-    private function scheduleNextPageIfNeeded(Config $config, ExecutionLog $executionLog, array $result): void
+    private function countRecentFailures(Config $config, int $currentSourceId): int
     {
-        // 🔥 بررسی وضعیت کانفیگ قبل از برنامه‌ریزی صفحه بعدی
-        $config->refresh();
-        if (!$config->is_running) {
-            Log::info("⏹️ کانفیگ متوقف شده، صفحه بعدی برنامه‌ریزی نمی‌شود");
-            return;
+        $failures = 0;
+        for ($i = 1; $i <= 10; $i++) {
+            $checkId = $currentSourceId - $i;
+            if ($checkId < 1) break;
+
+            $hasFailure = \App\Models\ScrapingFailure::where('config_id', $config->id)
+                ->where('error_details->source_id', $checkId)
+                ->exists();
+
+            if ($hasFailure) {
+                $failures++;
+            } else {
+                break; // اگر یکی موفق بود، شمارش را بشکن
+            }
         }
 
-        // اگر داده‌ای در این صفحه نبود، اجرا را تمام کن
-        if (isset($result['action']) && $result['action'] === 'no_more_data') {
-            Log::info("📄 صفحه {$this->pageNumber} خالی بود، اجرا تمام می‌شود", [
-                'config_id' => $this->configId,
-                'execution_id' => $this->executionId
-            ]);
-
-            // Job پایان اجرا را dispatch کن - اصلاح شده
-            ProcessSinglePageJob::dispatch($this->configId, -1, $this->executionId)
-                ->delay(now()->addSeconds(5));
-            return;
-        }
-
-        // بررسی محدودیت تعداد صفحات
-        $maxPages = $config->max_pages ?? 999999;
-        if ($this->pageNumber >= $maxPages) {
-            Log::info("📄 حداکثر صفحات ({$maxPages}) پردازش شد", [
-                'config_id' => $this->configId,
-                'execution_id' => $this->executionId
-            ]);
-
-            // Job پایان اجرا را dispatch کن - اصلاح شده
-            ProcessSinglePageJob::dispatch($this->configId, -1, $this->executionId)
-                ->delay(now()->addSeconds(5));
-            return;
-        }
-
-        // برنامه‌ریزی صفحه بعدی
-        $nextPage = $this->pageNumber + 1;
-        $delay = $config->delay_seconds ?? 3;
-
-        // اصلاح شده: ارسال ID به جای object
-        ProcessSinglePageJob::dispatch($this->configId, $nextPage, $this->executionId)
-            ->delay(now()->addSeconds($delay));
-
-        Log::info("📄 صفحه بعدی برنامه‌ریزی شد", [
-            'config_id' => $this->configId,
-            'execution_id' => $this->executionId,
-            'current_page' => $this->pageNumber,
-            'next_page' => $nextPage,
-            'delay' => $delay
-        ]);
+        return $failures;
     }
 
     /**
@@ -233,7 +242,7 @@ class ProcessSinglePageJob implements ShouldQueue
         Log::error("💥 اجرا به دلیل خطای مکرر متوقف می‌شود", [
             'config_id' => $this->configId,
             'execution_id' => $this->executionId,
-            'page' => $this->pageNumber,
+            'source_id' => $this->sourceId,
             'error' => $e->getMessage()
         ]);
 
@@ -251,13 +260,13 @@ class ProcessSinglePageJob implements ShouldQueue
             'stopped_manually' => false,
             'stopped_due_to_error' => true,
             'final_error' => $e->getMessage(),
-            'failed_page' => $this->pageNumber,
+            'failed_source_id' => $this->sourceId,
             'stopped_at' => now()->toISOString()
         ];
 
         $executionLog->update([
             'status' => ExecutionLog::STATUS_FAILED,
-            'error_message' => "خطای مکرر در صفحه {$this->pageNumber}: " . $e->getMessage(),
+            'error_message' => "خطای مکرر در source ID {$this->sourceId}: " . $e->getMessage(),
             'stop_reason' => 'خطای مکرر در Job',
             'finished_at' => now(),
             'execution_time' => $executionLog->started_at ? now()->diffInSeconds($executionLog->started_at) : 0
@@ -300,7 +309,7 @@ class ProcessSinglePageJob implements ShouldQueue
      */
     public function uniqueId(): string
     {
-        return "process_page_{$this->configId}_{$this->executionId}_{$this->pageNumber}";
+        return "process_source_{$this->configId}_{$this->executionId}_{$this->sourceId}";
     }
 
     /**
@@ -327,7 +336,7 @@ class ProcessSinglePageJob implements ShouldQueue
         Log::error("💥 ProcessSinglePageJob نهایتاً ناموفق شد", [
             'config_id' => $this->configId,
             'execution_id' => $this->executionId,
-            'page' => $this->pageNumber,
+            'source_id' => $this->sourceId,
             'error' => $exception->getMessage(),
             'trace' => $exception->getTraceAsString()
         ]);
@@ -337,7 +346,7 @@ class ProcessSinglePageJob implements ShouldQueue
             $executionLog = ExecutionLog::where('execution_id', $this->executionId)->first();
             if ($executionLog) {
                 $executionLog->addLogEntry("💥 Job نهایتاً ناموفق شد", [
-                    'page' => $this->pageNumber,
+                    'source_id' => $this->sourceId,
                     'error' => $exception->getMessage(),
                     'failed_at' => now()->toISOString()
                 ]);

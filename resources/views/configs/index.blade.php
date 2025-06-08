@@ -136,14 +136,15 @@
                             @endphp
 
                             <div class="text-sm">
-                                <div class="font-medium text-gray-900">📊 کل آمار:</div>
+                                <div class="font-medium text-gray-900">📊 آمار {{ $config->source_name }}:</div>
                                 <div class="text-xs text-gray-600 mt-1">
                                     🔢 پردازش شده: {{ number_format($displayStats['total_processed']) }}<br>
                                     ✅ موفق: {{ number_format($displayStats['total_success']) }}<br>
-                                    🏃 اجراها: {{ $displayStats['total_executions'] }}<br>
+                                    🆔 آخرین ID: {{ $config->last_source_id }}<br>
+                                    📄 بعدی: {{ $displayStats['next_source_id'] ?? 'تشخیص خودکار' }}<br>
+                                    🏃 اجراها: {{ $displayStats['total_executions'] }}
                                     @if ($displayStats['total_executions'] > 0)
-                                        ⏹️ متوقف: {{ $displayStats['stopped_executions'] }}<br>
-                                        ❌ ناموفق: {{ $displayStats['failed_executions'] }}
+                                        (⏹️{{ $displayStats['stopped_executions'] }} ❌{{ $displayStats['failed_executions'] }})
                                     @endif
                                 </div>
 
@@ -152,12 +153,56 @@
                                         <div class="text-gray-500">نرخ موفقیت: {{ $displayStats['success_rate'] }}%</div>
                                         <div class="w-full bg-gray-200 rounded-full h-1 mt-1">
                                             <div class="bg-green-600 h-1 rounded-full"
-                                                style="width: {{ $displayStats['success_rate'] }}%"></div>
+                                                 style="width: {{ $displayStats['success_rate'] }}%"></div>
                                         </div>
                                     </div>
                                 @endif
+
+                                <!-- اطلاعات تنظیمات هوشمند -->
+                                <div class="mt-2 pt-2 border-t border-gray-200 text-xs">
+                                    <div class="flex items-center gap-2">
+                                        @if ($config->auto_resume)
+                                            <span class="text-blue-600" title="ادامه خودکار">⚡</span>
+                                        @endif
+                                        @if ($config->fill_missing_fields)
+                                            <span class="text-green-600" title="تکمیل فیلدهای خالی">🔧</span>
+                                        @endif
+                                        @if ($config->update_descriptions)
+                                            <span class="text-purple-600" title="بهبود توضیحات">📝</span>
+                                        @endif
+                                        <span class="text-gray-500">تا {{ number_format($config->max_pages) }} ID</span>
+                                    </div>
+                                </div>
                             </div>
                         </td>
+
+                        <!-- Stats -->
+                        <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                            <div class="bg-white p-4 rounded shadow text-center">
+                                <div class="text-2xl font-bold text-blue-600">{{ number_format($config->total_processed ?? 0) }}</div>
+                                <div class="text-sm text-gray-600">کل پردازش شده</div>
+                            </div>
+                            <div class="bg-white p-4 rounded shadow text-center">
+                                <div class="text-2xl font-bold text-green-600">{{ number_format($config->total_success ?? 0) }}</div>
+                                <div class="text-sm text-gray-600">موفق</div>
+                            </div>
+                            <div class="bg-white p-4 rounded shadow text-center">
+                                <div class="text-2xl font-bold text-red-600">{{ number_format($config->total_failed ?? 0) }}</div>
+                                <div class="text-sm text-gray-600">خطا</div>
+                            </div>
+                            <div class="bg-white p-4 rounded shadow text-center">
+                                <div class="text-2xl font-bold text-purple-600">{{ number_format($config->last_source_id) }}</div>
+                                <div class="text-sm text-gray-600">آخرین ID</div>
+                            </div>
+                            <div class="bg-white p-4 rounded shadow text-center">
+                                <div class="text-2xl font-bold text-orange-600">{{ number_format($stats['next_source_id']) }}</div>
+                                <div class="text-sm text-gray-600">بعدی</div>
+                            </div>
+                            <div class="bg-white p-4 rounded shadow text-center">
+                                <div class="text-2xl font-bold text-indigo-600">{{ number_format($config->max_pages) }}</div>
+                                <div class="text-sm text-gray-600">حداکثر ID</div>
+                            </div>
+                        </div>
 
                         <!-- آخرین اجرا -->
                         <td class="p-4">
