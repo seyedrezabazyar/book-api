@@ -663,16 +663,43 @@ class ApiDataService
     private function processAuthors(Book $book, string $authorString): void
     {
         $authorNames = array_map('trim', explode(',', $authorString));
+
         foreach ($authorNames as $authorName) {
             if (empty($authorName)) continue;
+
+            // پیدا کردن یا ایجاد نویسنده
             $author = Author::firstOrCreate(
                 ['name' => $authorName],
-                ['slug' => Str::slug($authorName . '_' . time()), 'is_active' => true, 'books_count' => 0]
+                [
+                    'slug' => Str::slug($authorName . '_' . time()),
+                    'is_active' => true,
+                    'books_count' => 0
+                ]
             );
-            $book->authors()->syncWithoutDetaching([$author->id]);
+
+            // بررسی اینکه آیا رابطه قبلاً وجود دارد
+            $exists = DB::table('book_author')
+                ->where('book_id', $book->id)
+                ->where('author_id', $author->id)
+                ->exists();
+
+            if (!$exists) {
+                // اضافه کردن رابطه با timestamps صحیح
+                DB::table('book_author')->insert([
+                    'book_id' => $book->id,
+                    'author_id' => $author->id,
+                    'created_at' => now(),
+                    'updated_at' => now()
+                ]);
+
+                Log::info("✅ نویسنده '{$authorName}' به کتاب '{$book->title}' اضافه شد", [
+                    'book_id' => $book->id,
+                    'author_id' => $author->id,
+                    'author_name' => $authorName
+                ]);
+            }
         }
     }
-
     private function processImages(Book $book, string $imageUrl): void
     {
         if (filter_var($imageUrl, FILTER_VALIDATE_URL)) {
