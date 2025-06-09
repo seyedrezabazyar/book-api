@@ -70,9 +70,7 @@ class SourceIdManager
                 $q->where('status', 'active');
             })
             ->pluck('source_id')
-            ->map(function ($id) {
-                return (int) $id;
-            })
+            ->map(fn($id) => (int) $id)
             ->toArray();
 
         // دریافت ID های شکست خورده

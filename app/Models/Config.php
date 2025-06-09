@@ -70,11 +70,6 @@ class Config extends Model
         return $this->hasMany(BookSource::class, 'source_type', 'source_name');
     }
 
-    public function scopeActive($query)
-    {
-        return $query; // همه کانفیگ‌ها فعال هستند
-    }
-
     public function isActive(): bool
     {
         return true;

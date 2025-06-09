@@ -503,17 +503,13 @@ class ApiDataService
     // متدهای کمکی
     private function makeHttpRequest(string $url, array $apiSettings, array $generalSettings)
     {
-        $httpClient = Http::timeout($this->config->timeout)->retry(3, 1000);
-
-        if (!empty($generalSettings['user_agent'])) {
-            $httpClient = $httpClient->withUserAgent($generalSettings['user_agent']);
-        }
-
-        if (!($generalSettings['verify_ssl'] ?? true)) {
-            $httpClient = $httpClient->withoutVerifying();
-        }
-
-        return $httpClient->get($url);
+        return Http::timeout($this->config->timeout)
+            ->retry(3, 1000)
+            ->when(!empty($generalSettings['user_agent']),
+                fn($client) => $client->withUserAgent($generalSettings['user_agent']))
+            ->when(!($generalSettings['verify_ssl'] ?? true),
+                fn($client) => $client->withoutVerifying())
+            ->get($url);
     }
 
     private function extractFieldsFromData(array $data, array $fieldMapping): array

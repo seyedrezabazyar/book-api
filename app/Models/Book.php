@@ -50,33 +50,10 @@ class Book extends Model
     {
         parent::boot();
 
-        static::creating(function ($book) {
-            // ثبت stack trace برای دیدن از کجا کتاب ایجاد می‌شود
-            $stackTrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 10);
-
-            $caller = "Unknown";
-            foreach ($stackTrace as $trace) {
-                if (isset($trace['file']) && !str_contains($trace['file'], 'vendor/')) {
-                    $file = basename($trace['file']);
-                    $line = $trace['line'] ?? '?';
-                    $function = $trace['function'] ?? '?';
-                    $caller = "{$file}:{$line} ({$function})";
-                    break;
-                }
-            }
-
-            Log::warning("🔍 کتاب در حال ایجاد", [
-                'title' => $book->title,
-                'caller' => $caller,
-                'stack_trace' => array_slice($stackTrace, 0, 5)
-            ]);
-        });
-
         static::created(function ($book) {
             Log::info("📚 کتاب ایجاد شد", [
                 'id' => $book->id,
                 'title' => $book->title,
-                'created_at' => $book->created_at
             ]);
         });
     }

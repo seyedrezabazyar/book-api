@@ -143,10 +143,9 @@ Route::middleware(['auth'])->group(function () {
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
 });
 
-Route::get('/api', function () {
-    return response()->json(\App\Models\Book::all());
+// فقط یکی از این دو را نگه دارید:
+Route::get('/api/books', function () {
+    return response()->json(\App\Models\Book::limit(100)->get());
 });
-// routes/api.php
-Route::get('/api', [\App\Http\Controllers\Api\BookApiController::class, 'index']);
 
 require __DIR__.'/auth.php';
