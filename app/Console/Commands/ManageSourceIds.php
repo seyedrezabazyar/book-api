@@ -5,15 +5,11 @@ namespace App\Console\Commands;
 use App\Models\Config;
 use App\Models\BookSource;
 use App\Models\ScrapingFailure;
-use App\Helpers\SourceIdManager;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
 class ManageSourceIds extends Command
 {
-    /**
-     * The name and signature of the console command.
-     */
     protected $signature = 'crawl:manage-sources
                             {action : Action to perform (analyze|missing|cleanup|report)}
                             {--config= : Specific config ID to work with}
@@ -21,14 +17,8 @@ class ManageSourceIds extends Command
                             {--limit=100 : Limit for results}
                             {--fix : Actually perform fixes (not just dry run)}';
 
-    /**
-     * The console command description.
-     */
-    protected $description = 'مدیریت و تحلیل Source ID های کرال شده';
+    protected $description = 'مدیریت و تحلیل Source ID های کرال شده - ساده شده';
 
-    /**
-     * Execute the console command.
-     */
     public function handle(): int
     {
         $action = $this->argument('action');
@@ -74,96 +64,76 @@ class ManageSourceIds extends Command
         return 0;
     }
 
-    /**
-     * دریافت کانفیگ(ها) برای پردازش
-     */
     private function getConfigs($configId)
     {
         if ($configId) {
             return Config::where('id', $configId)->get();
         }
-
         return Config::all();
     }
 
-    /**
-     * تحلیل کانفیگ
-     */
     private function analyzeConfig(Config $config): void
     {
         $this->info("🔍 تحلیل کانفیگ {$config->name}...");
 
-        $analytics = SourceIdManager::getSourceAnalytics($config);
+        $sourceStats = $config->getSourceStats();
 
         // نمایش آمار منبع
-        $sourceStats = $analytics['source_stats'];
         $this->table(
             ['متریک', 'مقدار'],
             [
-                ['کل منابع', number_format($sourceStats['total_sources'])],
-                ['منابع فعال', number_format($sourceStats['active_sources'])],
+                ['نام منبع', $sourceStats['source_name']],
+                ['کل رکوردها', number_format($sourceStats['total_records'])],
+                ['کتاب‌های یکتا', number_format($sourceStats['unique_books'])],
                 ['اولین ID', $sourceStats['first_source_id']],
                 ['آخرین ID', $sourceStats['last_source_id']],
-                ['بازه پوشش', $sourceStats['id_range']],
-                ['درصد پوشش', $sourceStats['coverage_percentage'] . '%']
+                ['بازه پوشش', $sourceStats['id_range']]
             ]
         );
 
-        // نمایش آمار شکست‌ها
-        if (!empty($analytics['failure_stats'])) {
-            $failureStats = $analytics['failure_stats'];
-            $this->info("\n📉 آمار شکست‌ها:");
-            $this->table(
-                ['نوع', 'تعداد'],
+        // بررسی تطابق با آمار کانفیگ
+        $this->info("\n🔍 مقایسه با آمار کانفیگ:");
+        $this->table(
+            ['آمار', 'کانفیگ', 'منبع', 'تطابق'],
+            [
                 [
-                    ['کل شکست‌ها', $failureStats['total_failures'] ?? 0],
-                    ['حل نشده', $failureStats['unresolved_failures'] ?? 0],
-                    ['اولین ID شکست خورده', $failureStats['first_failed_id'] ?? '-'],
-                    ['آخرین ID شکست خورده', $failureStats['last_failed_id'] ?? '-']
+                    'کل موفق',
+                    number_format($config->total_success),
+                    number_format($sourceStats['unique_books']),
+                    $config->total_success == $sourceStats['unique_books'] ? '✅' : '❌'
+                ],
+                [
+                    'آخرین ID',
+                    $config->last_source_id,
+                    $sourceStats['last_source_id'],
+                    $config->last_source_id == $sourceStats['last_source_id'] ? '✅' : '❌'
                 ]
-            );
+            ]
+        );
+
+        // یافتن ID های مفقود در بازه کوچک
+        $startCheck = max(1, $sourceStats['last_source_id'] - 100);
+        $endCheck = $sourceStats['last_source_id'];
+        $missingIds = $config->findMissingSourceIds($startCheck, $endCheck, 20);
+
+        if (!empty($missingIds)) {
+            $this->warn("⚠️ " . count($missingIds) . " ID مفقود در بازه {$startCheck}-{$endCheck}:");
+            $this->line("   " . implode(', ', array_slice($missingIds, 0, 10)));
+        } else {
+            $this->info("✅ هیچ ID مفقودی در بازه اخیر یافت نشد");
         }
 
-        // نمایش کیفیت پوشش
-        $coverage = $analytics['coverage_quality'];
-        $this->info("\n🎯 کیفیت پوشش:");
-        $this->line("   درصد کلی: {$coverage['overall_percentage']}%");
-        $this->line("   نمره: {$coverage['quality_grade']} ({$coverage['quality_description']})");
-        $this->line("   کل ممکن: " . number_format($coverage['total_possible']));
-        $this->line("   موجود: " . number_format($coverage['total_exists']));
-        $this->line("   مفقود: " . number_format($coverage['total_missing']));
-
-        // نمایش بازه‌های مفقود
-        if (!empty($analytics['missing_ranges'])) {
-            $this->info("\n📋 بازه‌های مفقود (بزرگتر از 3):");
-            foreach (array_slice($analytics['missing_ranges'], 0, 10) as $range) {
-                $this->line("   ID {$range['start']} تا {$range['end']} ({$range['count']} مورد)");
-            }
-            if (count($analytics['missing_ranges']) > 10) {
-                $remaining = count($analytics['missing_ranges']) - 10;
-                $this->line("   ... و {$remaining} بازه دیگر");
-            }
+        // توصیه‌ها
+        $this->info("\n💡 توصیه‌ها:");
+        if ($config->total_success < $sourceStats['unique_books']) {
+            $diff = $sourceStats['unique_books'] - $config->total_success;
+            $this->line("   🔧 آمار کانفیگ {$diff} کتاب کمتر از واقعیت است - نیاز به همگام‌سازی");
         }
-
-        // نمایش توصیه‌ها
-        if (!empty($analytics['recommendations'])) {
-            $this->info("\n💡 توصیه‌ها:");
-            foreach ($analytics['recommendations'] as $rec) {
-                $priority = match($rec['priority']) {
-                    'high' => '🔴',
-                    'medium' => '🟡',
-                    default => '🟢'
-                };
-                $this->line("   {$priority} {$rec['title']}");
-                $this->line("      {$rec['description']}");
-                $this->line("      عمل: {$rec['action']}");
-            }
+        if (!empty($missingIds)) {
+            $this->line("   🔍 برای یافتن همه ID های مفقود: --action=missing");
         }
     }
 
-    /**
-     * یافتن ID های مفقود
-     */
     private function findMissingIds(Config $config, $range, int $limit): void
     {
         $this->info("🔍 جستجوی ID های مفقود...");
@@ -173,8 +143,9 @@ class ManageSourceIds extends Command
             $startId = (int) $startId;
             $endId = (int) $endId;
         } else {
+            $sourceStats = $config->getSourceStats();
             $startId = 1;
-            $endId = $config->last_source_id;
+            $endId = max($config->last_source_id, $sourceStats['last_source_id']);
         }
 
         if ($endId <= $startId) {
@@ -184,14 +155,14 @@ class ManageSourceIds extends Command
 
         $this->info("   بررسی بازه: {$startId} تا {$endId}");
 
-        $missingIds = SourceIdManager::findMissingIds($config, $startId, $endId, $limit);
+        $missingIds = $config->findMissingSourceIds($startId, $endId, $limit);
 
         if (empty($missingIds)) {
             $this->info("✅ هیچ ID مفقودی در این بازه یافت نشد!");
             return;
         }
 
-        $this->warn("📋 {" . count($missingIds) . "} ID مفقود یافت شد:");
+        $this->warn("📋 " . count($missingIds) . " ID مفقود یافت شد:");
 
         // نمایش ID های مفقود به صورت گروه‌بندی شده
         $groups = $this->groupConsecutiveIds($missingIds);
@@ -217,9 +188,6 @@ class ManageSourceIds extends Command
         $this->line("   php artisan crawl:missing-ids {$config->id} --start={$startId} --end={$endId}");
     }
 
-    /**
-     * پاکسازی کانفیگ
-     */
     private function cleanupConfig(Config $config, bool $fix): void
     {
         $this->info("🧹 پاکسازی کانفیگ {$config->name}...");
@@ -228,14 +196,52 @@ class ManageSourceIds extends Command
             $this->warn("⚠️ حالت Dry Run - برای اعمال تغییرات از --fix استفاده کنید");
         }
 
-        $cleaned = SourceIdManager::smartCleanup($config);
+        $cleaned = [
+            'old_failures' => 0,
+            'duplicate_sources' => 0,
+            'orphaned_books' => 0
+        ];
+
+        // پاکسازی شکست‌های قدیمی
+        $oldFailuresQuery = ScrapingFailure::where('config_id', $config->id)
+            ->where('created_at', '<', now()->subDays(30))
+            ->where('is_resolved', true);
+
+        $cleaned['old_failures'] = $oldFailuresQuery->count();
+        if ($fix) {
+            $oldFailuresQuery->delete();
+        }
+
+        // پاکسازی منابع تکراری
+        if ($fix) {
+            $cleaned['duplicate_sources'] = BookSource::cleanupDuplicates();
+        } else {
+            // شمارش تکراری‌ها
+            $duplicates = DB::table('book_sources')
+                ->select('book_id', 'source_name', 'source_id')
+                ->selectRaw('COUNT(*) as count')
+                ->groupBy('book_id', 'source_name', 'source_id')
+                ->having('count', '>', 1)
+                ->get();
+            $cleaned['duplicate_sources'] = $duplicates->sum('count') - $duplicates->count();
+        }
+
+        // پاکسازی کتاب‌های بدون منبع (orphaned)
+        $orphanedBooksQuery = DB::table('books')
+            ->leftJoin('book_sources', 'books.id', '=', 'book_sources.book_id')
+            ->whereNull('book_sources.id');
+
+        $cleaned['orphaned_books'] = $orphanedBooksQuery->count();
+        if ($fix) {
+            $orphanedBooksQuery->delete();
+        }
 
         $this->table(
             ['نوع پاکسازی', 'تعداد'],
             [
                 ['شکست‌های قدیمی', $cleaned['old_failures']],
                 ['منابع تکراری', $cleaned['duplicate_sources']],
-                ['منابع بدون کتاب', $cleaned['orphaned_sources']]
+                ['کتاب‌های بدون منبع', $cleaned['orphaned_books']]
             ]
         );
 
@@ -246,14 +252,37 @@ class ManageSourceIds extends Command
         }
     }
 
-    /**
-     * تولید گزارش کامل
-     */
     private function generateReport(Config $config): void
     {
         $this->info("📊 تولید گزارش کامل...");
 
-        $report = SourceIdManager::generateDetailedReport($config);
+        $sourceStats = $config->getSourceStats();
+        $configStats = $config->getDisplayStats();
+
+        $report = [
+            'config_info' => [
+                'id' => $config->id,
+                'name' => $config->name,
+                'source_name' => $config->source_name,
+                'source_type' => $config->source_type,
+                'last_source_id' => $config->last_source_id,
+                'total_success' => $config->total_success,
+                'total_processed' => $config->total_processed
+            ],
+            'source_analysis' => $sourceStats,
+            'config_stats' => $configStats,
+            'data_integrity' => [
+                'config_vs_source_match' => $config->total_success == $sourceStats['unique_books'],
+                'last_id_match' => $config->last_source_id == $sourceStats['last_source_id'],
+                'missing_ids_sample' => $config->findMissingSourceIds(
+                    max(1, $sourceStats['last_source_id'] - 100),
+                    $sourceStats['last_source_id'],
+                    10
+                )
+            ],
+            'recommendations' => $this->generateRecommendations($config, $sourceStats),
+            'generated_at' => now()->toISOString()
+        ];
 
         // ذخیره گزارش در فایل
         $filename = "source_report_{$config->id}_{$config->source_name}_" . now()->format('Y-m-d_H-i-s') . ".json";
@@ -270,33 +299,94 @@ class ManageSourceIds extends Command
 
         // نمایش خلاصه گزارش
         $this->info("\n📋 خلاصه گزارش:");
-        $analytics = $report['analytics'];
-
         $this->table(
             ['شاخص', 'مقدار'],
             [
-                ['کل منابع', number_format($analytics['source_stats']['total_sources'])],
-                ['درصد پوشش', $analytics['coverage_quality']['overall_percentage'] . '%'],
-                ['نمره کیفیت', $analytics['coverage_quality']['quality_grade']],
-                ['کل شکست‌ها', $analytics['failure_stats']['total_failures'] ?? 0],
-                ['شکست‌های حل نشده', $analytics['failure_stats']['unresolved_failures'] ?? 0],
-                ['متوسط زمان اجرا', round($report['performance_metrics']['avg_execution_time'], 2) . 's'],
-                ['متوسط نرخ موفقیت', round($report['performance_metrics']['avg_success_rate'], 2) . '%']
+                ['کل رکوردهای منبع', number_format($sourceStats['total_records'])],
+                ['کتاب‌های یکتا منبع', number_format($sourceStats['unique_books'])],
+                ['آمار موفق کانفیگ', number_format($config->total_success)],
+                ['تطابق آمار', $config->total_success == $sourceStats['unique_books'] ? '✅ بله' : '❌ خیر'],
+                ['آخرین ID منبع', $sourceStats['last_source_id']],
+                ['آخرین ID کانفیگ', $config->last_source_id],
+                ['تطابق ID', $config->last_source_id == $sourceStats['last_source_id'] ? '✅ بله' : '❌ خیر']
             ]
         );
 
         // نمایش توصیه‌های کلیدی
-        if (!empty($analytics['recommendations'])) {
+        if (!empty($report['recommendations'])) {
             $this->info("\n🎯 توصیه‌های کلیدی:");
-            foreach (array_slice($analytics['recommendations'], 0, 3) as $rec) {
-                $this->line("   • {$rec['title']}");
+            foreach (array_slice($report['recommendations'], 0, 3) as $rec) {
+                $priority = match($rec['priority']) {
+                    'high' => '🔴',
+                    'medium' => '🟡',
+                    default => '🟢'
+                };
+                $this->line("   {$priority} {$rec['title']}");
             }
         }
     }
 
-    /**
-     * گروه‌بندی ID های پیوسته
-     */
+    private function generateRecommendations(Config $config, array $sourceStats): array
+    {
+        $recommendations = [];
+
+        // بررسی عدم تطابق آمار
+        if ($config->total_success != $sourceStats['unique_books']) {
+            $diff = abs($config->total_success - $sourceStats['unique_books']);
+            $recommendations[] = [
+                'type' => 'stats_mismatch',
+                'priority' => 'high',
+                'title' => "عدم تطابق آمار ({$diff} اختلاف)",
+                'description' => 'آمار کانفیگ با آمار واقعی منبع تطابق ندارد',
+                'action' => 'بروزرسانی آمار کانفیگ یا بررسی مجدد داده‌ها'
+            ];
+        }
+
+        // بررسی عدم تطابق آخرین ID
+        if ($config->last_source_id != $sourceStats['last_source_id']) {
+            $recommendations[] = [
+                'type' => 'last_id_mismatch',
+                'priority' => 'medium',
+                'title' => 'عدم تطابق آخرین ID',
+                'description' => 'آخرین ID کانفیگ با آخرین ID منبع تطابق ندارد',
+                'action' => 'بروزرسانی last_source_id کانفیگ'
+            ];
+        }
+
+        // بررسی ID های مفقود
+        $missingIds = $config->findMissingSourceIds(
+            max(1, $sourceStats['last_source_id'] - 1000),
+            $sourceStats['last_source_id'],
+            50
+        );
+
+        if (!empty($missingIds)) {
+            $recommendations[] = [
+                'type' => 'missing_ids',
+                'priority' => 'medium',
+                'title' => count($missingIds) . " ID مفقود در بازه اخیر",
+                'description' => 'برخی ID ها در بازه اخیر پردازش نشده‌اند',
+                'action' => 'اجرای دستور crawl:missing-ids برای بازیابی'
+            ];
+        }
+
+        // بررسی کیفیت پوشش
+        if ($sourceStats['total_records'] > 0) {
+            $coverageRate = ($sourceStats['unique_books'] / $sourceStats['total_records']) * 100;
+            if ($coverageRate < 80) {
+                $recommendations[] = [
+                    'type' => 'low_coverage',
+                    'priority' => 'low',
+                    'title' => "پوشش پایین ({$coverageRate}%)",
+                    'description' => 'نسبت کتاب‌های یکتا به کل رکوردها پایین است',
+                    'action' => 'بررسی کیفیت داده‌ها و حذف تکراری‌ها'
+                ];
+            }
+        }
+
+        return $recommendations;
+    }
+
     private function groupConsecutiveIds(array $ids): array
     {
         if (empty($ids)) {

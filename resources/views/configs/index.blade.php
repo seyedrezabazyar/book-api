@@ -88,7 +88,8 @@
         <div class="bg-white p-6 rounded shadow">
             <div class="flex items-center">
                 @php
-                    $totalSourceTypes = \App\Models\BookSource::distinct('source_type')->count();
+                    // تغییر از source_type به source_name
+                    $totalSourceTypes = \App\Models\BookSource::distinct('source_name')->count();
                 @endphp
                 <div class="text-3xl font-bold text-orange-600">{{ $totalSourceTypes }}</div>
                 <div class="ml-auto text-2xl">🌐</div>
@@ -195,6 +196,22 @@
                                     <div class="text-xs text-gray-600 mb-1">نرخ موفقیت: {{ $successRate }}%</div>
                                     <div class="w-full bg-gray-200 rounded-full h-1.5">
                                         <div class="bg-green-600 h-1.5 rounded-full" style="width: {{ $successRate }}%"></div>
+                                    </div>
+                                </div>
+                            @endif
+
+                            <!-- آمار منبع -->
+                            @php
+                                try {
+                                    $sourceStats = \App\Models\BookSource::where('source_name', $config->source_name)->count();
+                                } catch (\Exception $e) {
+                                    $sourceStats = 0;
+                                }
+                            @endphp
+                            @if ($sourceStats > 0)
+                                <div class="pt-2 border-t border-gray-200">
+                                    <div class="text-xs text-gray-600">
+                                        🌐 در منبع: <span class="font-medium text-indigo-600">{{ number_format($sourceStats) }}</span> رکورد
                                     </div>
                                 </div>
                             @endif

@@ -6,15 +6,11 @@ use App\Models\Config;
 use App\Models\ExecutionLog;
 use App\Services\ApiDataService;
 use App\Jobs\ProcessSinglePageJob;
-use App\Helpers\SourceIdManager;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
 class ProcessMissingIds extends Command
 {
-    /**
-     * The name and signature of the console command.
-     */
     protected $signature = 'crawl:missing-ids
                             {config : Config ID to process}
                             {--start=1 : Start ID for range}
@@ -24,14 +20,8 @@ class ProcessMissingIds extends Command
                             {--dry-run : Show what would be processed without actually doing it}
                             {--background : Run in background using queue}';
 
-    /**
-     * The console command description.
-     */
-    protected $description = 'پردازش ID های مفقود برای یک کانفیگ خاص';
+    protected $description = 'پردازش ID های مفقود برای یک کانفیگ خاص - ساده شده';
 
-    /**
-     * Execute the console command.
-     */
     public function handle(): int
     {
         $configId = $this->argument('config');
@@ -51,7 +41,8 @@ class ProcessMissingIds extends Command
 
         // تعیین endId اگر مشخص نشده
         if (!$endId) {
-            $endId = $config->last_source_id;
+            $sourceStats = $config->getSourceStats();
+            $endId = max($config->last_source_id, $sourceStats['last_source_id']);
         } else {
             $endId = (int) $endId;
         }
@@ -62,14 +53,14 @@ class ProcessMissingIds extends Command
         $this->info("   حداکثر: {$limit} ID");
 
         // یافتن ID های مفقود
-        $missingIds = SourceIdManager::findMissingIds($config, $startId, $endId, $limit);
+        $missingIds = $config->findMissingSourceIds($startId, $endId, $limit);
 
         if (empty($missingIds)) {
             $this->info("✅ هیچ ID مفقودی در این بازه یافت نشد!");
             return 0;
         }
 
-        $this->warn("📋 {" . count($missingIds) . "} ID مفقود یافت شد:");
+        $this->warn("📋 " . count($missingIds) . " ID مفقود یافت شد:");
 
         // نمایش نمونه ID های مفقود
         $sample = array_slice($missingIds, 0, 10);
@@ -102,9 +93,6 @@ class ProcessMissingIds extends Command
         }
     }
 
-    /**
-     * پردازش در پس‌زمینه با صف
-     */
     private function processInBackground(Config $config, array $missingIds, int $delay): int
     {
         $this->info("🚀 شروع پردازش در پس‌زمینه...");
@@ -115,23 +103,24 @@ class ProcessMissingIds extends Command
             $executionLog->addLogEntry("🔧 شروع پردازش ID های مفقود", [
                 'missing_ids_count' => count($missingIds),
                 'sample_ids' => array_slice($missingIds, 0, 10),
-                'mode' => 'missing_ids_recovery'
+                'mode' => 'missing_ids_recovery',
+                'source_name' => $config->source_name
             ]);
 
             // علامت‌گذاری کانفیگ به عنوان در حال اجرا
             $config->update(['is_running' => true]);
 
             // ایجاد Jobs برای هر ID مفقود
-            foreach ($missingIds as $sourceId) {
+            foreach ($missingIds as $index => $sourceId) {
                 ProcessSinglePageJob::dispatch($config->id, $sourceId, $executionLog->execution_id)
-                    ->delay(now()->addSeconds($delay * array_search($sourceId, $missingIds)));
+                    ->delay(now()->addSeconds($delay * $index));
             }
 
             // Job پایان اجرا
             ProcessSinglePageJob::dispatch($config->id, -1, $executionLog->execution_id)
                 ->delay(now()->addSeconds($delay * count($missingIds) + 60));
 
-            $this->info("✅ {" . count($missingIds) . "} Job در صف قرار گرفت");
+            $this->info("✅ " . count($missingIds) . " Job در صف قرار گرفت");
             $this->info("🆔 شناسه اجرا: {$executionLog->execution_id}");
             $this->info("⏱️ تخمین زمان: " . round((count($missingIds) * $delay) / 60, 1) . " دقیقه");
 
@@ -143,9 +132,6 @@ class ProcessMissingIds extends Command
         }
     }
 
-    /**
-     * پردازش مستقیم
-     */
     private function processDirectly(Config $config, array $missingIds, int $delay): int
     {
         $this->info("⚡ شروع پردازش مستقیم...");
@@ -157,7 +143,8 @@ class ProcessMissingIds extends Command
             $executionLog->addLogEntry("⚡ شروع پردازش مستقیم ID های مفقود", [
                 'missing_ids_count' => count($missingIds),
                 'sample_ids' => array_slice($missingIds, 0, 10),
-                'mode' => 'missing_ids_direct'
+                'mode' => 'missing_ids_direct',
+                'source_name' => $config->source_name
             ]);
 
             $config->update(['is_running' => true]);
@@ -166,7 +153,7 @@ class ProcessMissingIds extends Command
             $progress->setFormat('very_verbose');
             $progress->start();
 
-            $stats = ['total' => 0, 'success' => 0, 'failed' => 0, 'duplicate' => 0];
+            $stats = ['total' => 0, 'success' => 0, 'failed' => 0, 'duplicate' => 0, 'skipped' => 0];
 
             foreach ($missingIds as $sourceId) {
                 try {
@@ -177,6 +164,11 @@ class ProcessMissingIds extends Command
                         $stats['success'] += $result['stats']['success'] ?? 0;
                         $stats['failed'] += $result['stats']['failed'] ?? 0;
                         $stats['duplicate'] += $result['stats']['duplicate'] ?? 0;
+                    }
+
+                    // شمارش skipped ها
+                    if (isset($result['action']) && in_array($result['action'], ['skipped', 'duplicate'])) {
+                        $stats['skipped']++;
                     }
 
                     $progress->advance();
@@ -200,6 +192,7 @@ class ProcessMissingIds extends Command
                 'success' => $stats['success'],
                 'failed' => $stats['failed'],
                 'duplicate' => $stats['duplicate'],
+                'skipped' => $stats['skipped'],
                 'execution_time' => $executionLog->started_at ? now()->diffInSeconds($executionLog->started_at) : 0
             ];
 
@@ -211,11 +204,12 @@ class ProcessMissingIds extends Command
             $this->table(
                 ['متریک', 'تعداد'],
                 [
-                    ['کل پردازش شده', $stats['total']],
-                    ['موفق', $stats['success']],
+                    ['کل پردازش شده', count($missingIds)],
+                    ['جدید دریافت شده', $stats['success']],
+                    ['قبلاً موجود', $stats['skipped']],
                     ['تکراری', $stats['duplicate']],
                     ['خطا', $stats['failed']],
-                    ['نرخ موفقیت', $stats['total'] > 0 ? round(($stats['success'] / $stats['total']) * 100, 1) . '%' : '0%']
+                    ['نرخ موفقیت', count($missingIds) > 0 ? round(($stats['success'] / count($missingIds)) * 100, 1) . '%' : '0%']
                 ]
             );
 

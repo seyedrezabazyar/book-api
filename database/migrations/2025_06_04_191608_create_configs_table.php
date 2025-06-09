@@ -16,16 +16,27 @@ return new class extends Migration
             $table->string('name')->unique()->index();
             $table->string('base_url', 500);
 
+            // تنظیمات منبع
+            $table->string('source_type', 50)->default('api')->index();
+            $table->string('source_name', 100)->index(); // نام منبع برای book_sources
+
             // تنظیمات اتصال
             $table->unsignedSmallInteger('timeout')->default(30);
             $table->unsignedSmallInteger('delay_seconds')->default(5);
             $table->unsignedTinyInteger('records_per_run')->default(10);
             $table->unsignedTinyInteger('page_delay')->default(5);
 
-            // تنظیمات کرال
-            $table->enum('crawl_mode', ['continue', 'restart', 'update'])->default('continue');
+            // تنظیمات کرال هوشمند
             $table->unsignedInteger('start_page')->nullable();
+            $table->unsignedInteger('max_pages')->default(1000);
             $table->integer('current_page')->default(0);
+            $table->unsignedInteger('last_source_id')->default(0)->index(); // آخرین ID منبع که پردازش شده
+
+            // ویژگی‌های هوشمند
+            $table->boolean('auto_resume')->default(true); // ادامه خودکار از آخرین ID
+            $table->boolean('fill_missing_fields')->default(true); // تکمیل فیلدهای خالی
+            $table->boolean('update_descriptions')->default(true); // بروزرسانی توضیحات بهتر
+
             // داده‌های کانفیگ (JSON)
             $table->json('config_data');
 
@@ -43,7 +54,8 @@ return new class extends Migration
             $table->timestamps();
 
             // ایندکس‌های بهینه
-            $table->index(['crawl_mode', 'is_running']);
+            $table->index(['source_type', 'source_name'], 'idx_source_info');
+            $table->index(['is_running', 'created_at'], 'idx_running_status');
         });
     }
 

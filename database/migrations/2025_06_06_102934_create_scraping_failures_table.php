@@ -1,5 +1,4 @@
 <?php
-// فایل: database/migrations/2025_06_06_102934_create_scraping_failures_table.php
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
@@ -12,7 +11,7 @@ return new class extends Migration
         Schema::create('scraping_failures', function (Blueprint $table) {
             $table->id();
             $table->foreignId('config_id')->constrained()->onDelete('cascade');
-            $table->text('url'); // تغییر از string به text
+            $table->string('url', 1000); // برای URL های طولانی
             $table->text('error_message');
             $table->json('error_details')->nullable();
             $table->text('response_content')->nullable();
@@ -22,13 +21,10 @@ return new class extends Migration
             $table->timestamp('last_attempt_at');
             $table->timestamps();
 
-            // ایندکس‌های بهینه - بدون استفاده از فیلد URL در composite index
+            // ایندکس‌های بهینه
             $table->index(['config_id', 'is_resolved']);
             $table->index(['is_resolved', 'last_attempt_at']);
-            $table->index(['config_id', 'created_at']); // جایگزین index مشکل‌دار
-
-            // اگر نیاز به جستجو در URL هست، می‌توان از fulltext index استفاده کرد
-            // $table->fullText('url'); // فقط در صورت نیاز uncomment کنید
+            $table->index(['config_id', 'created_at']);
         });
     }
 

@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\DB; // ✅ اضافه شد
+use Illuminate\Support\Facades\DB;
 
 class Config extends Model
 {
@@ -67,7 +67,8 @@ class Config extends Model
 
     public function bookSources(): HasMany
     {
-        return $this->hasMany(BookSource::class, 'source_type', 'source_name');
+        // رابطه بر اساس source_name نه source_type
+        return $this->hasMany(BookSource::class, 'source_name', 'source_name');
     }
 
     public function isActive(): bool
@@ -80,7 +81,7 @@ class Config extends Model
      */
     public function getSmartStartPage(): int
     {
-        // اگر start_page مشخص شده، از آن استفاده کن
+        // اولویت 1: اگر start_page مشخص شده، از آن استفاده کن
         if ($this->start_page && $this->start_page > 0) {
             Log::info("🎯 استفاده از start_page تعیین شده", [
                 'config_id' => $this->id,
@@ -89,7 +90,7 @@ class Config extends Model
             return $this->start_page;
         }
 
-        // اگر auto_resume فعال باشد، از آخرین ID ادامه بده
+        // اولویت 2: اگر auto_resume فعال باشد، از آخرین ID ادامه بده
         if ($this->auto_resume && $this->last_source_id > 0) {
             $nextId = $this->last_source_id + 1;
             Log::info("🔄 ادامه خودکار از آخرین ID", [
@@ -100,9 +101,24 @@ class Config extends Model
             return $nextId;
         }
 
-        // در غیر این صورت از 1 شروع کن
-        Log::info("🆕 شروع جدید از صفحه 1", [
-            'config_id' => $this->id
+        // اولویت 3: آخرین ID از book_sources برای این منبع خاص
+        $lastIdFromSources = BookSource::getLastNumericSourceId($this->source_name);
+
+        if ($lastIdFromSources > 0) {
+            $nextId = $lastIdFromSources + 1;
+            Log::info("📊 استفاده از آخرین ID در book_sources", [
+                'config_id' => $this->id,
+                'source_name' => $this->source_name,
+                'last_id_from_sources' => $lastIdFromSources,
+                'next_start' => $nextId
+            ]);
+            return $nextId;
+        }
+
+        // پیش‌فرض: از 1 شروع کن
+        Log::info("🆕 شروع جدید از ID 1", [
+            'config_id' => $this->id,
+            'source_name' => $this->source_name
         ]);
         return 1;
     }
@@ -119,6 +135,7 @@ class Config extends Model
 
             Log::info("📈 آخرین source_id بروزرسانی شد", [
                 'config_id' => $this->id,
+                'source_name' => $this->source_name,
                 'old_last_id' => $this->last_source_id,
                 'new_last_id' => $sourceId
             ]);
@@ -126,17 +143,11 @@ class Config extends Model
     }
 
     /**
-     * بررسی اینکه آیا ID خاصی قبلاً پردازش شده
+     * بررسی اینکه آیا ID خاصی قبلاً از این منبع پردازش شده
      */
     public function isSourceIdProcessed(int $sourceId): bool
     {
-        return BookSource::where('source_type', $this->source_type)
-            ->where('source_id', $sourceId)
-            ->whereHas('book', function ($query) {
-                // فقط کتاب‌هایی که واقعاً ثبت شده‌اند
-                $query->where('status', 'active');
-            })
-            ->exists();
+        return BookSource::sourceExists($this->source_name, (string) $sourceId);
     }
 
     /**
@@ -150,7 +161,6 @@ class Config extends Model
             'error_message' => "ID {$sourceId} not found: {$reason}",
             'error_details' => [
                 'source_id' => $sourceId,
-                'source_type' => $this->source_type,
                 'source_name' => $this->source_name,
                 'reason' => $reason
             ],
@@ -161,6 +171,7 @@ class Config extends Model
 
         Log::warning("❌ Source ID شکست خورد", [
             'config_id' => $this->id,
+            'source_name' => $this->source_name,
             'source_id' => $sourceId,
             'reason' => $reason
         ]);
@@ -189,6 +200,22 @@ class Config extends Model
         }
 
         return $fullUrl;
+    }
+
+    /**
+     * دریافت آمار منبع این کانفیگ
+     */
+    public function getSourceStats(): array
+    {
+        return BookSource::getSourceStats($this->source_name);
+    }
+
+    /**
+     * یافتن source ID های مفقود برای این کانفیگ
+     */
+    public function findMissingSourceIds(int $startId, int $endId, int $limit = 100): array
+    {
+        return BookSource::findMissingSourceIds($this->source_name, $startId, $endId, $limit);
     }
 
     public function getApiSettings(): array
@@ -237,6 +264,7 @@ class Config extends Model
     {
         Log::info("🔄 شروع بروزرسانی progress", [
             'config_id' => $this->id,
+            'source_name' => $this->source_name,
             'source_id' => $currentSourceId,
             'incoming_stats' => $stats,
             'current_stats' => [
@@ -279,6 +307,7 @@ class Config extends Model
 
             Log::info("✅ progress بروزرسانی شد", [
                 'config_id' => $this->id,
+                'source_name' => $this->source_name,
                 'source_id' => $currentSourceId,
                 'new_stats' => [
                     'total_processed' => $this->total_processed,
@@ -290,6 +319,7 @@ class Config extends Model
         } catch (\Exception $e) {
             Log::error("❌ خطا در بروزرسانی progress", [
                 'config_id' => $this->id,
+                'source_name' => $this->source_name,
                 'error' => $e->getMessage(),
                 'stats' => $stats
             ]);
@@ -334,6 +364,7 @@ class Config extends Model
     public function getDisplayStats(): array
     {
         $latestLog = $this->getLatestExecutionLog();
+        $sourceStats = $this->getSourceStats();
 
         return [
             'total_executions' => $this->executionLogs()->count(),
@@ -353,7 +384,10 @@ class Config extends Model
             'latest_execution_time' => $latestLog?->started_at,
             'is_currently_running' => $this->is_running,
             'last_source_id' => $this->last_source_id,
-            'next_source_id' => $this->getSmartStartPage()
+            'next_source_id' => $this->getSmartStartPage(),
+            'source_stats' => $sourceStats,
+            'unique_books_from_source' => $sourceStats['unique_books'] ?? 0,
+            'total_records_from_source' => $sourceStats['total_records'] ?? 0,
         ];
     }
 

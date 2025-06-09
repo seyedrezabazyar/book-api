@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\DB; // ✅ اضافه شد
+use Illuminate\Support\Facades\DB;
 
 class BookSource extends Model
 {
@@ -14,20 +14,18 @@ class BookSource extends Model
 
     protected $fillable = [
         'book_id',
-        'source_type',
+        'source_name',
         'source_id',
-        'source_url',
-        'source_updated_at',
-        'is_active',
-        'priority'
+        'discovered_at',
     ];
 
     protected $casts = [
-        'source_updated_at' => 'datetime',
-        'is_active' => 'boolean',
-        'priority' => 'integer',
+        'discovered_at' => 'datetime',
     ];
 
+    /**
+     * روابط
+     */
     public function book(): BelongsTo
     {
         return $this->belongsTo(Book::class);
@@ -36,106 +34,126 @@ class BookSource extends Model
     /**
      * اسکوپ‌ها
      */
-    public function scopeActive($query): Builder
+    public function scopeBySourceName($query, string $sourceName): Builder
     {
-        return $query->where('is_active', true);
+        return $query->where('source_name', $sourceName);
     }
 
-    public function scopeBySourceType($query, $sourceType): Builder
+    public function scopeBySourceId($query, string $sourceId): Builder
     {
-        return $query->where('source_type', $sourceType);
-    }
-
-    public function scopeBySourceName($query, $sourceName): Builder
-    {
-        return $query->whereHas('config', function ($q) use ($sourceName) {
-            $q->where('source_name', $sourceName);
-        });
+        return $query->where('source_id', $sourceId);
     }
 
     /**
-     * یافتن آخرین source_id برای یک منبع خاص
+     * ثبت یا بروزرسانی منبع کتاب
+     * این متد اصلی برای ثبت منابع است
      */
-    public static function getLastSourceIdForType(string $sourceType, ?string $sourceName = null): int
+    public static function recordBookSource(int $bookId, string $sourceName, string $sourceId): self
     {
-        $query = static::where('source_type', $sourceType)
-            ->whereNotNull('source_id')
-            ->where('source_id', '!=', '');
+        $source = self::updateOrCreate(
+            [
+                'book_id' => $bookId,
+                'source_name' => $sourceName,
+                'source_id' => $sourceId
+            ],
+            [
+                'discovered_at' => now()
+            ]
+        );
 
-        // اگر source_name مشخص شده، فیلتر کن
-        if ($sourceName) {
-            $query->where(function ($q) use ($sourceName) {
-                $q->where('source_url', 'like', "%{$sourceName}%");
-            });
-        }
-
-        $lastSource = $query->orderByRaw('CAST(source_id AS UNSIGNED) DESC')->first();
-
-        $lastId = $lastSource ? (int) $lastSource->source_id : 0;
-
-        Log::info("📊 آخرین source_id دریافت شد", [
-            'source_type' => $sourceType,
+        Log::info("📝 منبع کتاب ثبت شد", [
+            'book_id' => $bookId,
             'source_name' => $sourceName,
-            'last_id' => $lastId
+            'source_id' => $sourceId,
+            'was_existing' => !$source->wasRecentlyCreated
         ]);
 
-        return $lastId;
+        return $source;
     }
 
     /**
-     * بررسی وجود source_id برای یک منبع خاص
+     * بررسی وجود منبع خاص
      */
-    public static function sourceIdExists(string $sourceType, string $sourceId, ?string $sourceName = null): bool
+    public static function sourceExists(string $sourceName, string $sourceId): bool
     {
-        $query = static::where('source_type', $sourceType)
+        return self::where('source_name', $sourceName)
             ->where('source_id', $sourceId)
-            ->whereHas('book', function ($q) {
-                $q->where('status', 'active'); // فقط کتاب‌های فعال
-            });
-
-        if ($sourceName) {
-            $query->where('source_url', 'like', "%{$sourceName}%");
-        }
-
-        return $query->exists();
+            ->exists();
     }
 
     /**
-     * دریافت لیست source_id های موجود برای یک بازه
+     * یافتن کتاب بر اساس منبع و ID
      */
-    public static function getExistingSourceIds(string $sourceType, int $startId, int $endId, ?string $sourceName = null): array
+    public static function findBookBySource(string $sourceName, string $sourceId): ?Book
     {
-        $query = static::where('source_type', $sourceType)
-            ->whereRaw('CAST(source_id AS UNSIGNED) BETWEEN ? AND ?', [$startId, $endId])
-            ->whereHas('book', function ($q) {
-                $q->where('status', 'active');
-            });
+        $source = self::where('source_name', $sourceName)
+            ->where('source_id', $sourceId)
+            ->with('book')
+            ->first();
 
-        if ($sourceName) {
-            $query->where('source_url', 'like', "%{$sourceName}%");
-        }
+        return $source?->book;
+    }
 
-        return $query->pluck('source_id')
-            ->map(function ($id) {
-                return (int) $id;
-            })
+    /**
+     * دریافت آخرین source_id عددی برای منبع خاص
+     */
+    public static function getLastNumericSourceId(string $sourceName): int
+    {
+        $result = self::where('source_name', $sourceName)
+            ->whereRaw('source_id REGEXP "^[0-9]+$"') // فقط source_id های عددی
+            ->orderByRaw('CAST(source_id AS UNSIGNED) DESC')
+            ->value('source_id');
+
+        return $result ? (int) $result : 0;
+    }
+
+    /**
+     * آمار منبع خاص - اصلاح شده
+     */
+    public static function getSourceStats(string $sourceName): array
+    {
+        $stats = self::where('source_name', $sourceName)
+            ->selectRaw('
+                COUNT(*) as total_records,
+                COUNT(DISTINCT book_id) as unique_books,
+                MIN(CASE WHEN source_id REGEXP "^[0-9]+$" THEN CAST(source_id AS UNSIGNED) END) as first_id,
+                MAX(CASE WHEN source_id REGEXP "^[0-9]+$" THEN CAST(source_id AS UNSIGNED) END) as last_id
+            ')
+            ->first();
+
+        return [
+            'source_name' => $sourceName,
+            'total_records' => $stats->total_records ?? 0,
+            'unique_books' => $stats->unique_books ?? 0,
+            'first_source_id' => $stats->first_id ?? 0,
+            'last_source_id' => $stats->last_id ?? 0,
+            'id_range' => ($stats->first_id && $stats->last_id) ?
+                "{$stats->first_id}-{$stats->last_id}" : '0-0'
+        ];
+    }
+
+    /**
+     * یافتن source_id های مفقود در بازه
+     */
+    public static function findMissingSourceIds(string $sourceName, int $startId, int $endId, int $limit = 100): array
+    {
+        // دریافت ID های موجود
+        $existingIds = self::where('source_name', $sourceName)
+            ->whereBetween(DB::raw('CAST(source_id AS UNSIGNED)'), [$startId, $endId])
+            ->pluck('source_id')
+            ->map(fn($id) => (int) $id)
             ->sort()
             ->values()
             ->toArray();
-    }
 
-    /**
-     * یافتن source_id های مفقود در یک بازه
-     */
-    public static function getMissingSourceIds(string $sourceType, int $startId, int $endId, ?string $sourceName = null): array
-    {
-        $existingIds = static::getExistingSourceIds($sourceType, $startId, $endId, $sourceName);
+        // محاسبه ID های مفقود
         $allIds = range($startId, $endId);
-
         $missingIds = array_diff($allIds, $existingIds);
 
-        Log::info("🔍 source_id های مفقود محاسبه شد", [
-            'source_type' => $sourceType,
+        // محدود کردن نتایج
+        $missingIds = array_slice(array_values($missingIds), 0, $limit);
+
+        Log::info("🔍 جستجوی ID های مفقود", [
             'source_name' => $sourceName,
             'range' => "{$startId}-{$endId}",
             'existing_count' => count($existingIds),
@@ -143,156 +161,74 @@ class BookSource extends Model
             'sample_missing' => array_slice($missingIds, 0, 10)
         ]);
 
-        return array_values($missingIds);
+        return $missingIds;
     }
 
     /**
-     * آمار کلی یک منبع
+     * دریافت منابع یک کتاب
      */
-    public static function getSourceStats(string $sourceType, ?string $sourceName = null): array
+    public static function getBookSources(int $bookId): array
     {
-        $query = static::where('source_type', $sourceType);
+        return self::where('book_id', $bookId)
+            ->orderBy('discovered_at', 'desc')
+            ->get()
+            ->map(function ($source) {
+                return [
+                    'source_name' => $source->source_name,
+                    'source_id' => $source->source_id,
+                    'discovered_at' => $source->discovered_at,
+                    'url' => self::buildSourceUrl($source->source_name, $source->source_id)
+                ];
+            })
+            ->toArray();
+    }
 
-        if ($sourceName) {
-            $query->where('source_url', 'like', "%{$sourceName}%");
-        }
-
-        $totalSources = $query->count();
-        $activeSources = $query->where('is_active', true)->count();
-        $lastId = static::getLastSourceIdForType($sourceType, $sourceName);
-        $firstId = $query->orderByRaw('CAST(source_id AS UNSIGNED) ASC')->value('source_id');
-
-        return [
-            'total_sources' => $totalSources,
-            'active_sources' => $activeSources,
-            'first_source_id' => $firstId ? (int) $firstId : 0,
-            'last_source_id' => $lastId,
-            'id_range' => $firstId ? (int) $firstId . '-' . $lastId : '0-0',
-            'coverage_percentage' => $lastId > 0 ? round(($totalSources / $lastId) * 100, 2) : 0
+    /**
+     * ساخت URL منبع (اختیاری)
+     */
+    private static function buildSourceUrl(string $sourceName, string $sourceId): ?string
+    {
+        $urlTemplates = [
+            'libgen_rs' => 'http://libgen.rs/book/index.php?md5={id}',
+            'zlib' => 'https://z-lib.org/book/{id}',
+            'anna_archive' => 'https://annas-archive.org/md5/{id}',
+            // افزودن منابع دیگر در صورت نیاز
         ];
+
+        return isset($urlTemplates[$sourceName]) ?
+            str_replace('{id}', $sourceId, $urlTemplates[$sourceName]) : null;
     }
 
     /**
-     * ایجاد منبع جدید با validation
+     * پاکسازی منابع تکراری (در صورت نیاز)
      */
-    public static function createSource(int $bookId, string $sourceType, string $sourceId, string $sourceUrl, int $priority = 1): static
+    public static function cleanupDuplicates(): int
     {
-        // بررسی تکراری نبودن
-        $existing = static::where('book_id', $bookId)
-            ->where('source_type', $sourceType)
-            ->where('source_id', $sourceId)
-            ->first();
-
-        if ($existing) {
-            // بروزرسانی منبع موجود
-            $existing->update([
-                'source_url' => $sourceUrl,
-                'source_updated_at' => now(),
-                'is_active' => true,
-                'priority' => $priority
-            ]);
-
-            Log::info("🔄 منبع موجود بروزرسانی شد", [
-                'book_id' => $bookId,
-                'source_type' => $sourceType,
-                'source_id' => $sourceId
-            ]);
-
-            return $existing;
-        }
-
-        // ایجاد منبع جدید
-        $source = static::create([
-            'book_id' => $bookId,
-            'source_type' => $sourceType,
-            'source_id' => $sourceId,
-            'source_url' => $sourceUrl,
-            'source_updated_at' => now(),
-            'is_active' => true,
-            'priority' => $priority
-        ]);
-
-        Log::info("✨ منبع جدید ایجاد شد", [
-            'id' => $source->id,
-            'book_id' => $bookId,
-            'source_type' => $sourceType,
-            'source_id' => $sourceId
-        ]);
-
-        return $source;
-    }
-
-    /**
-     * حذف منابع غیرفعال
-     */
-    public static function cleanupInactiveSources(int $daysOld = 30): int
-    {
-        $cutoffDate = now()->subDays($daysOld);
-
-        $deletedCount = static::where('is_active', false)
-            ->where('updated_at', '<', $cutoffDate)
-            ->delete();
-
-        if ($deletedCount > 0) {
-            Log::info("🧹 منابع غیرفعال پاک شدند", [
-                'deleted_count' => $deletedCount,
-                'cutoff_date' => $cutoffDate
-            ]);
-        }
-
-        return $deletedCount;
-    }
-
-    /**
-     * تشخیص منابع تکراری
-     */
-    public static function findDuplicateSources(): array
-    {
-        $duplicates = static::select('source_type', 'source_id')
-            ->selectRaw('COUNT(*) as count')
-            ->groupBy('source_type', 'source_id')
+        // یافتن منابع تکراری
+        $duplicates = DB::table('book_sources')
+            ->select('book_id', 'source_name', 'source_id')
+            ->selectRaw('COUNT(*) as count, MIN(id) as keep_id')
+            ->groupBy('book_id', 'source_name', 'source_id')
             ->having('count', '>', 1)
             ->get();
 
-        $duplicateList = [];
+        $deletedCount = 0;
         foreach ($duplicates as $duplicate) {
-            $sources = static::where('source_type', $duplicate->source_type)
+            // حذف همه به جز اولین رکورد
+            $deleted = self::where('book_id', $duplicate->book_id)
+                ->where('source_name', $duplicate->source_name)
                 ->where('source_id', $duplicate->source_id)
-                ->with('book:id,title')
-                ->get();
+                ->where('id', '!=', $duplicate->keep_id)
+                ->delete();
 
-            $duplicateList[] = [
-                'source_type' => $duplicate->source_type,
-                'source_id' => $duplicate->source_id,
-                'count' => $duplicate->count,
-                'sources' => $sources
-            ];
+            $deletedCount += $deleted;
         }
 
-        if (count($duplicateList) > 0) {
-            Log::warning("⚠️ منابع تکراری یافت شد", [
-                'duplicate_count' => count($duplicateList)
-            ]);
+        if ($deletedCount > 0) {
+            Log::info("🧹 منابع تکراری پاک شدند", ['deleted_count' => $deletedCount]);
         }
 
-        return $duplicateList;
-    }
-
-    /**
-     * بازسازی ایندکس‌ها برای بهینه‌سازی
-     */
-    public static function rebuildIndexes(): void
-    {
-        try {
-            // اجرای کوئری‌های بهینه‌سازی
-            DB::statement('ANALYZE TABLE book_sources');
-
-            Log::info("🔧 ایندکس‌های book_sources بازسازی شد");
-        } catch (\Exception $e) {
-            Log::error("❌ خطا در بازسازی ایندکس‌ها", [
-                'error' => $e->getMessage()
-            ]);
-        }
+        return $deletedCount;
     }
 
     /**
@@ -304,48 +240,12 @@ class BookSource extends Model
             'id' => $this->id,
             'book_id' => $this->book_id,
             'book_title' => $this->book?->title,
-            'source_type' => $this->source_type,
+            'source_name' => $this->source_name,
             'source_id' => $this->source_id,
-            'source_url' => $this->source_url,
-            'is_active' => $this->is_active,
-            'priority' => $this->priority,
+            'discovered_at' => $this->discovered_at,
+            'source_url' => self::buildSourceUrl($this->source_name, $this->source_id),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
-            'source_updated_at' => $this->source_updated_at,
-        ];
-    }
-
-    /**
-     * بررسی سلامت منبع
-     */
-    public function checkHealth(): array
-    {
-        $issues = [];
-
-        // بررسی وجود کتاب
-        if (!$this->book) {
-            $issues[] = 'کتاب مرتبط یافت نشد';
-        }
-
-        // بررسی معتبر بودن source_id
-        if (empty($this->source_id) || !is_numeric($this->source_id)) {
-            $issues[] = 'source_id نامعتبر است';
-        }
-
-        // بررسی معتبر بودن URL
-        if (!empty($this->source_url) && !filter_var($this->source_url, FILTER_VALIDATE_URL)) {
-            $issues[] = 'URL منبع نامعتبر است';
-        }
-
-        // بررسی بروزرسانی اخیر
-        if ($this->source_updated_at && $this->source_updated_at->lt(now()->subMonths(6))) {
-            $issues[] = 'منبع مدت زیادی بروزرسانی نشده';
-        }
-
-        return [
-            'is_healthy' => empty($issues),
-            'issues' => $issues,
-            'checked_at' => now()
         ];
     }
 }
