@@ -11,7 +11,6 @@ return new class extends Migration
         Schema::create('books', function (Blueprint $table) {
             // شناسه‌های اصلی
             $table->bigIncrements('id');
-            $table->char('content_hash', 32)->unique()->comment('MD5 محتوا - کلید یکتای اصلی');
 
             // اطلاعات کتاب
             $table->string('title', 500)->index();
@@ -20,7 +19,7 @@ return new class extends Migration
             $table->string('slug')->unique()->index();
 
             // متادیتا
-            $table->char('isbn', 17)->nullable()->index();
+            $table->string('isbn', 50)->nullable()->index();
             $table->unsignedSmallInteger('publication_year')->nullable()->index();
             $table->unsignedMediumInteger('pages_count')->nullable();
             $table->char('language', 2)->default('fa')->index();

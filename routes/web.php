@@ -3,7 +3,6 @@
 use App\Http\Controllers\ConfigController;
 use App\Http\Controllers\ProfileController;
 use Illuminate\Support\Facades\Route;
-use App\Models\Book;
 
 // Redirect اصلی به configs
 Route::get('/', function () {
@@ -16,7 +15,7 @@ Route::middleware(['auth'])->group(function () {
         return redirect()->route('configs.index');
     })->name('dashboard');
 
-    // Routes کانفیگ‌های هوشمند
+    // Routes کانفیگ‌های اصلی
     Route::resource('configs', ConfigController::class);
     Route::get('configs/{config}/logs', [ConfigController::class, 'logs'])->name('configs.logs');
     Route::get('configs/{config}/logs/{log}', [ConfigController::class, 'logDetails'])->name('configs.log-details');
@@ -25,9 +24,6 @@ Route::middleware(['auth'])->group(function () {
     Route::post('configs/{config}/start', [ConfigController::class, 'executeBackground'])->name('configs.start');
     Route::post('configs/{config}/execute-background', [ConfigController::class, 'executeBackground'])->name('configs.execute-background');
     Route::post('configs/{config}/stop', [ConfigController::class, 'stopExecution'])->name('configs.stop');
-
-    // Routes قدیمی (اختیاری - برای سازگاری)
-    Route::post('configs/{config}/run-sync', [ConfigController::class, 'runAsync'])->name('configs.run-sync');
 
     // Worker management
     Route::prefix('admin/worker')->name('admin.worker.')->group(function () {
@@ -65,87 +61,10 @@ Route::middleware(['auth'])->group(function () {
         Route::post('{log}/sync-stats', [ConfigController::class, 'syncLogStats'])->name('sync-stats');
     });
 
-    // Source ID Management - کامند‌های جدید
-    Route::prefix('admin/source-management')->name('admin.source.')->group(function () {
-        // مدیریت source ID ها
-        Route::get('analyze/{config}', function($configId) {
-            \Artisan::call('crawl:manage-sources', [
-                'action' => 'analyze',
-                '--config' => $configId
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => '📊 تحلیل source ID ها انجام شد',
-                'output' => \Artisan::output()
-            ]);
-        })->name('analyze');
-
-        Route::get('missing/{config}', function($configId) {
-            \Artisan::call('crawl:manage-sources', [
-                'action' => 'missing',
-                '--config' => $configId,
-                '--limit' => 100
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => '🔍 جستجوی ID های مفقود انجام شد',
-                'output' => \Artisan::output()
-            ]);
-        })->name('missing');
-
-        Route::post('process-missing/{config}', function($configId) {
-            \Artisan::call('crawl:missing-ids', [
-                'config' => $configId,
-                '--limit' => 50,
-                '--background' => true
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => '🚀 پردازش ID های مفقود در پس‌زمینه شروع شد',
-                'output' => \Artisan::output()
-            ]);
-        })->name('process-missing');
-
-        Route::post('cleanup/{config}', function($configId) {
-            \Artisan::call('crawl:manage-sources', [
-                'action' => 'cleanup',
-                '--config' => $configId,
-                '--fix' => true
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => '🧹 پاکسازی انجام شد',
-                'output' => \Artisan::output()
-            ]);
-        })->name('cleanup');
-
-        Route::get('report/{config}', function($configId) {
-            \Artisan::call('crawl:manage-sources', [
-                'action' => 'report',
-                '--config' => $configId
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => '📋 گزارش تولید شد',
-                'output' => \Artisan::output()
-            ]);
-        })->name('report');
-    });
-
-    // Profile (اگر نیاز داری)
+    // Profile (اختیاری)
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
-});
-
-// فقط یکی از این دو را نگه دارید:
-Route::get('/api/books', function () {
-    return response()->json(\App\Models\Book::limit(100)->get());
 });
 
 require __DIR__.'/auth.php';

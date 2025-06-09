@@ -90,6 +90,11 @@ class ExecutionLog extends Model
 
             $currentLogs[] = $newEntry;
 
+            // محدود کردن تعداد لاگ‌ها تا از مشکل حافظه جلوگیری شود
+            if (count($currentLogs) > 1000) {
+                $currentLogs = array_slice($currentLogs, -1000);
+            }
+
             $this->update(['log_details' => $currentLogs]);
         } catch (\Exception $e) {
             Log::error("❌ خطا در افزودن log entry", [
@@ -99,7 +104,7 @@ class ExecutionLog extends Model
             ]);
         }
     }
-
+    
     /**
      * پاکسازی context برای جلوگیری از خطای array to string
      */

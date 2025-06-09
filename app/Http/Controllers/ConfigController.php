@@ -4,9 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Config;
 use App\Models\ExecutionLog;
-use App\Services\ApiDataService;
 use App\Services\QueueManagerService;
-use App\Jobs\ProcessApiDataJob;
 use App\Jobs\ProcessSinglePageJob;
 use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
@@ -15,10 +13,7 @@ use Illuminate\View\View;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\File;
 use Illuminate\Validation\Rule;
-use Illuminate\Support\Facades\Schema;
-use App\Helpers\UserAgentHelper;
 
 class ConfigController extends Controller
 {
@@ -39,7 +34,6 @@ class ConfigController extends Controller
 
         $stats = [
             'total_configs' => Config::count(),
-            'active_configs' => Config::count(),
             'running_configs' => Config::where('is_running', true)->count(),
             'total_books' => \App\Models\Book::count(),
         ];
@@ -72,8 +66,6 @@ class ConfigController extends Controller
 
         try {
             $configData = $this->buildConfigData($request);
-
-            // استخراج نام منبع از URL
             $sourceName = $this->extractSourceName($validated['base_url']);
 
             Config::create([
@@ -92,12 +84,6 @@ class ConfigController extends Controller
                 'total_success' => 0,
                 'total_failed' => 0,
                 'is_running' => false
-            ]);
-
-            Log::info('کانفیگ جدید ایجاد شد', [
-                'name' => $validated['name'],
-                'source_name' => $sourceName,
-                'user_id' => Auth::id()
             ]);
 
             return redirect()->route('configs.index')
@@ -124,19 +110,7 @@ class ConfigController extends Controller
             ->limit(5)
             ->get();
 
-        $stats = [
-            'total_executions' => ExecutionLog::where('config_id', $config->id)->count(),
-            'successful_executions' => ExecutionLog::where('config_id', $config->id)
-                ->where('status', 'completed')->count(),
-            'failed_executions' => ExecutionLog::where('config_id', $config->id)
-                ->where('status', 'failed')->count(),
-            'total_books_processed' => $config->total_processed,
-            'success_rate' => $config->total_processed > 0
-                ? round(($config->total_success / $config->total_processed) * 100, 2)
-                : 0,
-            'last_source_id' => $config->last_source_id,
-            'next_source_id' => $config->getSmartStartPage()
-        ];
+        $stats = $config->getDisplayStats();
 
         return view('configs.show', compact('config', 'recentLogs', 'stats'));
     }
@@ -166,6 +140,10 @@ class ConfigController extends Controller
             $configData = $this->buildConfigData($request);
             $sourceName = $this->extractSourceName($validated['base_url']);
 
+            // اگر start_page تغییر کرده، کانفیگ رو برای شروع مجدد آماده کن
+            $oldStartPage = $config->start_page;
+            $newStartPage = $request->input('start_page');
+
             $config->update([
                 ...$validated,
                 'source_name' => $sourceName,
@@ -176,19 +154,18 @@ class ConfigController extends Controller
                 'config_data' => $configData
             ]);
 
-            Log::info('کانفیگ بروزرسانی شد', [
-                'config_id' => $config->id,
-                'name' => $validated['name'],
-                'user_id' => Auth::id()
-            ]);
+            // اگر start_page تغییر کرده و مقدار جدید کمتر از آخرین ID است، پیام نمایش بده
+            if ($newStartPage && $newStartPage != $oldStartPage && $newStartPage <= $config->last_source_id) {
+                $message = 'کانفیگ بروزرسانی شد! 🔄 اجرای بعدی از ID ' . $newStartPage . ' شروع می‌شود و رکوردهای قبلی در صورت نیاز بروزرسانی خواهند شد.';
+                return redirect()->route('configs.index')->with('success', $message);
+            }
 
             return redirect()->route('configs.index')
                 ->with('success', 'کانفیگ با موفقیت به‌روزرسانی شد!');
         } catch (\Exception $e) {
             Log::error('خطا در بروزرسانی کانفیگ', [
                 'config_id' => $config->id,
-                'error' => $e->getMessage(),
-                'user_id' => Auth::id()
+                'error' => $e->getMessage()
             ]);
 
             return redirect()->back()
@@ -208,35 +185,20 @@ class ConfigController extends Controller
                     ->with('error', 'امکان حذف کانفیگ در حال اجرا وجود ندارد. ابتدا آن را متوقف کنید.');
             }
 
-            $configName = $config->name;
-
-            // حذف لاگ‌های مربوطه و منابع
             ExecutionLog::where('config_id', $config->id)->delete();
             \App\Models\ScrapingFailure::where('config_id', $config->id)->delete();
-
             $config->delete();
-
-            Log::info('کانفیگ حذف شد', [
-                'config_name' => $configName,
-                'user_id' => Auth::id()
-            ]);
 
             return redirect()->route('configs.index')
                 ->with('success', 'کانفیگ با موفقیت حذف شد!');
         } catch (\Exception $e) {
-            Log::error('خطا در حذف کانفیگ', [
-                'config_id' => $config->id,
-                'error' => $e->getMessage(),
-                'user_id' => Auth::id()
-            ]);
-
             return redirect()->back()
                 ->with('error', 'خطا در حذف کانفیگ: ' . $e->getMessage());
         }
     }
 
     /**
-     * اجرای بک‌گراند کانفیگ (متد اصلی)
+     * اجرای بک‌گراند کانفیگ
      */
     public function executeBackground(Config $config): JsonResponse
     {
@@ -248,30 +210,30 @@ class ConfigController extends Controller
                 ], 422);
             }
 
-            // شروع Worker اگر در حال اجرا نباشد
+            // شروع Worker
             QueueManagerService::ensureWorkerIsRunning();
 
             $maxIds = $config->max_pages ?? 1000;
             $startId = $config->getSmartStartPage();
             $endId = $startId + $maxIds - 1;
 
-            // علامت‌گذاری کانفیگ به عنوان در حال اجرا
+            // علامت‌گذاری به عنوان در حال اجرا
             $config->update(['is_running' => true]);
 
             // ایجاد execution log
             $executionLog = ExecutionLog::createNew($config);
             $executionId = $executionLog->execution_id;
 
-            // ایجاد Jobs برای هر source ID
+            // ایجاد Jobs
             for ($sourceId = $startId; $sourceId <= $endId; $sourceId++) {
                 ProcessSinglePageJob::dispatch($config->id, $sourceId, $executionId);
             }
 
-            // Job ویژه برای تمام کردن اجرا
+            // Job پایان اجرا
             ProcessSinglePageJob::dispatch($config->id, -1, $executionId)
                 ->delay(now()->addMinutes(5));
 
-            Log::info("🚀 شروع اجرای executeBackground با source ID", [
+            Log::info("🚀 اجرای هوشمند شروع شد", [
                 'config_id' => $config->id,
                 'source_name' => $config->source_name,
                 'start_id' => $startId,
@@ -281,19 +243,17 @@ class ConfigController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => "✅ اجرا در پس‌زمینه شروع شد!\n📊 منبع: {$config->source_name}\n🔢 ID های {$startId} تا {$endId} ({$maxIds} ID)\n🆔 شناسه اجرا: {$executionId}",
+                'message' => "✅ اجرای هوشمند شروع شد!\n📊 منبع: {$config->source_name}\n🔢 ID های {$startId} تا {$endId} ({$maxIds} ID)\n🆔 شناسه اجرا: {$executionId}",
                 'execution_id' => $executionId,
                 'total_ids' => $maxIds,
                 'start_id' => $startId,
                 'end_id' => $endId,
-                'source_name' => $config->source_name,
-                'worker_status' => QueueManagerService::getWorkerStatus()
+                'source_name' => $config->source_name
             ]);
         } catch (\Exception $e) {
             Log::error('خطا در اجرای بک‌گراند', [
                 'config_id' => $config->id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'error' => $e->getMessage()
             ]);
 
             return response()->json([
@@ -309,11 +269,6 @@ class ConfigController extends Controller
     public function stopExecution(Config $config): JsonResponse
     {
         try {
-            Log::info('🛑 درخواست توقف اجرا', [
-                'config_id' => $config->id,
-                'is_running' => $config->is_running
-            ]);
-
             if (!$config->is_running) {
                 return response()->json([
                     'success' => false,
@@ -322,9 +277,7 @@ class ConfigController extends Controller
             }
 
             // متوقف کردن کانفیگ
-            DB::transaction(function () use ($config) {
-                $config->update(['is_running' => false]);
-            });
+            $config->update(['is_running' => false]);
 
             // متوقف کردن execution log فعال
             $activeExecution = ExecutionLog::where('config_id', $config->id)
@@ -333,72 +286,23 @@ class ConfigController extends Controller
                 ->first();
 
             if ($activeExecution) {
-                try {
-                    $executionTime = $activeExecution->started_at ? now()->diffInSeconds($activeExecution->started_at) : 0;
-
-                    $activeExecution->update([
-                        'status' => 'stopped',
-                        'finished_at' => now(),
-                        'execution_time' => $executionTime,
-                        'stop_reason' => 'متوقف شده توسط کاربر',
-                        'error_message' => 'متوقف شده توسط کاربر'
-                    ]);
-
-                    $activeExecution->addLogEntry('⏹️ اجرا توسط کاربر متوقف شد', [
-                        'stopped_manually' => true,
-                        'stopped_at' => now()->toISOString(),
-                        'execution_time' => $executionTime,
-                        'last_source_id' => $config->last_source_id
-                    ]);
-
-                    Log::info("⏹️ ExecutionLog متوقف شد", ['execution_id' => $activeExecution->execution_id]);
-                } catch (\Exception $e) {
-                    Log::error('خطا در متوقف کردن ExecutionLog', ['error' => $e->getMessage()]);
-                }
+                $activeExecution->stop(['stopped_manually' => true]);
             }
 
-            // حذف Jobs مرتبط با این کانفیگ
-            try {
-                $deletedJobs = DB::table('jobs')
-                    ->where('payload', 'like', '%"configId":' . $config->id . '%')
-                    ->orWhere('payload', 'like', '%"config":' . $config->id . '%')
-                    ->delete();
-
-                Log::info("🗑️ {$deletedJobs} Job حذف شد");
-
-                $deletedFailedJobs = DB::table('failed_jobs')
-                    ->where('payload', 'like', '%"configId":' . $config->id . '%')
-                    ->orWhere('payload', 'like', '%"config":' . $config->id . '%')
-                    ->delete();
-
-                if ($deletedFailedJobs > 0) {
-                    Log::info("🗑️ {$deletedFailedJobs} Failed Job حذف شد");
-                }
-            } catch (\Exception $e) {
-                Log::error('خطا در حذف Jobs', ['error' => $e->getMessage()]);
-                $deletedJobs = 0;
-            }
-
-            $message = "✅ اجرا متوقف شد!\n";
-            $message .= "🗑️ {$deletedJobs} Job از صف حذف شد\n";
-            $message .= "📊 آمار: {$config->total_success} کتاب موفق از {$config->total_processed} کل\n";
-            $message .= "🔢 آخرین source ID: {$config->last_source_id}";
+            // حذف Jobs باقی‌مانده
+            $deletedJobs = DB::table('jobs')
+                ->where('payload', 'like', '%"configId":' . $config->id . '%')
+                ->delete();
 
             return response()->json([
                 'success' => true,
-                'message' => $message
+                'message' => "✅ اجرا متوقف شد!\n🗑️ {$deletedJobs} Job از صف حذف شد\n📊 آمار: {$config->total_success} کتاب موفق از {$config->total_processed} کل"
             ]);
         } catch (\Exception $e) {
-            Log::error('❌ خطا در متوقف کردن اجرا', [
+            Log::error('خطا در متوقف کردن اجرا', [
                 'config_id' => $config->id,
                 'error' => $e->getMessage()
             ]);
-
-            try {
-                DB::table('configs')->where('id', $config->id)->update(['is_running' => false]);
-            } catch (\Exception $ex) {
-                // نادیده بگیر
-            }
 
             return response()->json([
                 'success' => false,
@@ -407,137 +311,15 @@ class ConfigController extends Controller
         }
     }
 
-    // متدهای کمکی
-    private function extractSourceName(string $url): string
-    {
-        $host = parse_url($url, PHP_URL_HOST);
-        $sourceName = preg_replace('/^www\./', '', $host);
-        $sourceName = str_replace('.', '_', $sourceName);
-        return $sourceName ?: 'unknown_source';
-    }
-
-    private function validateConfigData(Request $request, ?int $configId = null): array
-    {
-        $rules = [
-            'name' => [
-                'required',
-                'string',
-                'max:255',
-                Rule::unique('configs')->ignore($configId)
-            ],
-            'base_url' => 'required|url|max:500',
-            'timeout' => 'required|integer|min:10|max:300',
-            'delay_seconds' => 'required|integer|min:1|max:3600',
-            'records_per_run' => 'required|integer|min:1|max:100',
-            'page_delay' => 'required|integer|min:0|max:300',
-            'start_page' => 'nullable|integer|min:1|max:10000',
-            'max_pages' => 'required|integer|min:1|max:10000',
-
-            // تنظیمات API
-            'api_endpoint' => 'nullable|string|max:500',
-            'api_method' => 'required|in:GET,POST',
-
-            // تنظیمات عمومی
-            'verify_ssl' => 'boolean',
-            'follow_redirects' => 'boolean',
-            'auto_resume' => 'boolean',
-            'fill_missing_fields' => 'boolean',
-            'update_descriptions' => 'boolean',
-        ];
-
-        $messages = [
-            'name.required' => 'نام کانفیگ الزامی است.',
-            'name.unique' => 'نام کانفیگ قبلاً استفاده شده است.',
-            'base_url.required' => 'آدرس پایه الزامی است.',
-            'base_url.url' => 'آدرس پایه معتبر نیست.',
-            'max_pages.required' => 'تعداد حداکثر صفحات الزامی است.',
-            'max_pages.min' => 'حداقل 1 صفحه باید پردازش شود.',
-            'max_pages.max' => 'حداکثر 10000 صفحه قابل پردازش است.',
-        ];
-
-        return $request->validate($rules, $messages);
-    }
-
-    private function buildConfigData(Request $request): array
-    {
-        return [
-            'general' => [
-                'verify_ssl' => $request->boolean('verify_ssl', true),
-                'follow_redirects' => $request->boolean('follow_redirects', true),
-            ],
-            'api' => [
-                'endpoint' => $request->input('api_endpoint'),
-                'method' => $request->input('api_method', 'GET'),
-                'params' => $this->buildApiParams($request),
-                'field_mapping' => $this->buildFieldMapping($request)
-            ],
-            'crawling' => [
-                'auto_resume' => $request->boolean('auto_resume', true),
-                'fill_missing_fields' => $request->boolean('fill_missing_fields', true),
-                'update_descriptions' => $request->boolean('update_descriptions', true),
-                'max_pages' => $request->input('max_pages', 1000),
-                'start_page' => $request->input('start_page'),
-                'page_delay' => $request->input('page_delay', 5),
-            ]
-        ];
-    }
-
-    private function buildApiParams(Request $request): array
-    {
-        $params = [];
-
-        for ($i = 1; $i <= 5; $i++) {
-            $key = $request->input("param_key_{$i}");
-            $value = $request->input("param_value_{$i}");
-
-            if (!empty($key) && !empty($value)) {
-                $params[$key] = $value;
-            }
-        }
-
-        return $params;
-    }
-
-    private function buildFieldMapping(Request $request): array
-    {
-        $mapping = [];
-
-        foreach (array_keys(Config::getBookFields()) as $field) {
-            $value = $request->input("api_field_{$field}");
-            if (!empty($value)) {
-                $mapping[$field] = $value;
-            }
-        }
-
-        return $mapping;
-    }
-
-    // سایر متدهای قبلی...
-    public function workerStatus(): JsonResponse
-    {
-        try {
-            $workerStatus = QueueManagerService::getWorkerStatus();
-            $queueStats = QueueManagerService::getQueueStats();
-
-            return response()->json([
-                'worker_status' => $workerStatus,
-                'queue_stats' => $queueStats
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'worker_status' => ['is_running' => false, 'pid' => null],
-                'queue_stats' => ['pending_jobs' => 0, 'failed_jobs' => 0],
-                'error' => $e->getMessage()
-            ], 500);
-        }
-    }
-
+    /**
+     * نمایش لاگ‌ها
+     */
     public function logs(Config $config): View
     {
         $status = request('status');
         $query = ExecutionLog::where('config_id', $config->id);
 
-        if ($status && in_array($status, ['running', 'completed', 'failed'])) {
+        if ($status && in_array($status, ['running', 'completed', 'failed', 'stopped'])) {
             $query->where('status', $status);
         }
 
@@ -546,6 +328,9 @@ class ConfigController extends Controller
         return view('configs.logs', compact('config', 'logs', 'status'));
     }
 
+    /**
+     * جزئیات لاگ
+     */
     public function logDetails(Config $config, ExecutionLog $log): View
     {
         if ($log->config_id !== $config->id) {
@@ -555,32 +340,16 @@ class ConfigController extends Controller
         return view('configs.log-details', compact('config', 'log'));
     }
 
+    /**
+     * اصلاح وضعیت لاگ
+     */
     public function fixLogStatus(ExecutionLog $log): JsonResponse
     {
         try {
             $config = $log->config;
 
-            if (!$config) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'کانفیگ مرتبط با این لاگ یافت نشد'
-                ], 404);
-            }
-
             if (!$config->is_running && $log->status === 'running') {
-                $executionTime = $log->started_at ? now()->diffInSeconds($log->started_at) : 0;
-
-                $log->update([
-                    'status' => 'stopped',
-                    'total_processed' => $config->total_processed,
-                    'total_success' => $config->total_success,
-                    'total_failed' => $config->total_failed,
-                    'execution_time' => $executionTime,
-                    'finished_at' => now(),
-                    'last_activity_at' => now(),
-                    'stop_reason' => 'اصلاح شده توسط کاربر',
-                    'error_message' => 'وضعیت از running به stopped اصلاح شد'
-                ]);
+                $log->stop(['stopped_manually' => false, 'fixed_by_user' => true]);
 
                 return response()->json([
                     'success' => true,
@@ -600,47 +369,29 @@ class ConfigController extends Controller
         }
     }
 
+    /**
+     * همگام‌سازی آمار لاگ
+     */
     public function syncLogStats(ExecutionLog $log): JsonResponse
     {
         try {
             $config = $log->config;
-
             if (!$config) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'کانفیگ مرتبط با این لاگ یافت نشد'
-                ], 404);
-            }
-
-            $newStats = [
-                'total_processed' => $config->total_processed,
-                'total_success' => $config->total_success,
-                'total_failed' => $config->total_failed
-            ];
-
-            $successRate = $newStats['total_processed'] > 0
-                ? round(($newStats['total_success'] / $newStats['total_processed']) * 100, 2)
-                : 0;
-
-            $executionTime = 0;
-            if ($log->started_at && $log->finished_at) {
-                $executionTime = $log->finished_at->diffInSeconds($log->started_at);
-            } elseif ($log->started_at) {
-                $executionTime = now()->diffInSeconds($log->started_at);
+                return response()->json(['success' => false, 'message' => 'کانفیگ یافت نشد'], 404);
             }
 
             $log->update([
-                'total_processed' => $newStats['total_processed'],
-                'total_success' => $newStats['total_success'],
-                'total_failed' => $newStats['total_failed'],
-                'success_rate' => $successRate,
-                'execution_time' => $executionTime > 0 ? $executionTime : null,
+                'total_processed' => $config->total_processed,
+                'total_success' => $config->total_success,
+                'total_failed' => $config->total_failed,
+                'success_rate' => $config->total_processed > 0
+                    ? round(($config->total_success / $config->total_processed) * 100, 2)
+                    : 0,
             ]);
 
             return response()->json([
                 'success' => true,
-                'message' => 'آمار لاگ با موفقیت همگام‌سازی شد',
-                'stats' => $newStats
+                'message' => 'آمار لاگ با موفقیت همگام‌سازی شد'
             ]);
         } catch (\Exception $e) {
             return response()->json([
@@ -648,5 +399,109 @@ class ConfigController extends Controller
                 'message' => 'خطا در همگام‌سازی آمار: ' . $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * وضعیت Worker
+     */
+    public function workerStatus(): JsonResponse
+    {
+        try {
+            $workerStatus = QueueManagerService::getWorkerStatus();
+            $queueStats = QueueManagerService::getQueueStats();
+
+            return response()->json([
+                'worker_status' => $workerStatus,
+                'queue_stats' => $queueStats
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'worker_status' => ['is_running' => false, 'pid' => null],
+                'queue_stats' => ['pending_jobs' => 0, 'failed_jobs' => 0],
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    // متدهای کمکی
+    private function extractSourceName(string $url): string
+    {
+        $host = parse_url($url, PHP_URL_HOST);
+        $sourceName = preg_replace('/^www\./', '', $host);
+        $sourceName = str_replace('.', '_', $sourceName);
+        return $sourceName ?: 'unknown_source';
+    }
+
+    private function validateConfigData(Request $request, ?int $configId = null): array
+    {
+        return $request->validate([
+            'name' => [
+                'required',
+                'string',
+                'max:255',
+                Rule::unique('configs')->ignore($configId)
+            ],
+            'base_url' => 'required|url|max:500',
+            'timeout' => 'required|integer|min:10|max:300',
+            'delay_seconds' => 'required|integer|min:1|max:3600',
+            'records_per_run' => 'required|integer|min:1|max:100',
+            'page_delay' => 'required|integer|min:0|max:300',
+            'start_page' => 'nullable|integer|min:1|max:10000',
+            'max_pages' => 'required|integer|min:1|max:10000',
+            'api_endpoint' => 'nullable|string|max:500',
+            'api_method' => 'required|in:GET,POST',
+            'verify_ssl' => 'boolean',
+            'follow_redirects' => 'boolean',
+            'auto_resume' => 'boolean',
+            'fill_missing_fields' => 'boolean',
+            'update_descriptions' => 'boolean',
+        ], [
+            'name.required' => 'نام کانفیگ الزامی است.',
+            'name.unique' => 'نام کانفیگ قبلاً استفاده شده است.',
+            'base_url.required' => 'آدرس پایه الزامی است.',
+            'base_url.url' => 'آدرس پایه معتبر نیست.',
+            'max_pages.required' => 'تعداد حداکثر صفحات الزامی است.',
+        ]);
+    }
+
+    private function buildConfigData(Request $request): array
+    {
+        return [
+            'general' => [
+                'verify_ssl' => $request->boolean('verify_ssl', true),
+                'follow_redirects' => $request->boolean('follow_redirects', true),
+            ],
+            'api' => [
+                'endpoint' => $request->input('api_endpoint'),
+                'method' => $request->input('api_method', 'GET'),
+                'params' => $this->buildApiParams($request),
+                'field_mapping' => $this->buildFieldMapping($request)
+            ],
+        ];
+    }
+
+    private function buildApiParams(Request $request): array
+    {
+        $params = [];
+        for ($i = 1; $i <= 5; $i++) {
+            $key = $request->input("param_key_{$i}");
+            $value = $request->input("param_value_{$i}");
+            if (!empty($key) && !empty($value)) {
+                $params[$key] = $value;
+            }
+        }
+        return $params;
+    }
+
+    private function buildFieldMapping(Request $request): array
+    {
+        $mapping = [];
+        foreach (array_keys(Config::getBookFields()) as $field) {
+            $value = $request->input("api_field_{$field}");
+            if (!empty($value)) {
+                $mapping[$field] = $value;
+            }
+        }
+        return $mapping;
     }
 }

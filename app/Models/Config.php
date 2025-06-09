@@ -6,7 +6,6 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\DB;
 
 class Config extends Model
 {
@@ -65,17 +64,6 @@ class Config extends Model
         return $this->hasMany(ExecutionLog::class);
     }
 
-    public function bookSources(): HasMany
-    {
-        // رابطه بر اساس source_name نه source_type
-        return $this->hasMany(BookSource::class, 'source_name', 'source_name');
-    }
-
-    public function isActive(): bool
-    {
-        return true;
-    }
-
     /**
      * تعیین صفحه شروع هوشمند
      */
@@ -83,7 +71,7 @@ class Config extends Model
     {
         // اولویت 1: اگر start_page مشخص شده، از آن استفاده کن
         if ($this->start_page && $this->start_page > 0) {
-            Log::info("🎯 استفاده از start_page تعیین شده", [
+            Log::info("🎯 شروع از start_page تعیین شده", [
                 'config_id' => $this->id,
                 'start_page' => $this->start_page
             ]);
@@ -101,12 +89,15 @@ class Config extends Model
             return $nextId;
         }
 
-        // اولویت 3: آخرین ID از book_sources برای این منبع خاص
-        $lastIdFromSources = BookSource::getLastNumericSourceId($this->source_name);
+        // اولویت 3: آخرین ID از book_sources برای این منبع
+        $lastIdFromSources = BookSource::where('source_name', $this->source_name)
+            ->whereRaw('source_id REGEXP "^[0-9]+$"')
+            ->orderByRaw('CAST(source_id AS UNSIGNED) DESC')
+            ->value('source_id');
 
         if ($lastIdFromSources > 0) {
-            $nextId = $lastIdFromSources + 1;
-            Log::info("📊 استفاده از آخرین ID در book_sources", [
+            $nextId = (int)$lastIdFromSources + 1;
+            Log::info("📊 استفاده از آخرین ID در منبع", [
                 'config_id' => $this->id,
                 'source_name' => $this->source_name,
                 'last_id_from_sources' => $lastIdFromSources,
@@ -121,60 +112,6 @@ class Config extends Model
             'source_name' => $this->source_name
         ]);
         return 1;
-    }
-
-    /**
-     * بروزرسانی آخرین source_id پردازش شده
-     */
-    public function updateLastSourceId(int $sourceId): void
-    {
-        if ($sourceId > $this->last_source_id) {
-            DB::transaction(function () use ($sourceId) {
-                $this->update(['last_source_id' => $sourceId]);
-            });
-
-            Log::info("📈 آخرین source_id بروزرسانی شد", [
-                'config_id' => $this->id,
-                'source_name' => $this->source_name,
-                'old_last_id' => $this->last_source_id,
-                'new_last_id' => $sourceId
-            ]);
-        }
-    }
-
-    /**
-     * بررسی اینکه آیا ID خاصی قبلاً از این منبع پردازش شده
-     */
-    public function isSourceIdProcessed(int $sourceId): bool
-    {
-        return BookSource::sourceExists($this->source_name, (string) $sourceId);
-    }
-
-    /**
-     * ثبت شکست در دریافت ID خاص
-     */
-    public function logSourceIdFailure(int $sourceId, string $reason): void
-    {
-        ScrapingFailure::create([
-            'config_id' => $this->id,
-            'url' => $this->buildApiUrl($sourceId),
-            'error_message' => "ID {$sourceId} not found: {$reason}",
-            'error_details' => [
-                'source_id' => $sourceId,
-                'source_name' => $this->source_name,
-                'reason' => $reason
-            ],
-            'http_status' => 404,
-            'retry_count' => 0,
-            'last_attempt_at' => now()
-        ]);
-
-        Log::warning("❌ Source ID شکست خورد", [
-            'config_id' => $this->id,
-            'source_name' => $this->source_name,
-            'source_id' => $sourceId,
-            'reason' => $reason
-        ]);
     }
 
     /**
@@ -203,21 +140,56 @@ class Config extends Model
     }
 
     /**
-     * دریافت آمار منبع این کانفیگ
+     * بروزرسانی آخرین source_id و آمار
      */
-    public function getSourceStats(): array
+    public function updateProgress(int $sourceId, array $stats): void
     {
-        return BookSource::getSourceStats($this->source_name);
+        \Illuminate\Support\Facades\DB::transaction(function () use ($sourceId, $stats) {
+            $this->increment('total_processed', $stats['total'] ?? 0);
+            $this->increment('total_success', $stats['success'] ?? 0);
+            $this->increment('total_failed', $stats['failed'] ?? 0);
+
+            // بروزرسانی آخرین ID اگر بزرگتر باشد
+            if ($sourceId > $this->last_source_id) {
+                $this->update([
+                    'last_source_id' => $sourceId,
+                    'current_page' => $sourceId,
+                    'last_run_at' => now()
+                ]);
+            }
+        });
     }
 
     /**
-     * یافتن source ID های مفقود برای این کانفیگ
+     * بررسی وجود source ID
+     */
+    public function hasSourceId(int $sourceId): bool
+    {
+        return BookSource::where('source_name', $this->source_name)
+            ->where('source_id', (string)$sourceId)
+            ->exists();
+    }
+
+    /**
+     * یافتن source ID های مفقود
      */
     public function findMissingSourceIds(int $startId, int $endId, int $limit = 100): array
     {
-        return BookSource::findMissingSourceIds($this->source_name, $startId, $endId, $limit);
+        $existingIds = BookSource::where('source_name', $this->source_name)
+            ->whereBetween(\Illuminate\Support\Facades\DB::raw('CAST(source_id AS UNSIGNED)'), [$startId, $endId])
+            ->pluck('source_id')
+            ->map(fn($id) => (int)$id)
+            ->toArray();
+
+        $allIds = range($startId, $endId);
+        $missingIds = array_diff($allIds, $existingIds);
+
+        return array_slice(array_values($missingIds), 0, $limit);
     }
 
+    /**
+     * تنظیمات API
+     */
     public function getApiSettings(): array
     {
         return $this->config_data['api'] ?? [];
@@ -228,20 +200,9 @@ class Config extends Model
         return $this->config_data['general'] ?? [];
     }
 
-    public function getCrawlingSettings(): array
-    {
-        $crawling = $this->config_data['crawling'] ?? [];
-
-        // اضافه کردن تنظیمات جدید
-        $crawling['max_pages'] = $this->max_pages;
-        $crawling['start_page'] = $this->getSmartStartPage();
-        $crawling['auto_resume'] = $this->auto_resume;
-        $crawling['fill_missing_fields'] = $this->fill_missing_fields;
-        $crawling['update_descriptions'] = $this->update_descriptions;
-
-        return $crawling;
-    }
-
+    /**
+     * فیلدهای قابل نقشه‌برداری
+     */
     public static function getBookFields(): array
     {
         return [
@@ -260,145 +221,41 @@ class Config extends Model
         ];
     }
 
-    public function updateProgress(int $currentSourceId, array $stats): void
-    {
-        Log::info("🔄 شروع بروزرسانی progress", [
-            'config_id' => $this->id,
-            'source_name' => $this->source_name,
-            'source_id' => $currentSourceId,
-            'incoming_stats' => $stats,
-            'current_stats' => [
-                'total_processed' => $this->total_processed,
-                'total_success' => $this->total_success,
-                'total_failed' => $this->total_failed,
-                'last_source_id' => $this->last_source_id
-            ]
-        ]);
-
-        try {
-            DB::transaction(function () use ($currentSourceId, $stats) {
-                $config = Config::lockForUpdate()->find($this->id);
-
-                if (!$config) {
-                    throw new \Exception("کانفیگ {$this->id} یافت نشد");
-                }
-
-                // بروزرسانی آمار
-                $totalToAdd = is_numeric($stats['total'] ?? 0) ? (int)($stats['total'] ?? 0) : 0;
-                $successToAdd = is_numeric($stats['success'] ?? 0) ? (int)($stats['success'] ?? 0) : 0;
-                $failedToAdd = is_numeric($stats['failed'] ?? 0) ? (int)($stats['failed'] ?? 0) : 0;
-
-                $config->increment('total_processed', $totalToAdd);
-                $config->increment('total_success', $successToAdd);
-                $config->increment('total_failed', $failedToAdd);
-
-                // بروزرسانی source_id اگر بزرگتر باشد
-                if ($currentSourceId > $config->last_source_id) {
-                    $config->update(['last_source_id' => $currentSourceId]);
-                }
-
-                $config->update([
-                    'current_page' => $currentSourceId,
-                    'last_run_at' => now(),
-                ]);
-            });
-
-            $this->refresh();
-
-            Log::info("✅ progress بروزرسانی شد", [
-                'config_id' => $this->id,
-                'source_name' => $this->source_name,
-                'source_id' => $currentSourceId,
-                'new_stats' => [
-                    'total_processed' => $this->total_processed,
-                    'total_success' => $this->total_success,
-                    'total_failed' => $this->total_failed,
-                    'last_source_id' => $this->last_source_id
-                ]
-            ]);
-        } catch (\Exception $e) {
-            Log::error("❌ خطا در بروزرسانی progress", [
-                'config_id' => $this->id,
-                'source_name' => $this->source_name,
-                'error' => $e->getMessage(),
-                'stats' => $stats
-            ]);
-            throw $e;
-        }
-    }
-
-    // سایر متدهای قبلی...
-    public function syncStatsFromLogs(): void
-    {
-        $completedLogs = $this->executionLogs()
-            ->whereIn('status', ['completed', 'stopped'])
-            ->get();
-
-        $totalProcessed = $completedLogs->sum('total_processed');
-        $totalSuccess = $completedLogs->sum('total_success');
-        $totalFailed = $completedLogs->sum('total_failed');
-
-        $this->update([
-            'total_processed' => $totalProcessed,
-            'total_success' => $totalSuccess,
-            'total_failed' => $totalFailed,
-        ]);
-    }
-
-    public function resetProgress(): void
+    /**
+     * ریست کردن آمار برای شروع مجدد
+     */
+    public function resetForRestart(): void
     {
         $this->update([
             'current_page' => $this->getSmartStartPage(),
-            'total_processed' => 0,
-            'total_success' => 0,
-            'total_failed' => 0,
-            'is_running' => false,
+            'is_running' => false
+        ]);
+
+        Log::info("🔄 کانفیگ برای شروع مجدد ریست شد", [
+            'config_id' => $this->id,
+            'new_start_page' => $this->current_page
         ]);
     }
 
-    public function getLatestExecutionLog(): ?ExecutionLog
-    {
-        return $this->executionLogs()->latest()->first();
-    }
-
+    /**
+     * آمار نمایشی
+     */
     public function getDisplayStats(): array
     {
-        $latestLog = $this->getLatestExecutionLog();
-        $sourceStats = $this->getSourceStats();
+        $sourceCount = BookSource::where('source_name', $this->source_name)->count();
 
         return [
             'total_executions' => $this->executionLogs()->count(),
             'successful_executions' => $this->executionLogs()->where('status', 'completed')->count(),
-            'failed_executions' => $this->executionLogs()->where('status', 'failed')->count(),
-            'stopped_executions' => $this->executionLogs()->where('status', 'stopped')->count(),
-            'total_books_processed' => $this->total_processed,
-            'total_books_success' => $this->total_success,
-            'total_books_failed' => $this->total_failed,
             'total_processed' => $this->total_processed,
             'total_success' => $this->total_success,
             'total_failed' => $this->total_failed,
             'success_rate' => $this->total_processed > 0
                 ? round(($this->total_success / $this->total_processed) * 100, 2)
                 : 0,
-            'latest_execution_status' => $latestLog?->status,
-            'latest_execution_time' => $latestLog?->started_at,
-            'is_currently_running' => $this->is_running,
             'last_source_id' => $this->last_source_id,
             'next_source_id' => $this->getSmartStartPage(),
-            'source_stats' => $sourceStats,
-            'unique_books_from_source' => $sourceStats['unique_books'] ?? 0,
-            'total_records_from_source' => $sourceStats['total_records'] ?? 0,
-        ];
-    }
-
-    public function getExecutionStats(): array
-    {
-        return [
-            'total_executions' => $this->executionLogs()->count(),
-            'completed_executions' => $this->executionLogs()->where('status', 'completed')->count(),
-            'failed_executions' => $this->executionLogs()->where('status', 'failed')->count(),
-            'stopped_executions' => $this->executionLogs()->where('status', 'stopped')->count(),
-            'running_executions' => $this->executionLogs()->where('status', 'running')->count(),
+            'source_books_count' => $sourceCount,
         ];
     }
 }

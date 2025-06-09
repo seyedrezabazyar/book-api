@@ -10,9 +10,6 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Facades\Log;
 
-/**
- * مدل کتاب‌ها - بهبود یافته
- */
 class Book extends Model
 {
     use HasFactory;
@@ -30,7 +27,6 @@ class Book extends Model
         'language',
         'format',
         'file_size',
-        'content_hash',
         'category_id',
         'publisher_id',
         'downloads_count',
@@ -43,32 +39,6 @@ class Book extends Model
         'file_size' => 'integer',
         'downloads_count' => 'integer'
     ];
-
-    /**
-     * Debug: ثبت stack trace هنگام ایجاد کتاب
-     */
-    protected static function boot()
-    {
-        parent::boot();
-
-        static::created(function ($book) {
-            Log::info("📚 کتاب ایجاد شد", [
-                'id' => $book->id,
-                'title' => $book->title,
-                'content_hash' => $book->content_hash,
-            ]);
-        });
-
-        static::updated(function ($book) {
-            if ($book->isDirty()) {
-                Log::info("📝 کتاب بروزرسانی شد", [
-                    'id' => $book->id,
-                    'title' => $book->title,
-                    'changed_fields' => array_keys($book->getDirty())
-                ]);
-            }
-        });
-    }
 
     /**
      * روابط
@@ -98,15 +68,9 @@ class Book extends Model
         return $this->hasMany(BookImage::class);
     }
 
-    public function bookHash(): HasOne
-    {
-        return $this->hasOne(BookHash::class);
-    }
-
-    // برای سازگاری با کد قدیمی
     public function hashes(): HasOne
     {
-        return $this->bookHash();
+        return $this->hasOne(BookHash::class);
     }
 
     /**
@@ -115,16 +79,6 @@ class Book extends Model
     public function scopeActive($query)
     {
         return $query->where('status', 'active');
-    }
-
-    public function scopeByLanguage($query, $language)
-    {
-        return $query->where('language', $language);
-    }
-
-    public function scopeByFormat($query, $format)
-    {
-        return $query->where('format', $format);
     }
 
     public function scopeSearch($query, $search)
@@ -139,372 +93,33 @@ class Book extends Model
     }
 
     /**
-     * متدهای مربوط به هش
+     * متدهای کمکی
      */
-
-    /**
-     * دریافت یا ایجاد هش کتاب
-     */
-    public function getOrCreateBookHash(): BookHash
+    public function getMainHash(): ?string
     {
-        return $this->bookHash ?? BookHash::createOrUpdateForBook($this);
+        return $this->hashes?->md5;
     }
 
-    /**
-     * بروزرسانی هش‌های کتاب
-     */
-    public function updateHashes(array $hashData): bool
-    {
-        $bookHash = $this->getOrCreateBookHash();
-        return $bookHash->updateMissingHashes($hashData);
-    }
-
-    /**
-     * دریافت تمام هش‌های موجود
-     */
     public function getAllHashes(): array
     {
-        $bookHash = $this->bookHash;
-        return $bookHash ? $bookHash->getAllHashes() : ['md5' => $this->content_hash];
+        return $this->hashes ? $this->hashes->getAllHashes() : [];
     }
 
     /**
-     * دریافت هش خاص
+     * بررسی تکراری بودن بر اساس MD5
      */
-    public function getHash(string $hashType = 'md5'): ?string
+    public static function findByMd5(string $md5): ?self
     {
-        if ($hashType === 'md5') {
-            return $this->content_hash;
-        }
-
-        $bookHash = $this->bookHash;
-        return $bookHash ? $bookHash->getHash($hashType) : null;
-    }
-
-    /**
-     * بررسی اینکه آیا هش خاصی موجود است
-     */
-    public function hasHash(string $hashType): bool
-    {
-        if ($hashType === 'md5') {
-            return !empty($this->content_hash);
-        }
-
-        $bookHash = $this->bookHash;
-        return $bookHash ? $bookHash->hasHash($hashType) : false;
-    }
-
-    /**
-     * متدهای کمکی برای ادغام هوشمند
-     */
-
-    /**
-     * ادغام ISBN جدید با موجود
-     */
-    public function mergeIsbn(string $newIsbn): bool
-    {
-        if (empty($this->isbn)) {
-            $this->isbn = $newIsbn;
-            return true;
-        }
-
-        // نرمال‌سازی ISBN ها
-        $existing = preg_replace('/[^0-9X-]/', '', strtoupper($this->isbn));
-        $new = preg_replace('/[^0-9X-]/', '', strtoupper($newIsbn));
-
-        if ($existing === $new) {
-            return false; // بدون تغییر
-        }
-
-        // تبدیل به آرایه و حذف تکراری‌ها
-        $existingIsbns = array_filter(explode(',', $this->isbn));
-        $newIsbns = array_filter(explode(',', $newIsbn));
-
-        $allIsbns = array_unique(array_merge($existingIsbns, $newIsbns));
-        $mergedIsbn = implode(', ', $allIsbns);
-
-        if ($mergedIsbn !== $this->isbn) {
-            $this->isbn = $mergedIsbn;
-            return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * بهبود توضیحات کتاب
-     */
-    public function improveDescription(string $newDescription): bool
-    {
-        if (empty($this->description)) {
-            $this->description = $newDescription;
-            return true;
-        }
-
-        $existingLength = strlen(trim($this->description));
-        $newLength = strlen(trim($newDescription));
-
-        // اگر توضیحات جدید 30% بیشتر باشد، از آن استفاده کن
-        if ($newLength > $existingLength * 1.3) {
-            $this->description = $newDescription;
-            return true;
-        }
-
-        // اگر توضیحات جدید کمی بیشتر باشد، بررسی تشابه
-        if ($newLength > $existingLength * 1.1 && $newLength <= $existingLength * 1.3) {
-            similar_text($this->description, $newDescription, $percent);
-            if ($percent < 80) { // اگر کمتر از 80% شباهت داشت، ادغام کن
-                $this->description = $this->description . "\n\n---\n\n" . $newDescription;
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * بروزرسانی فیلدهای خالی
-     */
-    public function fillEmptyFields(array $newData): array
-    {
-        $updated = [];
-        $fillableFields = ['publication_year', 'pages_count', 'file_size', 'language', 'format'];
-
-        foreach ($fillableFields as $field) {
-            if (empty($this->$field) && !empty($newData[$field])) {
-                $this->$field = $newData[$field];
-                $updated[] = $field;
-            }
-        }
-
-        return $updated;
-    }
-
-    /**
-     * ادغام نویسندگان جدید
-     */
-    public function mergeAuthors(string $newAuthorsString): array
-    {
-        $newAuthorNames = array_map('trim', explode(',', $newAuthorsString));
-        $existingAuthorNames = $this->authors()->pluck('name')->toArray();
-
-        $addedAuthors = [];
-
-        foreach ($newAuthorNames as $authorName) {
-            if (empty($authorName) || in_array($authorName, $existingAuthorNames)) {
-                continue;
-            }
-
-            // پیدا کردن یا ایجاد نویسنده
-            $author = Author::firstOrCreate(
-                ['name' => $authorName],
-                [
-                    'slug' => \Illuminate\Support\Str::slug($authorName . '_' . time()),
-                    'is_active' => true,
-                    'books_count' => 0
-                ]
-            );
-
-            // بررسی اینکه آیا رابطه قبلاً وجود دارد
-            $exists = \Illuminate\Support\Facades\DB::table('book_author')
-                ->where('book_id', $this->id)
-                ->where('author_id', $author->id)
-                ->exists();
-
-            if (!$exists) {
-                // اضافه کردن رابطه
-                \Illuminate\Support\Facades\DB::table('book_author')->insert([
-                    'book_id' => $this->id,
-                    'author_id' => $author->id,
-                    'created_at' => now(),
-                    'updated_at' => now()
-                ]);
-
-                $addedAuthors[] = $authorName;
-
-                Log::info("✅ نویسنده جدید '{$authorName}' به کتاب '{$this->title}' اضافه شد", [
-                    'book_id' => $this->id,
-                    'author_id' => $author->id,
-                    'author_name' => $authorName
-                ]);
-            }
-        }
-
-        return $addedAuthors;
-    }
-
-    /**
-     * دریافت منابع کتاب
-     */
-    public function getBookSources(): array
-    {
-        return $this->sources()->orderBy('discovered_at', 'desc')->get()->map(function ($source) {
-            return [
-                'source_name' => $source->source_name,
-                'source_id' => $source->source_id,
-                'discovered_at' => $source->discovered_at,
-            ];
-        })->toArray();
-    }
-
-    /**
-     * اضافه کردن منبع جدید
-     */
-    public function addSource(string $sourceName, string $sourceId): BookSource
-    {
-        return BookSource::recordBookSource($this->id, $sourceName, $sourceId);
-    }
-
-    /**
-     * آپدیت هوشمند کتاب با داده‌های جدید
-     */
-    public function smartUpdate(array $newData, array $options = []): array
-    {
-        $changes = [];
-        $needsUpdate = false;
-
-        // فعال/غیرفعال کردن انواع بروزرسانی
-        $fillMissingFields = $options['fill_missing_fields'] ?? true;
-        $updateDescriptions = $options['update_descriptions'] ?? true;
-        $mergeIsbns = $options['merge_isbns'] ?? true;
-        $mergeAuthors = $options['merge_authors'] ?? true;
-
-        // تکمیل فیلدهای خالی
-        if ($fillMissingFields) {
-            $filledFields = $this->fillEmptyFields($newData);
-            if (!empty($filledFields)) {
-                $changes['filled_fields'] = $filledFields;
-                $needsUpdate = true;
-            }
-        }
-
-        // ادغام ISBN
-        if ($mergeIsbns && !empty($newData['isbn'])) {
-            if ($this->mergeIsbn($newData['isbn'])) {
-                $changes['merged_isbn'] = true;
-                $needsUpdate = true;
-            }
-        }
-
-        // بهبود توضیحات
-        if ($updateDescriptions && !empty($newData['description'])) {
-            if ($this->improveDescription($newData['description'])) {
-                $changes['improved_description'] = true;
-                $needsUpdate = true;
-            }
-        }
-
-        // ادغام نویسندگان
-        if ($mergeAuthors && !empty($newData['author'])) {
-            $addedAuthors = $this->mergeAuthors($newData['author']);
-            if (!empty($addedAuthors)) {
-                $changes['added_authors'] = $addedAuthors;
-            }
-        }
-
-        // بروزرسانی هش‌ها
-        $hashData = array_filter([
-            'sha1' => $newData['sha1'] ?? null,
-            'sha256' => $newData['sha256'] ?? null,
-            'crc32' => $newData['crc32'] ?? null,
-            'ed2k_hash' => $newData['ed2k'] ?? null,
-            'btih' => $newData['btih'] ?? null,
-            'magnet_link' => $newData['magnet'] ?? null,
-        ]);
-
-        if (!empty($hashData)) {
-            if ($this->updateHashes($hashData)) {
-                $changes['updated_hashes'] = array_keys($hashData);
-            }
-        }
-
-        // ذخیره تغییرات
-        if ($needsUpdate) {
-            $this->save();
-        }
-
-        return [
-            'updated' => $needsUpdate,
-            'changes' => $changes,
-            'action' => $needsUpdate ? 'updated' : 'no_changes'
-        ];
-    }
-
-    /**
-     * دریافت آمار کامل کتاب
-     */
-    public function getCompleteStats(): array
-    {
-        return [
-            'basic_info' => [
-                'id' => $this->id,
-                'title' => $this->title,
-                'isbn' => $this->isbn,
-                'publication_year' => $this->publication_year,
-                'pages_count' => $this->pages_count,
-                'language' => $this->language,
-                'format' => $this->format,
-                'file_size' => $this->file_size,
-                'content_hash' => $this->content_hash,
-            ],
-            'relations' => [
-                'authors_count' => $this->authors()->count(),
-                'sources_count' => $this->sources()->count(),
-                'images_count' => $this->images()->count(),
-                'category' => $this->category?->name,
-                'publisher' => $this->publisher?->name,
-            ],
-            'hashes' => $this->getAllHashes(),
-            'sources' => $this->getBookSources(),
-            'created_at' => $this->created_at,
-            'updated_at' => $this->updated_at,
-        ];
-    }
-
-    /**
-     * جستجوی کتاب بر اساس هش
-     */
-    public static function findByHash(string $hash, string $hashType = 'md5'): ?self
-    {
-        if ($hashType === 'md5') {
-            return self::where('content_hash', $hash)->first();
-        }
-
-        return BookHash::findBookByHash($hash, $hashType);
-    }
-
-    /**
-     * بررسی تکراری بودن کتاب
-     */
-    public static function isDuplicate(array $bookData): ?self
-    {
-        // محاسبه هش
-        $hashData = [
-            'title' => $bookData['title'] ?? '',
-            'author' => $bookData['author'] ?? '',
-            'isbn' => $bookData['isbn'] ?? '',
-            'publication_year' => $bookData['publication_year'] ?? '',
-            'pages_count' => $bookData['pages_count'] ?? ''
-        ];
-
-        $normalizedData = array_map(function ($value) {
-            return strtolower(trim(preg_replace('/\s+/', ' ', $value)));
-        }, $hashData);
-
-        $contentHash = md5(json_encode($normalizedData, JSON_UNESCAPED_UNICODE));
-
-        return self::where('content_hash', $contentHash)->first();
+        $bookHash = BookHash::where('md5', $md5)->first();
+        return $bookHash ? $bookHash->book : null;
     }
 
     /**
      * ایجاد کتاب جدید با تمام روابط
      */
-    public static function createWithRelations(array $bookData, array $options = []): self
+    public static function createWithDetails(array $bookData, array $hashData = [], string $sourceName = null, string $sourceId = null): self
     {
-        return \Illuminate\Support\Facades\DB::transaction(function () use ($bookData, $options) {
-            // محاسبه هش
-            $contentHash = self::calculateContentHash($bookData);
-
+        return \Illuminate\Support\Facades\DB::transaction(function () use ($bookData, $hashData, $sourceName, $sourceId) {
             // ایجاد category و publisher
             $category = Category::firstOrCreate(
                 ['name' => $bookData['category'] ?? 'عمومی'],
@@ -539,51 +154,49 @@ class Book extends Model
                 'language' => $bookData['language'] ?? 'fa',
                 'format' => $bookData['format'] ?? 'pdf',
                 'file_size' => $bookData['file_size'] ?? null,
-                'content_hash' => $contentHash,
                 'category_id' => $category->id,
                 'publisher_id' => $publisher?->id,
                 'downloads_count' => 0,
                 'status' => 'active'
             ]);
 
-            // ایجاد هش‌ها
-            $hashData = array_filter([
-                'sha1' => $bookData['sha1'] ?? null,
-                'sha256' => $bookData['sha256'] ?? null,
-                'crc32' => $bookData['crc32'] ?? null,
-                'ed2k_hash' => $bookData['ed2k'] ?? null,
-                'btih' => $bookData['btih'] ?? null,
-                'magnet_link' => $bookData['magnet'] ?? null,
-            ]);
-
-            BookHash::createOrUpdateForBook($book, $hashData);
+            // ایجاد هش‌ها - اطمینان از وجود MD5
+            if (!empty($hashData['md5'])) {
+                BookHash::create([
+                    'book_id' => $book->id,
+                    'md5' => $hashData['md5'],
+                    'sha1' => $hashData['sha1'] ?? null,
+                    'sha256' => $hashData['sha256'] ?? null,
+                    'crc32' => $hashData['crc32'] ?? null,
+                    'ed2k_hash' => $hashData['ed2k'] ?? null,
+                    'btih' => $hashData['btih'] ?? null,
+                    'magnet_link' => $hashData['magnet'] ?? null,
+                ]);
+            }
 
             // اضافه کردن نویسندگان
             if (!empty($bookData['author'])) {
-                $book->mergeAuthors($bookData['author']);
+                $book->addAuthors($bookData['author']);
             }
 
             // اضافه کردن تصاویر
             if (!empty($bookData['image_url'])) {
-                BookImage::updateOrCreate(
-                    ['book_id' => $book->id],
-                    ['image_url' => $bookData['image_url']]
-                );
+                BookImage::create([
+                    'book_id' => $book->id,
+                    'image_url' => $bookData['image_url']
+                ]);
             }
 
             // اضافه کردن منبع
-            if (!empty($options['source_name']) && !empty($options['source_id'])) {
-                $book->addSource($options['source_name'], $options['source_id']);
+            if ($sourceName && $sourceId) {
+                BookSource::recordBookSource($book->id, $sourceName, $sourceId);
             }
 
-            Log::info("✨ کتاب جدید با تمام روابط ایجاد شد", [
+            Log::info("✨ کتاب جدید ایجاد شد", [
                 'book_id' => $book->id,
                 'title' => $book->title,
-                'content_hash' => $contentHash,
-                'authors_count' => $book->authors()->count(),
-                'has_hashes' => !empty($hashData),
-                'has_images' => !empty($bookData['image_url']),
-                'source' => $options['source_name'] ?? null,
+                'md5' => $hashData['md5'] ?? null,
+                'source' => $sourceName,
             ]);
 
             return $book;
@@ -591,51 +204,157 @@ class Book extends Model
     }
 
     /**
-     * محاسبه هش محتوا
+     * بروزرسانی هوشمند کتاب
      */
-    public static function calculateContentHash(array $data): string
+    public function smartUpdate(array $newData, array $options = []): array
     {
-        $hashData = [
-            'title' => $data['title'] ?? '',
-            'author' => $data['author'] ?? '',
-            'isbn' => $data['isbn'] ?? '',
-            'publication_year' => $data['publication_year'] ?? '',
-            'pages_count' => $data['pages_count'] ?? ''
+        $changes = [];
+        $needsUpdate = false;
+
+        // تکمیل فیلدهای خالی
+        if ($options['fill_missing_fields'] ?? true) {
+            $fillableFields = ['publication_year', 'pages_count', 'file_size', 'language', 'format'];
+            foreach ($fillableFields as $field) {
+                if (empty($this->$field) && !empty($newData[$field])) {
+                    $this->$field = $newData[$field];
+                    $changes['filled_fields'][] = $field;
+                    $needsUpdate = true;
+                }
+            }
+        }
+
+        // بهبود توضیحات
+        if (($options['update_descriptions'] ?? true) && !empty($newData['description'])) {
+            $existingLength = strlen(trim($this->description ?? ''));
+            $newLength = strlen(trim($newData['description']));
+
+            if ($existingLength == 0 || $newLength > $existingLength * 1.3) {
+                $this->description = $newData['description'];
+                $changes['updated_description'] = true;
+                $needsUpdate = true;
+            }
+        }
+
+        // ادغام ISBN
+        if (!empty($newData['isbn'])) {
+            $merged = $this->mergeIsbn($newData['isbn']);
+            if ($merged) {
+                $changes['merged_isbn'] = true;
+                $needsUpdate = true;
+            }
+        }
+
+        // ذخیره تغییرات
+        if ($needsUpdate) {
+            $this->save();
+        }
+
+        // ادغام نویسندگان
+        if (!empty($newData['author'])) {
+            $addedAuthors = $this->addAuthors($newData['author']);
+            if (!empty($addedAuthors)) {
+                $changes['added_authors'] = $addedAuthors;
+            }
+        }
+
+        // بروزرسانی هش‌ها
+        $this->updateHashes($newData);
+
+        return [
+            'updated' => $needsUpdate,
+            'changes' => $changes,
+            'action' => $needsUpdate || !empty($changes) ? 'updated' : 'no_changes'
         ];
+    }
 
-        $normalizedData = array_map(function ($value) {
-            return strtolower(trim(preg_replace('/\s+/', ' ', $value)));
-        }, $hashData);
+    private function mergeIsbn(string $newIsbn): bool
+    {
+        if (empty($this->isbn)) {
+            $this->isbn = $newIsbn;
+            return true;
+        }
 
-        return md5(json_encode($normalizedData, JSON_UNESCAPED_UNICODE));
+        $existing = array_filter(explode(',', $this->isbn));
+        $new = array_filter(explode(',', $newIsbn));
+        $merged = array_unique(array_merge($existing, $new));
+
+        $mergedIsbn = implode(', ', $merged);
+        if ($mergedIsbn !== $this->isbn) {
+            $this->isbn = $mergedIsbn;
+            return true;
+        }
+
+        return false;
+    }
+
+    private function addAuthors(string $authorsString): array
+    {
+        $authorNames = array_map('trim', explode(',', $authorsString));
+        $existingNames = $this->authors()->pluck('name')->toArray();
+        $addedAuthors = [];
+
+        foreach ($authorNames as $name) {
+            if (empty($name) || in_array($name, $existingNames)) continue;
+
+            $author = Author::firstOrCreate(
+                ['name' => $name],
+                [
+                    'slug' => \Illuminate\Support\Str::slug($name . '_' . time()),
+                    'is_active' => true
+                ]
+            );
+
+            if (!$this->authors()->where('author_id', $author->id)->exists()) {
+                $this->authors()->attach($author->id);
+                $addedAuthors[] = $name;
+            }
+        }
+
+        return $addedAuthors;
+    }
+
+    private function updateHashes(array $data): void
+    {
+        if (empty($this->hashes)) return;
+
+        $hashFields = ['sha1', 'sha256', 'crc32', 'ed2k', 'btih', 'magnet'];
+        $updates = [];
+
+        foreach ($hashFields as $field) {
+            $dbField = $field === 'ed2k' ? 'ed2k_hash' : ($field === 'magnet' ? 'magnet_link' : $field);
+
+            if (!empty($data[$field]) && empty($this->hashes->$dbField)) {
+                $updates[$dbField] = $data[$field];
+            }
+        }
+
+        if (!empty($updates)) {
+            $this->hashes->update($updates);
+        }
     }
 
     /**
-     * آمار عمومی کتاب‌ها
+     * محاسبه MD5 بر اساس اطلاعات کتاب
      */
-    public static function getGeneralStats(): array
+    public static function calculateContentMd5(array $data): string
     {
-        return [
-            'total_books' => self::count(),
-            'active_books' => self::where('status', 'active')->count(),
-            'books_with_isbn' => self::whereNotNull('isbn')->count(),
-            'books_with_description' => self::whereNotNull('description')->count(),
-            'books_with_images' => self::whereHas('images')->count(),
-            'books_with_hashes' => self::whereHas('bookHash')->count(),
-            'languages' => self::select('language')
-                ->groupBy('language')
-                ->selectRaw('language, COUNT(*) as count')
-                ->orderBy('count', 'desc')
-                ->get()
-                ->pluck('count', 'language')
-                ->toArray(),
-            'formats' => self::select('format')
-                ->groupBy('format')
-                ->selectRaw('format, COUNT(*) as count')
-                ->orderBy('count', 'desc')
-                ->get()
-                ->pluck('count', 'format')
-                ->toArray(),
-        ];
+        $content = implode('|', [
+            strtolower(trim($data['title'] ?? '')),
+            strtolower(trim($data['author'] ?? '')),
+            trim($data['isbn'] ?? ''),
+            $data['publication_year'] ?? '',
+            $data['pages_count'] ?? ''
+        ]);
+
+        return md5($content);
+    }
+
+    /**
+     * پیدا کردن کتاب بر اساس محتوا
+     */
+    public static function findByContent(array $data): ?self
+    {
+        $md5 = self::calculateContentMd5($data);
+        return self::findByMd5($md5);
     }
 }
