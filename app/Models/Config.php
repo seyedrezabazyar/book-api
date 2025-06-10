@@ -266,7 +266,13 @@ class Config extends Model
             'language' => 'زبان',
             'format' => 'فرمت فایل',
             'file_size' => 'حجم فایل',
-            'image_url' => 'تصویر کتاب'
+            'image_url' => 'تصویر کتاب',
+            'sha1' => 'SHA1 Hash',
+            'sha256' => 'SHA256 Hash',
+            'crc32' => 'CRC32 Hash',
+            'ed2k' => 'ED2K Hash',
+            'btih' => 'BitTorrent Info Hash',
+            'magnet' => 'Magnet Link'
         ];
     }
 

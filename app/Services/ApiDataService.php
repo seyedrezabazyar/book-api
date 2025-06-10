@@ -5,17 +5,23 @@ namespace App\Services;
 use App\Models\Config;
 use App\Models\Book;
 use App\Models\ExecutionLog;
+use App\Models\ScrapingFailure;
 use App\Services\BookProcessor;
 use App\Services\ApiClient;
 use Illuminate\Support\Facades\Log;
 
 class ApiDataService
 {
-    public function __construct(
-        private Config $config,
-        private ApiClient $apiClient,
-        private BookProcessor $bookProcessor
-    ) {}
+    private Config $config;
+    private ApiClient $apiClient;
+    private BookProcessor $bookProcessor;
+
+    public function __construct(Config $config)
+    {
+        $this->config = $config;
+        $this->apiClient = new ApiClient($config);
+        $this->bookProcessor = app(BookProcessor::class);
+    }
 
     public function processSourceId(int $sourceId, ExecutionLog $executionLog): array
     {
@@ -47,13 +53,13 @@ class ApiDataService
             $data = $response->json();
             if (empty($data)) {
                 $this->logFailure($sourceId, 'پاسخ API خالی است');
-                return $this->buildResult($sourceId, 'failed', ['total' => 1, 'success' => 0, 'failed' => 1, 'duplicate' => 0]);
+                return $this->buildResult($sourceId, 'no_book_found', ['total' => 1, 'success' => 0, 'failed' => 1, 'duplicate' => 0]);
             }
 
             $bookData = $this->extractBookData($data, $sourceId);
             if (empty($bookData) || empty($bookData['title'])) {
                 $this->logFailure($sourceId, 'ساختار کتاب در پاسخ API یافت نشد');
-                return $this->buildResult($sourceId, 'failed', ['total' => 1, 'success' => 0, 'failed' => 1, 'duplicate' => 0]);
+                return $this->buildResult($sourceId, 'no_book_found', ['total' => 1, 'success' => 0, 'failed' => 1, 'duplicate' => 0]);
             }
 
             // پردازش کتاب
@@ -138,18 +144,17 @@ class ApiDataService
 
     private function logFailure(int $sourceId, string $reason): void
     {
-        ScrapingFailure::create([
-            'config_id' => $this->config->id,
-            'url' => $this->config->buildApiUrl($sourceId),
-            'error_message' => "Source ID {$sourceId}: {$reason}",
-            'error_details' => [
+        ScrapingFailure::logFailure(
+            $this->config->id,
+            $this->config->buildApiUrl($sourceId),
+            "Source ID {$sourceId}: {$reason}",
+            [
                 'source_id' => $sourceId,
                 'source_name' => $this->config->source_name,
                 'reason' => $reason
             ],
-            'http_status' => 404,
-            'retry_count' => 0,
-            'last_attempt_at' => now()
-        ]);
+            null,
+            404
+        );
     }
 }

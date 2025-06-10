@@ -17,8 +17,7 @@ class BookProcessor
         private DataValidator $dataValidator
     ) {}
 
-    public function processBook(array $bookData, int $sourceId, Config $config, ExecutionLog $executionLog): array
-    {
+    public function processBook(array $bookData, int $sourceId, Config $config, ExecutionLog $executionLog): array    {
         try {
             // استخراج فیلدها
             $extractedData = $this->fieldExtractor->extractFields($bookData, $config);

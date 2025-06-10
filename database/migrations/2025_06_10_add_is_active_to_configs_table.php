@@ -11,9 +11,11 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('configs', function (Blueprint $table) {
-            $table->boolean('is_active')->default(true)->after('is_running')->index();
-        });
+        if (!Schema::hasColumn('configs', 'is_active')) {
+            Schema::table('configs', function (Blueprint $table) {
+                $table->boolean('is_active')->default(true)->after('is_running')->index();
+            });
+        }
     }
 
     /**
@@ -21,8 +23,10 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('configs', function (Blueprint $table) {
-            $table->dropColumn('is_active');
-        });
+        if (Schema::hasColumn('configs', 'is_active')) {
+            Schema::table('configs', function (Blueprint $table) {
+                $table->dropColumn('is_active');
+            });
+        }
     }
 };

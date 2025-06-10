@@ -63,7 +63,9 @@
     <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
         <div class="bg-white p-6 rounded shadow">
             <div class="flex items-center">
-                <div class="text-3xl font-bold text-blue-600">{{ $systemStats['total_configs'] ?? 0 }}</div>
+                <div class="text-3xl font-bold text-blue-600">
+                    {{ $systemStats['total_configs'] ?? $systemStats['configs']['total'] ?? 0 }}
+                </div>
                 <div class="ml-auto text-2xl">🧠</div>
             </div>
             <div class="text-sm text-gray-600 mt-1">کانفیگ‌های هوشمند</div>
@@ -71,7 +73,9 @@
 
         <div class="bg-white p-6 rounded shadow">
             <div class="flex items-center">
-                <div class="text-3xl font-bold text-green-600">{{ $systemStats['running_configs'] ?? 0 }}</div>
+                <div class="text-3xl font-bold text-green-600">
+                    {{ $systemStats['running_configs'] ?? $systemStats['configs']['running'] ?? 0 }}
+                </div>
                 <div class="ml-auto text-2xl">🔄</div>
             </div>
             <div class="text-sm text-gray-600 mt-1">در حال اجرا</div>
@@ -79,7 +83,9 @@
 
         <div class="bg-white p-6 rounded shadow">
             <div class="flex items-center">
-                <div class="text-3xl font-bold text-purple-600">{{ $systemStats['total_books'] ?? 0 }}</div>
+                <div class="text-3xl font-bold text-purple-600">
+                    {{ $systemStats['total_books'] ?? $systemStats['books']['actual_in_db'] ?? 0 }}
+                </div>
                 <div class="ml-auto text-2xl">📚</div>
             </div>
             <div class="text-sm text-gray-600 mt-1">کل کتاب‌ها</div>
@@ -87,15 +93,7 @@
 
         <div class="bg-white p-6 rounded shadow">
             <div class="flex items-center">
-                @php
-                    $totalSourceTypes = 0;
-                    try {
-                        $totalSourceTypes = \App\Models\BookSource::distinct('source_name')->count();
-                    } catch (\Exception $e) {
-                        // در صورت عدم وجود جدول یا خطا
-                    }
-                @endphp
-                <div class="text-3xl font-bold text-orange-600">{{ $totalSourceTypes }}</div>
+                <div class="text-3xl font-bold text-orange-600">{{ $systemStats['total_sources'] ?? 0 }}</div>
                 <div class="ml-auto text-2xl">🌐</div>
             </div>
             <div class="text-sm text-gray-600 mt-1">منابع مختلف</div>

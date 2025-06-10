@@ -4,9 +4,11 @@ namespace App\Http\Controllers;
 
 use App\Models\Config;
 use App\Models\ExecutionLog;
+use App\Models\Book;
 use App\Services\ConfigService;
 use App\Services\StatsService;
 use App\Services\ExecutionService;
+use App\Http\Requests\ConfigRequest;
 use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\JsonResponse;
@@ -26,6 +28,18 @@ class ConfigController extends Controller
         $systemStats = $this->statsService->getSystemStats();
         $workerStatus = $this->executionService->getWorkerStatus();
 
+        // اضافه کردن آمار اضافی برای نمایش
+        $systemStats['total_configs'] = $systemStats['total_configs'] ?? Config::count();
+        $systemStats['running_configs'] = $systemStats['running_configs'] ?? Config::where('is_running', true)->count();
+        $systemStats['total_books'] = $systemStats['total_books'] ?? Book::count();
+
+        // شمارش منابع مختلف
+        try {
+            $systemStats['total_sources'] = \App\Models\BookSource::distinct('source_name')->count();
+        } catch (\Exception $e) {
+            $systemStats['total_sources'] = 0;
+        }
+
         return view('configs.index', compact('configs', 'systemStats', 'workerStatus'));
     }
 
@@ -41,9 +55,9 @@ class ConfigController extends Controller
         return view('configs.create', compact('bookFields'));
     }
 
-    public function store(Request $request): RedirectResponse
+    public function store(ConfigRequest $request): RedirectResponse
     {
-        $config = $this->configService->create($request->validated());
+        $config = $this->configService->create($request->getProcessedData());
 
         return redirect()->route('configs.index')
             ->with('success', 'کانفیگ با موفقیت ایجاد شد!');
@@ -55,9 +69,9 @@ class ConfigController extends Controller
         return view('configs.edit', compact('config', 'bookFields'));
     }
 
-    public function update(Request $request, Config $config): RedirectResponse
+    public function update(ConfigRequest $request, Config $config): RedirectResponse
     {
-        $this->configService->update($config, $request->validated());
+        $this->configService->update($config, $request->getProcessedData());
 
         return redirect()->route('configs.index')
             ->with('success', 'کانفیگ با موفقیت به‌روزرسانی شد!');
