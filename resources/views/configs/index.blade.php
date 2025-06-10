@@ -63,7 +63,7 @@
     <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
         <div class="bg-white p-6 rounded shadow">
             <div class="flex items-center">
-                <div class="text-3xl font-bold text-blue-600">{{ $stats['total_configs'] }}</div>
+                <div class="text-3xl font-bold text-blue-600">{{ $systemStats['total_configs'] ?? 0 }}</div>
                 <div class="ml-auto text-2xl">🧠</div>
             </div>
             <div class="text-sm text-gray-600 mt-1">کانفیگ‌های هوشمند</div>
@@ -71,7 +71,7 @@
 
         <div class="bg-white p-6 rounded shadow">
             <div class="flex items-center">
-                <div class="text-3xl font-bold text-green-600">{{ $stats['running_configs'] }}</div>
+                <div class="text-3xl font-bold text-green-600">{{ $systemStats['running_configs'] ?? 0 }}</div>
                 <div class="ml-auto text-2xl">🔄</div>
             </div>
             <div class="text-sm text-gray-600 mt-1">در حال اجرا</div>
@@ -79,7 +79,7 @@
 
         <div class="bg-white p-6 rounded shadow">
             <div class="flex items-center">
-                <div class="text-3xl font-bold text-purple-600">{{ $stats['total_books'] }}</div>
+                <div class="text-3xl font-bold text-purple-600">{{ $systemStats['total_books'] ?? 0 }}</div>
                 <div class="ml-auto text-2xl">📚</div>
             </div>
             <div class="text-sm text-gray-600 mt-1">کل کتاب‌ها</div>
@@ -88,8 +88,12 @@
         <div class="bg-white p-6 rounded shadow">
             <div class="flex items-center">
                 @php
-                    // تغییر از source_type به source_name
-                    $totalSourceTypes = \App\Models\BookSource::distinct('source_name')->count();
+                    $totalSourceTypes = 0;
+                    try {
+                        $totalSourceTypes = \App\Models\BookSource::distinct('source_name')->count();
+                    } catch (\Exception $e) {
+                        // در صورت عدم وجود جدول یا خطا
+                    }
                 @endphp
                 <div class="text-3xl font-bold text-orange-600">{{ $totalSourceTypes }}</div>
                 <div class="ml-auto text-2xl">🌐</div>
@@ -146,24 +150,29 @@
                         @endif
                     </td>
 
-                    <!-- آمار هوشمند بهبود یافته -->
+                    <!-- آمار هوشمند -->
                     <td class="p-4">
                         <div class="text-sm space-y-2">
                             <!-- آمار اصلی -->
                             <div class="grid grid-cols-2 gap-4 text-xs">
                                 <div>
                                     <span class="text-gray-600">📈 کل پردازش:</span>
-                                    <span class="font-bold text-blue-600">{{ number_format($config->total_processed) }}</span>
+                                    <span class="font-bold text-blue-600">{{ number_format($config->total_processed ?? 0) }}</span>
                                 </div>
                                 <div>
                                     <span class="text-gray-600">✅ جدید:</span>
-                                    <span class="font-bold text-green-600">{{ number_format($config->total_success) }}</span>
+                                    <span class="font-bold text-green-600">{{ number_format($config->total_success ?? 0) }}</span>
                                 </div>
 
                                 {{-- آمار بهبود یافته --}}
                                 @php
-                                    $totalEnhanced = \App\Models\ExecutionLog::where('config_id', $config->id)
-                                        ->sum('total_enhanced');
+                                    $totalEnhanced = 0;
+                                    try {
+                                        $totalEnhanced = \App\Models\ExecutionLog::where('config_id', $config->id)
+                                            ->sum('total_enhanced') ?? 0;
+                                    } catch (\Exception $e) {
+                                        // در صورت عدم وجود جدول
+                                    }
                                 @endphp
                                 @if($totalEnhanced > 0)
                                     <div>
@@ -174,15 +183,7 @@
 
                                 <div>
                                     <span class="text-gray-600">❌ خطا:</span>
-                                    <span class="font-bold text-red-600">{{ number_format($config->total_failed) }}</span>
-                                </div>
-                                <div>
-                                    <span class="text-gray-600">🔄 تکراری:</span>
-                                    @php
-                                        $duplicateCount = \App\Models\ExecutionLog::where('config_id', $config->id)
-                                            ->sum('total_duplicate');
-                                    @endphp
-                                    <span class="font-bold text-orange-600">{{ number_format($duplicateCount) }}</span>
+                                    <span class="font-bold text-red-600">{{ number_format($config->total_failed ?? 0) }}</span>
                                 </div>
                             </div>
 
@@ -191,7 +192,7 @@
                                 <div class="grid grid-cols-2 gap-4 text-xs">
                                     <div>
                                         <span class="text-gray-600">🆔 آخرین ID:</span>
-                                        <span class="font-bold text-purple-600">{{ number_format($config->last_source_id) }}</span>
+                                        <span class="font-bold text-purple-600">{{ number_format($config->last_source_id ?? 0) }}</span>
                                     </div>
                                     <div>
                                         <span class="text-gray-600">📍 بعدی:</span>
@@ -200,10 +201,10 @@
                                 </div>
                             </div>
 
-                            <!-- نرخ موفقیت واقعی (شامل بهبود یافته‌ها) -->
-                            @if ($config->total_processed > 0)
+                            <!-- نرخ موفقیت واقعی -->
+                            @if (($config->total_processed ?? 0) > 0)
                                 @php
-                                    $realSuccessCount = $config->total_success + $totalEnhanced;
+                                    $realSuccessCount = ($config->total_success ?? 0) + $totalEnhanced;
                                     $realSuccessRate = round(($realSuccessCount / $config->total_processed) * 100, 1);
                                     $enhancementRate = $totalEnhanced > 0 ? round(($totalEnhanced / $config->total_processed) * 100, 1) : 0;
                                 @endphp
@@ -222,14 +223,21 @@
                                         {{ number_format($realSuccessCount) }} کتاب تأثیرگذار از {{ number_format($config->total_processed) }}
                                     </div>
                                 </div>
+                            @else
+                                <div class="pt-2 border-t border-gray-200">
+                                    <div class="text-xs text-gray-500">
+                                        🆕 آماده برای اولین اجرا
+                                    </div>
+                                </div>
                             @endif
 
                             <!-- آمار منبع -->
                             @php
+                                $sourceStats = 0;
                                 try {
                                     $sourceStats = \App\Models\BookSource::where('source_name', $config->source_name)->count();
                                 } catch (\Exception $e) {
-                                    $sourceStats = 0;
+                                    // در صورت عدم وجود جدول
                                 }
                             @endphp
                             @if ($sourceStats > 0)
@@ -241,60 +249,6 @@
                             @endif
                         </div>
                     </td>
-
-                    {{-- در همان فایل، بخش Bottom Info Panel را بهبود دهید --}}
-
-                    <!-- Bottom Info Panel بهبود یافته -->
-                    <div class="mt-6 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg p-4">
-                        <h3 class="text-blue-800 font-medium mb-2">🧠 ویژگی‌های سیستم کرال هوشمند پیشرفته:</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm text-blue-700">
-                            <div class="space-y-1">
-                                <div class="font-medium">⚡ تشخیص خودکار نقطه شروع:</div>
-                                <ul class="text-xs space-y-1 text-blue-600">
-                                    <li>• اگر قبلاً از منبع کتاب نگرفته: از ID 1</li>
-                                    <li>• اگر قبلاً گرفته: از آخرین ID + 1</li>
-                                    <li>• اگر start_page مشخص شده: از همان ID</li>
-                                </ul>
-                            </div>
-                            <div class="space-y-1">
-                                <div class="font-medium">🔧 بروزرسانی هوشمند کتاب‌ها:</div>
-                                <ul class="text-xs space-y-1 text-blue-600">
-                                    <li>• تکمیل فیلدهای خالی (سال، صفحات، زبان)</li>
-                                    <li>• بهبود توضیحات ناقص</li>
-                                    <li>• ادغام ISBN و نویسندگان جدید</li>
-                                    <li>• بروزرسانی هش‌ها و تصاویر</li>
-                                </ul>
-                            </div>
-                            <div class="space-y-1">
-                                <div class="font-medium">📊 ردیابی دقیق تغییرات:</div>
-                                <ul class="text-xs space-y-1 text-blue-600">
-                                    <li>• تشخیص کتاب‌های جدید vs بهبود یافته</li>
-                                    <li>• آمار تفصیلی هر نوع تغییر</li>
-                                    <li>• محاسبه نرخ تأثیر واقعی</li>
-                                    <li>• لاگ کامل تمام بهبودها</li>
-                                </ul>
-                            </div>
-                        </div>
-
-                        {{-- نمایش آمار کلی سیستم --}}
-                        @php
-                            $systemStats = [
-                                'total_books_enhanced' => \App\Models\ExecutionLog::sum('total_enhanced'),
-                                'total_successful_runs' => \App\Models\ExecutionLog::where('status', 'completed')->count(),
-                                'total_books_created' => \App\Models\ExecutionLog::sum('total_success'),
-                            ];
-                        @endphp
-
-                        @if($systemStats['total_books_enhanced'] > 0)
-                            <div class="mt-3 pt-3 border-t border-blue-200">
-                                <div class="text-xs text-blue-600 space-x-4 space-x-reverse text-center">
-                                    <span>🎯 <strong>{{ number_format($systemStats['total_books_created']) }}</strong> کتاب جدید ایجاد شده</span>
-                                    <span>🔧 <strong>{{ number_format($systemStats['total_books_enhanced']) }}</strong> کتاب بهبود یافته</span>
-                                    <span>✅ <strong>{{ number_format($systemStats['total_successful_runs']) }}</strong> اجرای موفق</span>
-                                </div>
-                            </div>
-                        @endif
-                    </div>
 
                     <!-- وضعیت اجرا -->
                     <td class="p-4">
@@ -311,16 +265,21 @@
                             </div>
 
                             @php
-                                $latestLog = $config->executionLogs()->latest()->first();
+                                $latestLog = null;
+                                try {
+                                    $latestLog = $config->executionLogs()->latest()->first();
+                                } catch (\Exception $e) {
+                                    // در صورت عدم وجود relation
+                                }
                             @endphp
                             @if ($latestLog)
                                 <div class="text-xs text-gray-400 mt-1">
-                                    @if ($latestLog->total_processed > 0)
-                                        🎯 {{ number_format($latestLog->total_success) }}/{{ number_format($latestLog->total_processed) }} موفق
+                                    @if (($latestLog->total_processed ?? 0) > 0)
+                                        🎯 {{ number_format($latestLog->total_success ?? 0) }}/{{ number_format($latestLog->total_processed) }} موفق
                                     @else
                                         📊 بدون آمار
                                     @endif
-                                    @if ($latestLog->execution_time > 0)
+                                    @if (($latestLog->execution_time ?? 0) > 0)
                                         <br>⏱️ {{ round($latestLog->execution_time) }}s
                                     @endif
                                 </div>
@@ -335,7 +294,7 @@
                         <!-- تخمین زمان اجرای بعدی -->
                         @if (!$config->is_running)
                             @php
-                                $nextRunEstimate = $config->max_pages * $config->delay_seconds;
+                                $nextRunEstimate = ($config->max_pages ?? 1000) * ($config->delay_seconds ?? 3);
                                 $estimateText = '';
                                 if ($nextRunEstimate > 3600) {
                                     $estimateText = '≈' . round($nextRunEstimate / 3600, 1) . 'ساعت';
@@ -414,13 +373,6 @@
         </table>
     </div>
 
-    <!-- Pagination -->
-    @if ($configs instanceof \Illuminate\Pagination\LengthAwarePaginator && $configs->hasPages())
-        <div class="mt-6">
-            {{ $configs->links() }}
-        </div>
-    @endif
-
     <!-- Bottom Info Panel -->
     <div class="mt-6 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg p-4">
         <h3 class="text-blue-800 font-medium mb-2">🧠 ویژگی‌های سیستم کرال هوشمند:</h3>
@@ -452,6 +404,36 @@
                 </ul>
             </div>
         </div>
+
+        {{-- نمایش آمار کلی سیستم فقط در صورت وجود داده --}}
+        @php
+            $totalBooksEnhanced = 0;
+            $totalSuccessfulRuns = 0;
+            $totalBooksCreated = 0;
+            try {
+                $totalBooksEnhanced = \App\Models\ExecutionLog::sum('total_enhanced') ?? 0;
+                $totalSuccessfulRuns = \App\Models\ExecutionLog::where('status', 'completed')->count();
+                $totalBooksCreated = \App\Models\ExecutionLog::sum('total_success') ?? 0;
+            } catch (\Exception $e) {
+                // در صورت عدم وجود جدول
+            }
+        @endphp
+
+        @if($totalBooksEnhanced > 0 || $totalBooksCreated > 0 || $totalSuccessfulRuns > 0)
+            <div class="mt-3 pt-3 border-t border-blue-200">
+                <div class="text-xs text-blue-600 space-x-4 space-x-reverse text-center">
+                    @if($totalBooksCreated > 0)
+                        <span>🎯 <strong>{{ number_format($totalBooksCreated) }}</strong> کتاب جدید ایجاد شده</span>
+                    @endif
+                    @if($totalBooksEnhanced > 0)
+                        <span>🔧 <strong>{{ number_format($totalBooksEnhanced) }}</strong> کتاب بهبود یافته</span>
+                    @endif
+                    @if($totalSuccessfulRuns > 0)
+                        <span>✅ <strong>{{ number_format($totalSuccessfulRuns) }}</strong> اجرای موفق</span>
+                    @endif
+                </div>
+            </div>
+        @endif
     </div>
 
     <script>

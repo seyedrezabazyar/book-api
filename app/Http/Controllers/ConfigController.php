@@ -20,44 +20,79 @@ class ConfigController extends Controller
     /**
      * نمایش صفحه اصلی کانفیگ‌ها با آمار پیشرفته
      */
-    public function index()
+    public function index(): View
     {
         try {
+            // دریافت کانفیگ‌ها
             $configs = Config::with(['executionLogs' => function ($query) {
                 $query->latest()->limit(3);
             }])->get();
 
+            // دریافت وضعیت Worker
+            $workerStatus = $this->getWorkerStatusSafe();
+
             // محاسبه آمار کلی سیستم
             $systemStats = $this->calculateSystemStats();
 
-            return view('configs.index', compact('configs', 'systemStats'));
+            return view('configs.index', compact('configs', 'systemStats', 'workerStatus'));
         } catch (\Exception $e) {
             Log::error("خطا در نمایش کانفیگ‌ها", ['error' => $e->getMessage()]);
 
             return view('configs.index', [
                 'configs' => collect([]),
-                'systemStats' => $this->getEmptySystemStats()
+                'systemStats' => $this->getEmptySystemStats(),
+                'workerStatus' => $this->getEmptyWorkerStatus()
             ])->with('error', 'خطا در بارگذاری کانفیگ‌ها');
         }
     }
 
     /**
+     * دریافت وضعیت Worker به صورت ایمن
+     */
+    private function getWorkerStatusSafe(): array
+    {
+        try {
+            $workerStatus = QueueManagerService::getWorkerStatus();
+            $queueStats = QueueManagerService::getQueueStats();
+
+            return [
+                'is_running' => $workerStatus['is_running'] ?? false,
+                'pid' => $workerStatus['pid'] ?? null,
+                'message' => $workerStatus['message'] ?? 'نامشخص',
+                'pending_jobs' => $queueStats['pending_jobs'] ?? 0,
+                'failed_jobs' => $queueStats['failed_jobs'] ?? 0
+            ];
+        } catch (\Exception $e) {
+            Log::error("خطا در دریافت وضعیت Worker", ['error' => $e->getMessage()]);
+            return $this->getEmptyWorkerStatus();
+        }
+    }
+
+    /**
+     * وضعیت خالی Worker
+     */
+    private function getEmptyWorkerStatus(): array
+    {
+        return [
+            'is_running' => false,
+            'pid' => null,
+            'message' => 'خطا در بررسی وضعیت',
+            'pending_jobs' => 0,
+            'failed_jobs' => 0
+        ];
+    }
+
+    /**
      * نمایش لاگ‌های کانفیگ با آمار تفصیلی
      */
-    public function logs(Config $config)
+    public function logs(Config $config): View
     {
         try {
             $logs = ExecutionLog::where('config_id', $config->id)
                 ->orderBy('created_at', 'desc')
                 ->paginate(20);
 
-            // آمار تفصیلی کانفیگ
-            $configStats = $config->getDisplayStats();
-
-            // آمار عملکرد
-            $performanceStats = $config->getPerformanceSummary();
-
-            return view('configs.logs', compact('config', 'logs', 'configStats', 'performanceStats'));
+            return view('configs.logs', compact('config', 'logs'));
         } catch (\Exception $e) {
             Log::error("خطا در نمایش لاگ‌های کانفیگ", [
                 'config_id' => $config->id,
@@ -70,31 +105,17 @@ class ConfigController extends Controller
     }
 
     /**
-     * نمایش جزئیات کانفیگ با آمار کامل
+     * نمایش جزئیات کانفیگ
      */
-    public function show(Config $config)
+    public function show(Config $config): View
     {
         try {
-            $config->load(['executionLogs' => function ($query) {
-                $query->latest()->limit(10);
-            }]);
+            $recentLogs = $config->executionLogs()
+                ->latest()
+                ->limit(5)
+                ->get();
 
-            $configStats = $config->getDisplayStats();
-            $performanceStats = $config->getPerformanceSummary();
-
-            // آمار اجراهای اخیر
-            $recentExecutions = $this->getRecentExecutionStats($config);
-
-            // آمار روندهای زمانی
-            $timelineStats = $this->getTimelineStats($config);
-
-            return view('configs.show', compact(
-                'config',
-                'configStats',
-                'performanceStats',
-                'recentExecutions',
-                'timelineStats'
-            ));
+            return view('configs.show', compact('config', 'recentLogs'));
         } catch (\Exception $e) {
             Log::error("خطا در نمایش جزئیات کانفیگ", [
                 'config_id' => $config->id,
@@ -109,7 +130,7 @@ class ConfigController extends Controller
     /**
      * دریافت آمار سیستم
      */
-    public function getStats()
+    public function getStats(): JsonResponse
     {
         try {
             $systemStats = $this->calculateSystemStats();
@@ -130,37 +151,7 @@ class ConfigController extends Controller
     }
 
     /**
-     * دریافت آمار تفصیلی کانفیگ (AJAX)
-     */
-    public function getConfigStats(Config $config)
-    {
-        try {
-            $stats = $config->getDisplayStats();
-            $performance = $config->getPerformanceSummary();
-
-            return response()->json([
-                'success' => true,
-                'data' => [
-                    'basic_stats' => $stats,
-                    'performance' => $performance,
-                    'last_updated' => now()->toISOString()
-                ]
-            ]);
-        } catch (\Exception $e) {
-            Log::error("خطا در دریافت آمار کانفیگ", [
-                'config_id' => $config->id,
-                'error' => $e->getMessage()
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'خطا در دریافت آمار کانفیگ'
-            ], 500);
-        }
-    }
-
-    /**
-     * محاسبه آمار کلی سیستم
+     * محاسبه آمار کلی سیستم - ساده‌شده برای شروع پروژه
      */
     private function calculateSystemStats(): array
     {
@@ -175,10 +166,10 @@ class ConfigController extends Controller
             $runningExecutions = ExecutionLog::where('status', 'running')->count();
 
             // آمار کتاب‌ها
-            $totalBooksProcessed = ExecutionLog::sum('total_processed');
-            $totalBooksCreated = ExecutionLog::sum('total_success');
-            $totalBooksEnhanced = ExecutionLog::sum('total_enhanced');
-            $totalBooksFailed = ExecutionLog::sum('total_failed');
+            $totalBooksProcessed = ExecutionLog::sum('total_processed') ?: 0;
+            $totalBooksCreated = ExecutionLog::sum('total_success') ?: 0;
+            $totalBooksEnhanced = ExecutionLog::sum('total_enhanced') ?: 0;
+            $totalBooksFailed = ExecutionLog::sum('total_failed') ?: 0;
 
             // آمار امروز
             $todayStats = ExecutionLog::whereDate('created_at', today())
@@ -204,6 +195,10 @@ class ConfigController extends Controller
             $actualBooksInDb = \App\Models\Book::count();
 
             return [
+                'total_configs' => $totalConfigs,
+                'active_configs' => $activeConfigs,
+                'running_configs' => $runningExecutions,
+                'total_books' => $actualBooksInDb,
                 'configs' => [
                     'total' => $totalConfigs,
                     'active' => $activeConfigs,
@@ -249,6 +244,10 @@ class ConfigController extends Controller
     private function getEmptySystemStats(): array
     {
         return [
+            'total_configs' => 0,
+            'active_configs' => 0,
+            'running_configs' => 0,
+            'total_books' => 0,
             'configs' => ['total' => 0, 'active' => 0, 'inactive' => 0],
             'executions' => ['total' => 0, 'successful' => 0, 'running' => 0, 'success_rate' => 0],
             'books' => [
@@ -259,101 +258,6 @@ class ConfigController extends Controller
             'today' => ['processed' => 0, 'created' => 0, 'enhanced' => 0, 'failed' => 0, 'impactful' => 0],
             'performance' => ['avg_books_per_execution' => 0, 'enhancement_rate' => 0, 'creation_rate' => 0]
         ];
-    }
-
-    /**
-     * آمار اجراهای اخیر
-     */
-    private function getRecentExecutionStats(Config $config): array
-    {
-        try {
-            $recentLogs = $config->executionLogs()
-                ->where('created_at', '>=', now()->subDays(30))
-                ->orderBy('created_at', 'desc')
-                ->limit(10)
-                ->get();
-
-            $trends = [];
-            foreach ($recentLogs as $log) {
-                $impactful = $log->total_success + $log->total_enhanced;
-                $trends[] = [
-                    'date' => $log->created_at->format('Y-m-d'),
-                    'processed' => $log->total_processed,
-                    'created' => $log->total_success,
-                    'enhanced' => $log->total_enhanced,
-                    'impactful' => $impactful,
-                    'impact_rate' => $log->total_processed > 0 ? round(($impactful / $log->total_processed) * 100, 1) : 0
-                ];
-            }
-
-            return [
-                'recent_executions' => $recentLogs->toArray(),
-                'trends' => $trends,
-                'avg_impact_rate' => count($trends) > 0 ? round(collect($trends)->avg('impact_rate'), 1) : 0
-            ];
-        } catch (\Exception $e) {
-            Log::error("خطا در محاسبه آمار اجراهای اخیر", ['error' => $e->getMessage()]);
-            return ['recent_executions' => [], 'trends' => [], 'avg_impact_rate' => 0];
-        }
-    }
-
-    /**
-     * آمار روندهای زمانی
-     */
-    private function getTimelineStats(Config $config): array
-    {
-        try {
-            // آمار هفتگی آخرین 4 هفته
-            $weeklyStats = ExecutionLog::where('config_id', $config->id)
-                ->where('created_at', '>=', now()->subWeeks(4))
-                ->whereIn('status', ['completed', 'stopped'])
-                ->selectRaw('
-                WEEK(created_at) as week,
-                SUM(total_processed) as weekly_processed,
-                SUM(total_success) as weekly_created,
-                SUM(total_enhanced) as weekly_enhanced,
-                SUM(total_failed) as weekly_failed
-            ')
-                ->groupBy('week')
-                ->orderBy('week')
-                ->get();
-
-            $timeline = [];
-            foreach ($weeklyStats as $week) {
-                $weeklyImpactful = $week->weekly_created + $week->weekly_enhanced;
-                $timeline[] = [
-                    'period' => "هفته {$week->week}",
-                    'processed' => $week->weekly_processed,
-                    'impactful' => $weeklyImpactful,
-                    'impact_rate' => $week->weekly_processed > 0 ? round(($weeklyImpactful / $week->weekly_processed) * 100, 1) : 0
-                ];
-            }
-
-            return [
-                'weekly_timeline' => $timeline,
-                'improvement_trend' => $this->calculateImprovementTrend($timeline)
-            ];
-        } catch (\Exception $e) {
-            Log::error("خطا در محاسبه آمار روندهای زمانی", ['error' => $e->getMessage()]);
-            return ['weekly_timeline' => [], 'improvement_trend' => 'stable'];
-        }
-    }
-
-    /**
-     * محاسبه روند بهبود
-     */
-    private function calculateImprovementTrend(array $timeline): string
-    {
-        if (count($timeline) < 2) return 'insufficient_data';
-
-        $recentRate = end($timeline)['impact_rate'] ?? 0;
-        $previousRate = $timeline[count($timeline) - 2]['impact_rate'] ?? 0;
-
-        $difference = $recentRate - $previousRate;
-
-        if ($difference > 5) return 'improving';
-        if ($difference < -5) return 'declining';
-        return 'stable';
     }
 
     /**
@@ -391,7 +295,8 @@ class ConfigController extends Controller
                 'total_processed' => 0,
                 'total_success' => 0,
                 'total_failed' => 0,
-                'is_running' => false
+                'is_running' => false,
+                'is_active' => true
             ]);
 
             return redirect()->route('configs.index')
@@ -433,10 +338,6 @@ class ConfigController extends Controller
             $configData = $this->buildConfigData($request);
             $sourceName = $this->extractSourceName($validated['base_url']);
 
-            // اگر start_page تغییر کرده، کانفیگ رو برای شروع مجدد آماده کن
-            $oldStartPage = $config->start_page;
-            $newStartPage = $request->input('start_page');
-
             $config->update([
                 ...$validated,
                 'source_name' => $sourceName,
@@ -446,12 +347,6 @@ class ConfigController extends Controller
                 'update_descriptions' => $request->boolean('update_descriptions', $config->update_descriptions),
                 'config_data' => $configData
             ]);
-
-            // اگر start_page تغییر کرده و مقدار جدید کمتر از آخرین ID است، پیام نمایش بده
-            if ($newStartPage && $newStartPage != $oldStartPage && $newStartPage <= $config->last_source_id) {
-                $message = 'کانفیگ بروزرسانی شد! 🔄 اجرای بعدی از ID ' . $newStartPage . ' شروع می‌شود و رکوردهای قبلی در صورت نیاز بروزرسانی خواهند شد.';
-                return redirect()->route('configs.index')->with('success', $message);
-            }
 
             return redirect()->route('configs.index')
                 ->with('success', 'کانفیگ با موفقیت به‌روزرسانی شد!');
@@ -703,7 +598,7 @@ class ConfigController extends Controller
     private function extractSourceName(string $url): string
     {
         $host = parse_url($url, PHP_URL_HOST);
-        $sourceName = preg_replace('/^www\./', '', $host);
+        $sourceName = preg_replace('/^www\./', '', $host ?? '');
         $sourceName = str_replace('.', '_', $sourceName);
         return $sourceName ?: 'unknown_source';
     }
