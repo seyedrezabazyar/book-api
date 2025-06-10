@@ -142,7 +142,7 @@ class ApiDataService
     }
 
     /**
-     * پردازش کتاب
+     * پردازش کتاب با منطق بهبود یافته
      */
     private function processBook(array $extractedData, int $sourceId, ExecutionLog $executionLog): array
     {
@@ -160,11 +160,14 @@ class ApiDataService
             $existingBook = Book::findByMd5($md5);
 
             if ($existingBook) {
-                // کتاب موجود - بروزرسانی
-                $result = $this->updateExistingBook($existingBook, $extractedData, $sourceId, $executionLog);
+                // کتاب موجود - بروزرسانی هوشمند
+                $result = $this->updateExistingBookAdvanced($existingBook, $extractedData, $sourceId, $executionLog);
                 $this->recordSource($existingBook->id, $sourceId);
 
-                return $this->buildResult($sourceId, $result['action'], ['total' => 1, 'success' => 0, 'failed' => 0, 'duplicate' => 1], $existingBook);
+                // تعیین آمار بر اساس نوع تغییرات
+                $stats = $this->determineStatsFromUpdate($result);
+
+                return $this->buildResult($sourceId, $result['action'], $stats, $existingBook);
             } else {
                 // کتاب جدید
                 $book = $this->createNewBook($extractedData, $md5, $sourceId, $executionLog);
@@ -190,6 +193,387 @@ class ApiDataService
     }
 
     /**
+     * بروزرسانی پیشرفته کتاب موجود
+     */
+    private function updateExistingBookAdvanced(Book $book, array $newData, int $sourceId, ExecutionLog $executionLog): array
+    {
+        Log::info("🔄 شروع بروزرسانی پیشرفته کتاب", [
+            'book_id' => $book->id,
+            'source_id' => $sourceId,
+            'title' => $book->title,
+            'new_data_keys' => array_keys($newData)
+        ]);
+
+        // تنظیمات بروزرسانی
+        $options = [
+            'fill_missing_fields' => $this->config->fill_missing_fields ?? true,
+            'update_descriptions' => $this->config->update_descriptions ?? true,
+            'smart_merge' => true, // حالت ادغام هوشمند
+            'source_priority' => $this->getSourcePriority($this->config->source_name)
+        ];
+
+        // اجرای بروزرسانی هوشمند
+        $result = $book->smartUpdate($newData, $options);
+
+        // تحلیل نتایج برای لاگ
+        $changesSummary = $this->analyzeChanges($result['changes']);
+
+        $executionLog->addLogEntry("🔄 بروزرسانی پیشرفته انجام شد", [
+            'source_id' => $sourceId,
+            'book_id' => $book->id,
+            'title' => $book->title,
+            'action' => $result['action'],
+            'changes_summary' => $changesSummary,
+            'total_changes' => count($result['changes']),
+            'updated_database' => $result['updated']
+        ]);
+
+        // ثبت آمار تفصیلی در صورت وجود تغییرات مهم
+        if ($result['action'] !== 'no_changes') {
+            $this->logDetailedChanges($book, $result['changes'], $sourceId, $executionLog);
+        }
+
+        Log::info("✅ بروزرسانی پیشرفته تمام شد", [
+            'book_id' => $book->id,
+            'source_id' => $sourceId,
+            'action' => $result['action'],
+            'database_updated' => $result['updated']
+        ]);
+
+        return $result;
+    }
+
+    /**
+     * تعیین اولویت منبع (برای تصمیم‌گیری در ادغام)
+     */
+    private function getSourcePriority(string $sourceName): int
+    {
+        // اولویت منابع مختلف (عدد بالاتر = اولویت بیشتر)
+        $priorities = [
+            'libgen_rs' => 9,
+            'zlib' => 8,
+            'anna_archive' => 7,
+            'gutenberg' => 6,
+            'archive_org' => 5,
+            'default' => 4
+        ];
+
+        return $priorities[$sourceName] ?? $priorities['default'];
+    }
+
+    /**
+     * تحلیل تغییرات برای لاگ
+     */
+    private function analyzeChanges(array $changes): array
+    {
+        $summary = [];
+
+        if (isset($changes['filled_fields'])) {
+            $summary['filled_fields'] = count($changes['filled_fields']);
+            $summary['filled_field_names'] = array_column($changes['filled_fields'], 'field');
+        }
+
+        if (isset($changes['updated_description'])) {
+            $summary['description_updated'] = $changes['updated_description']['reason'] ?? true;
+            $summary['description_improvement'] = [
+                'old_length' => $changes['updated_description']['old_length'] ?? 0,
+                'new_length' => $changes['updated_description']['new_length'] ?? 0
+            ];
+        }
+
+        if (isset($changes['merged_isbn'])) {
+            $summary['isbn_merged'] = true;
+            $summary['added_isbns'] = $changes['merged_isbn']['added_isbns'] ?? [];
+        }
+
+        if (isset($changes['added_authors'])) {
+            $summary['authors_added'] = count($changes['added_authors']['added'] ?? []);
+            $summary['new_authors'] = $changes['added_authors']['added'] ?? [];
+        }
+
+        if (isset($changes['updated_hashes'])) {
+            $summary['hashes_added'] = $changes['updated_hashes']['added_hashes'] ?? [];
+        }
+
+        if (isset($changes['updated_images'])) {
+            $summary['images_added'] = true;
+        }
+
+        return $summary;
+    }
+
+    /**
+     * ثبت تغییرات تفصیلی در لاگ
+     */
+    private function logDetailedChanges(Book $book, array $changes, int $sourceId, ExecutionLog $executionLog): void
+    {
+        foreach ($changes as $changeType => $changeData) {
+            switch ($changeType) {
+                case 'filled_fields':
+                    foreach ($changeData as $fieldChange) {
+                        $executionLog->addLogEntry("🔧 فیلد خالی تکمیل شد", [
+                            'source_id' => $sourceId,
+                            'book_id' => $book->id,
+                            'field' => $fieldChange['field'],
+                            'old_value' => $fieldChange['old_value'],
+                            'new_value' => $fieldChange['new_value']
+                        ]);
+                    }
+                    break;
+
+                case 'updated_description':
+                    $executionLog->addLogEntry("📝 توضیحات بهبود یافت", [
+                        'source_id' => $sourceId,
+                        'book_id' => $book->id,
+                        'reason' => $changeData['reason'],
+                        'length_improvement' => [
+                            'from' => $changeData['old_length'],
+                            'to' => $changeData['new_length']
+                        ]
+                    ]);
+                    break;
+
+                case 'merged_isbn':
+                    $executionLog->addLogEntry("📚 ISBN جدید ادغام شد", [
+                        'source_id' => $sourceId,
+                        'book_id' => $book->id,
+                        'action' => $changeData['action'],
+                        'added_isbns' => $changeData['added_isbns'] ?? []
+                    ]);
+                    break;
+
+                case 'added_authors':
+                    if (!empty($changeData['added'])) {
+                        $executionLog->addLogEntry("👤 نویسندگان جدید اضافه شدند", [
+                            'source_id' => $sourceId,
+                            'book_id' => $book->id,
+                            'new_authors' => $changeData['added'],
+                            'total_authors' => $changeData['total_authors']
+                        ]);
+                    }
+                    break;
+
+                case 'updated_hashes':
+                    $executionLog->addLogEntry("🔐 هش‌های جدید اضافه شدند", [
+                        'source_id' => $sourceId,
+                        'book_id' => $book->id,
+                        'added_hashes' => $changeData['added_hashes']
+                    ]);
+                    break;
+            }
+        }
+    }
+
+    /**
+     * تعیین آمار بر اساس نوع بروزرسانی
+     */
+    private function determineStatsFromUpdate(array $updateResult): array
+    {
+        $action = $updateResult['action'];
+        $hasChanges = !empty($updateResult['changes']);
+
+        switch ($action) {
+            case 'enhanced':
+            case 'enriched':
+            case 'merged':
+                // کتاب بهبود یافته - به عنوان موفقیت محاسبه می‌شود
+                return [
+                    'total' => 1,
+                    'success' => 1,
+                    'failed' => 0,
+                    'duplicate' => 0,
+                    'enhanced' => 1 // آمار جدید برای کتاب‌های بهبود یافته
+                ];
+
+            case 'updated':
+                // بروزرسانی معمولی
+                return [
+                    'total' => 1,
+                    'success' => 0,
+                    'failed' => 0,
+                    'duplicate' => 1,
+                    'updated' => 1
+                ];
+
+            case 'no_changes':
+            default:
+                // هیچ تغییری نداده
+                return [
+                    'total' => 1,
+                    'success' => 0,
+                    'failed' => 0,
+                    'duplicate' => 1
+                ];
+        }
+    }
+
+    /**
+     * ایجاد کتاب جدید با بهبودهای اضافی
+     */
+    private function createNewBook(array $data, string $md5, int $sourceId, ExecutionLog $executionLog): Book
+    {
+        Log::info("✨ ایجاد کتاب جدید با داده‌های کامل", [
+            'source_id' => $sourceId,
+            'title' => $data['title'] ?? 'نامشخص',
+            'md5' => $md5
+        ]);
+
+        // آماده‌سازی داده‌های هش
+        $hashData = [
+            'md5' => $md5,
+            'sha1' => $data['sha1'] ?? null,
+            'sha256' => $data['sha256'] ?? null,
+            'crc32' => $data['crc32'] ?? null,
+            'ed2k' => $data['ed2k'] ?? null,
+            'btih' => $data['btih'] ?? null,
+            'magnet' => $data['magnet'] ?? null,
+        ];
+
+        // تمیز کردن و بهبود داده‌ها قبل از ایجاد
+        $cleanedData = $this->cleanAndEnhanceBookData($data);
+
+        $book = Book::createWithDetails(
+            $cleanedData,
+            $hashData,
+            $this->config->source_name,
+            (string)$sourceId
+        );
+
+        $executionLog->addLogEntry("✨ کتاب جدید با موفقیت ایجاد شد", [
+            'source_id' => $sourceId,
+            'book_id' => $book->id,
+            'title' => $book->title,
+            'md5' => $md5,
+            'has_description' => !empty($book->description),
+            'authors_count' => $book->authors()->count(),
+            'has_image' => $book->images()->exists()
+        ]);
+
+        return $book;
+    }
+
+    /**
+     * تمیز کردن و بهبود داده‌های کتاب
+     */
+    private function cleanAndEnhanceBookData(array $data): array
+    {
+        // تمیز کردن عنوان
+        if (isset($data['title'])) {
+            $data['title'] = $this->cleanTitle($data['title']);
+        }
+
+        // بهبود توضیحات
+        if (isset($data['description'])) {
+            $data['description'] = $this->enhanceDescription($data['description']);
+        }
+
+        // اعتبارسنجی سال انتشار
+        if (isset($data['publication_year'])) {
+            $data['publication_year'] = $this->validatePublicationYear($data['publication_year']);
+        }
+
+        // اعتبارسنجی تعداد صفحات
+        if (isset($data['pages_count'])) {
+            $data['pages_count'] = $this->validatePagesCount($data['pages_count']);
+        }
+
+        // تمیز کردن ISBN
+        if (isset($data['isbn'])) {
+            $data['isbn'] = $this->cleanIsbn($data['isbn']);
+        }
+
+        return $data;
+    }
+
+    /**
+     * تمیز کردن عنوان
+     */
+    private function cleanTitle(string $title): string
+    {
+        // حذف کاراکترهای اضافی
+        $title = trim($title);
+        $title = preg_replace('/\s+/', ' ', $title); // حذف فاصله‌های اضافی
+        $title = preg_replace('/[^\p{L}\p{N}\s\-\.\(\)\[\]]/u', '', $title); // حفظ حروف، اعداد و نشانه‌های مفید
+
+        return $title;
+    }
+
+    /**
+     * بهبود توضیحات
+     */
+    private function enhanceDescription(string $description): string
+    {
+        $description = trim($description);
+
+        // حذف HTML tags
+        $description = strip_tags($description);
+
+        // تصحیح فاصله‌های اضافی
+        $description = preg_replace('/\s+/', ' ', $description);
+
+        // حذف خطوط خالی اضافی
+        $description = preg_replace('/\n\s*\n/', "\n\n", $description);
+
+        return $description;
+    }
+
+    /**
+     * اعتبارسنجی سال انتشار
+     */
+    private function validatePublicationYear($year): ?int
+    {
+        if (!is_numeric($year)) {
+            return null;
+        }
+
+        $year = (int) $year;
+        $currentYear = (int) date('Y');
+
+        // سال باید بین 1000 تا سال جاری + 2 باشد
+        if ($year >= 1000 && $year <= $currentYear + 2) {
+            return $year;
+        }
+
+        return null;
+    }
+
+    /**
+     * اعتبارسنجی تعداد صفحات
+     */
+    private function validatePagesCount($pages): ?int
+    {
+        if (!is_numeric($pages)) {
+            return null;
+        }
+
+        $pages = (int) $pages;
+
+        // تعداد صفحات باید منطقی باشد
+        if ($pages >= 1 && $pages <= 50000) {
+            return $pages;
+        }
+
+        return null;
+    }
+
+    /**
+     * تمیز کردن ISBN
+     */
+    private function cleanIsbn(string $isbn): string
+    {
+        // حذف کاراکترهای غیرضروری و نگهداری خط تیره
+        $isbn = preg_replace('/[^\d\-X]/i', '', $isbn);
+
+        // اعتبارسنجی ساده طول ISBN
+        $cleanIsbn = preg_replace('/[^\dX]/i', '', $isbn);
+        if (strlen($cleanIsbn) === 10 || strlen($cleanIsbn) === 13) {
+            return $isbn;
+        }
+
+        return '';
+    }
+
+    /**
      * بروزرسانی کتاب موجود
      */
     private function updateExistingBook(Book $book, array $newData, int $sourceId, ExecutionLog $executionLog): array
@@ -210,39 +594,6 @@ class ApiDataService
         ]);
 
         return $result;
-    }
-
-    /**
-     * ایجاد کتاب جدید
-     */
-    private function createNewBook(array $data, string $md5, int $sourceId, ExecutionLog $executionLog): Book
-    {
-        // آماده‌سازی داده‌های هش
-        $hashData = [
-            'md5' => $md5,
-            'sha1' => $data['sha1'] ?? null,
-            'sha256' => $data['sha256'] ?? null,
-            'crc32' => $data['crc32'] ?? null,
-            'ed2k' => $data['ed2k'] ?? null,
-            'btih' => $data['btih'] ?? null,
-            'magnet' => $data['magnet'] ?? null,
-        ];
-
-        $book = Book::createWithDetails(
-            $data,
-            $hashData,
-            $this->config->source_name,
-            (string)$sourceId
-        );
-
-        $executionLog->addLogEntry("✨ کتاب جدید ایجاد شد", [
-            'source_id' => $sourceId,
-            'book_id' => $book->id,
-            'title' => $book->title,
-            'md5' => $md5
-        ]);
-
-        return $book;
     }
 
     /**

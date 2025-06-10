@@ -18,34 +18,342 @@ use Illuminate\Validation\Rule;
 class ConfigController extends Controller
 {
     /**
-     * نمایش لیست کانفیگ‌ها
+     * نمایش صفحه اصلی کانفیگ‌ها با آمار پیشرفته
      */
-    public function index(Request $request)
+    public function index()
     {
-        $configs = Config::with(['executionLogs' => function ($query) {
-            $query->latest()->limit(1);
-        }])
-            ->when($request->search, function ($query, $search) {
-                $query->where('name', 'like', "%{$search}%")
-                    ->orWhere('base_url', 'like', "%{$search}%");
-            })
-            ->orderBy('created_at', 'desc')
-            ->paginate(15);
+        try {
+            $configs = Config::with(['executionLogs' => function ($query) {
+                $query->latest()->limit(3);
+            }])->get();
 
-        $stats = [
-            'total_configs' => Config::count(),
-            'running_configs' => Config::where('is_running', true)->count(),
-            'total_books' => \App\Models\Book::count(),
+            // محاسبه آمار کلی سیستم
+            $systemStats = $this->calculateSystemStats();
+
+            return view('configs.index', compact('configs', 'systemStats'));
+        } catch (\Exception $e) {
+            Log::error("خطا در نمایش کانفیگ‌ها", ['error' => $e->getMessage()]);
+
+            return view('configs.index', [
+                'configs' => collect([]),
+                'systemStats' => $this->getEmptySystemStats()
+            ])->with('error', 'خطا در بارگذاری کانفیگ‌ها');
+        }
+    }
+
+    /**
+     * نمایش لاگ‌های کانفیگ با آمار تفصیلی
+     */
+    public function logs(Config $config)
+    {
+        try {
+            $logs = ExecutionLog::where('config_id', $config->id)
+                ->orderBy('created_at', 'desc')
+                ->paginate(20);
+
+            // آمار تفصیلی کانفیگ
+            $configStats = $config->getDisplayStats();
+
+            // آمار عملکرد
+            $performanceStats = $config->getPerformanceSummary();
+
+            return view('configs.logs', compact('config', 'logs', 'configStats', 'performanceStats'));
+        } catch (\Exception $e) {
+            Log::error("خطا در نمایش لاگ‌های کانفیگ", [
+                'config_id' => $config->id,
+                'error' => $e->getMessage()
+            ]);
+
+            return redirect()->route('configs.index')
+                ->with('error', 'خطا در بارگذاری لاگ‌ها');
+        }
+    }
+
+    /**
+     * نمایش جزئیات کانفیگ با آمار کامل
+     */
+    public function show(Config $config)
+    {
+        try {
+            $config->load(['executionLogs' => function ($query) {
+                $query->latest()->limit(10);
+            }]);
+
+            $configStats = $config->getDisplayStats();
+            $performanceStats = $config->getPerformanceSummary();
+
+            // آمار اجراهای اخیر
+            $recentExecutions = $this->getRecentExecutionStats($config);
+
+            // آمار روندهای زمانی
+            $timelineStats = $this->getTimelineStats($config);
+
+            return view('configs.show', compact(
+                'config',
+                'configStats',
+                'performanceStats',
+                'recentExecutions',
+                'timelineStats'
+            ));
+        } catch (\Exception $e) {
+            Log::error("خطا در نمایش جزئیات کانفیگ", [
+                'config_id' => $config->id,
+                'error' => $e->getMessage()
+            ]);
+
+            return redirect()->route('configs.index')
+                ->with('error', 'خطا در بارگذاری جزئیات کانفیگ');
+        }
+    }
+
+    /**
+     * دریافت آمار سیستم
+     */
+    public function getStats()
+    {
+        try {
+            $systemStats = $this->calculateSystemStats();
+
+            return response()->json([
+                'success' => true,
+                'data' => $systemStats
+            ]);
+        } catch (\Exception $e) {
+            Log::error("خطا در دریافت آمار سیستم", ['error' => $e->getMessage()]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'خطا در دریافت آمار',
+                'data' => $this->getEmptySystemStats()
+            ], 500);
+        }
+    }
+
+    /**
+     * دریافت آمار تفصیلی کانفیگ (AJAX)
+     */
+    public function getConfigStats(Config $config)
+    {
+        try {
+            $stats = $config->getDisplayStats();
+            $performance = $config->getPerformanceSummary();
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'basic_stats' => $stats,
+                    'performance' => $performance,
+                    'last_updated' => now()->toISOString()
+                ]
+            ]);
+        } catch (\Exception $e) {
+            Log::error("خطا در دریافت آمار کانفیگ", [
+                'config_id' => $config->id,
+                'error' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'خطا در دریافت آمار کانفیگ'
+            ], 500);
+        }
+    }
+
+    /**
+     * محاسبه آمار کلی سیستم
+     */
+    private function calculateSystemStats(): array
+    {
+        try {
+            // آمار کلی
+            $totalConfigs = Config::count();
+            $activeConfigs = Config::where('is_active', true)->count();
+
+            // آمار اجرا
+            $totalExecutions = ExecutionLog::count();
+            $successfulExecutions = ExecutionLog::where('status', 'completed')->count();
+            $runningExecutions = ExecutionLog::where('status', 'running')->count();
+
+            // آمار کتاب‌ها
+            $totalBooksProcessed = ExecutionLog::sum('total_processed');
+            $totalBooksCreated = ExecutionLog::sum('total_success');
+            $totalBooksEnhanced = ExecutionLog::sum('total_enhanced');
+            $totalBooksFailed = ExecutionLog::sum('total_failed');
+
+            // آمار امروز
+            $todayStats = ExecutionLog::whereDate('created_at', today())
+                ->selectRaw('
+                SUM(total_processed) as today_processed,
+                SUM(total_success) as today_success,
+                SUM(total_enhanced) as today_enhanced,
+                SUM(total_failed) as today_failed
+            ')
+                ->first();
+
+            // نرخ‌های محاسبه شده
+            $totalImpactfulBooks = $totalBooksCreated + $totalBooksEnhanced;
+            $overallSuccessRate = $totalBooksProcessed > 0
+                ? round(($totalImpactfulBooks / $totalBooksProcessed) * 100, 2)
+                : 0;
+
+            $executionSuccessRate = $totalExecutions > 0
+                ? round(($successfulExecutions / $totalExecutions) * 100, 2)
+                : 0;
+
+            // آمار کتاب‌های واقعی در دیتابیس
+            $actualBooksInDb = \App\Models\Book::count();
+
+            return [
+                'configs' => [
+                    'total' => $totalConfigs,
+                    'active' => $activeConfigs,
+                    'inactive' => $totalConfigs - $activeConfigs
+                ],
+                'executions' => [
+                    'total' => $totalExecutions,
+                    'successful' => $successfulExecutions,
+                    'running' => $runningExecutions,
+                    'success_rate' => $executionSuccessRate
+                ],
+                'books' => [
+                    'total_processed' => $totalBooksProcessed,
+                    'total_created' => $totalBooksCreated,
+                    'total_enhanced' => $totalBooksEnhanced,
+                    'total_failed' => $totalBooksFailed,
+                    'total_impactful' => $totalImpactfulBooks,
+                    'actual_in_db' => $actualBooksInDb,
+                    'overall_impact_rate' => $overallSuccessRate
+                ],
+                'today' => [
+                    'processed' => $todayStats->today_processed ?? 0,
+                    'created' => $todayStats->today_success ?? 0,
+                    'enhanced' => $todayStats->today_enhanced ?? 0,
+                    'failed' => $todayStats->today_failed ?? 0,
+                    'impactful' => ($todayStats->today_success ?? 0) + ($todayStats->today_enhanced ?? 0)
+                ],
+                'performance' => [
+                    'avg_books_per_execution' => $totalExecutions > 0 ? round($totalBooksProcessed / $totalExecutions, 1) : 0,
+                    'enhancement_rate' => $totalBooksProcessed > 0 ? round(($totalBooksEnhanced / $totalBooksProcessed) * 100, 2) : 0,
+                    'creation_rate' => $totalBooksProcessed > 0 ? round(($totalBooksCreated / $totalBooksProcessed) * 100, 2) : 0,
+                ]
+            ];
+        } catch (\Exception $e) {
+            Log::error("خطا در محاسبه آمار سیستم", ['error' => $e->getMessage()]);
+            return $this->getEmptySystemStats();
+        }
+    }
+
+    /**
+     * آمار خالی در صورت خطا
+     */
+    private function getEmptySystemStats(): array
+    {
+        return [
+            'configs' => ['total' => 0, 'active' => 0, 'inactive' => 0],
+            'executions' => ['total' => 0, 'successful' => 0, 'running' => 0, 'success_rate' => 0],
+            'books' => [
+                'total_processed' => 0, 'total_created' => 0, 'total_enhanced' => 0,
+                'total_failed' => 0, 'total_impactful' => 0, 'actual_in_db' => 0,
+                'overall_impact_rate' => 0
+            ],
+            'today' => ['processed' => 0, 'created' => 0, 'enhanced' => 0, 'failed' => 0, 'impactful' => 0],
+            'performance' => ['avg_books_per_execution' => 0, 'enhancement_rate' => 0, 'creation_rate' => 0]
         ];
+    }
 
-        $workerStatus = QueueManagerService::getWorkerStatus();
-        $queueStats = QueueManagerService::getQueueStats();
-        $workerStatus = array_merge($workerStatus, [
-            'pending_jobs' => $queueStats['pending_jobs'],
-            'failed_jobs' => $queueStats['failed_jobs']
-        ]);
+    /**
+     * آمار اجراهای اخیر
+     */
+    private function getRecentExecutionStats(Config $config): array
+    {
+        try {
+            $recentLogs = $config->executionLogs()
+                ->where('created_at', '>=', now()->subDays(30))
+                ->orderBy('created_at', 'desc')
+                ->limit(10)
+                ->get();
 
-        return view('configs.index', compact('configs', 'stats', 'workerStatus'));
+            $trends = [];
+            foreach ($recentLogs as $log) {
+                $impactful = $log->total_success + $log->total_enhanced;
+                $trends[] = [
+                    'date' => $log->created_at->format('Y-m-d'),
+                    'processed' => $log->total_processed,
+                    'created' => $log->total_success,
+                    'enhanced' => $log->total_enhanced,
+                    'impactful' => $impactful,
+                    'impact_rate' => $log->total_processed > 0 ? round(($impactful / $log->total_processed) * 100, 1) : 0
+                ];
+            }
+
+            return [
+                'recent_executions' => $recentLogs->toArray(),
+                'trends' => $trends,
+                'avg_impact_rate' => count($trends) > 0 ? round(collect($trends)->avg('impact_rate'), 1) : 0
+            ];
+        } catch (\Exception $e) {
+            Log::error("خطا در محاسبه آمار اجراهای اخیر", ['error' => $e->getMessage()]);
+            return ['recent_executions' => [], 'trends' => [], 'avg_impact_rate' => 0];
+        }
+    }
+
+    /**
+     * آمار روندهای زمانی
+     */
+    private function getTimelineStats(Config $config): array
+    {
+        try {
+            // آمار هفتگی آخرین 4 هفته
+            $weeklyStats = ExecutionLog::where('config_id', $config->id)
+                ->where('created_at', '>=', now()->subWeeks(4))
+                ->whereIn('status', ['completed', 'stopped'])
+                ->selectRaw('
+                WEEK(created_at) as week,
+                SUM(total_processed) as weekly_processed,
+                SUM(total_success) as weekly_created,
+                SUM(total_enhanced) as weekly_enhanced,
+                SUM(total_failed) as weekly_failed
+            ')
+                ->groupBy('week')
+                ->orderBy('week')
+                ->get();
+
+            $timeline = [];
+            foreach ($weeklyStats as $week) {
+                $weeklyImpactful = $week->weekly_created + $week->weekly_enhanced;
+                $timeline[] = [
+                    'period' => "هفته {$week->week}",
+                    'processed' => $week->weekly_processed,
+                    'impactful' => $weeklyImpactful,
+                    'impact_rate' => $week->weekly_processed > 0 ? round(($weeklyImpactful / $week->weekly_processed) * 100, 1) : 0
+                ];
+            }
+
+            return [
+                'weekly_timeline' => $timeline,
+                'improvement_trend' => $this->calculateImprovementTrend($timeline)
+            ];
+        } catch (\Exception $e) {
+            Log::error("خطا در محاسبه آمار روندهای زمانی", ['error' => $e->getMessage()]);
+            return ['weekly_timeline' => [], 'improvement_trend' => 'stable'];
+        }
+    }
+
+    /**
+     * محاسبه روند بهبود
+     */
+    private function calculateImprovementTrend(array $timeline): string
+    {
+        if (count($timeline) < 2) return 'insufficient_data';
+
+        $recentRate = end($timeline)['impact_rate'] ?? 0;
+        $previousRate = $timeline[count($timeline) - 2]['impact_rate'] ?? 0;
+
+        $difference = $recentRate - $previousRate;
+
+        if ($difference > 5) return 'improving';
+        if ($difference < -5) return 'declining';
+        return 'stable';
     }
 
     /**
@@ -98,21 +406,6 @@ class ConfigController extends Controller
                 ->with('error', 'خطا در ایجاد کانفیگ: ' . $e->getMessage())
                 ->withInput();
         }
-    }
-
-    /**
-     * نمایش جزئیات کانفیگ
-     */
-    public function show(Config $config): View
-    {
-        $recentLogs = ExecutionLog::where('config_id', $config->id)
-            ->latest()
-            ->limit(5)
-            ->get();
-
-        $stats = $config->getDisplayStats();
-
-        return view('configs.show', compact('config', 'recentLogs', 'stats'));
     }
 
     /**
@@ -309,23 +602,6 @@ class ConfigController extends Controller
                 'message' => 'خطا در متوقف کردن اجرا: ' . $e->getMessage()
             ], 500);
         }
-    }
-
-    /**
-     * نمایش لاگ‌ها
-     */
-    public function logs(Config $config): View
-    {
-        $status = request('status');
-        $query = ExecutionLog::where('config_id', $config->id);
-
-        if ($status && in_array($status, ['running', 'completed', 'failed', 'stopped'])) {
-            $query->where('status', $status);
-        }
-
-        $logs = $query->latest()->paginate(20);
-
-        return view('configs.logs', compact('config', 'logs', 'status'));
     }
 
     /**

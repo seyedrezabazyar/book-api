@@ -146,7 +146,7 @@
                         @endif
                     </td>
 
-                    <!-- آمار هوشمند -->
+                    <!-- آمار هوشمند بهبود یافته -->
                     <td class="p-4">
                         <div class="text-sm space-y-2">
                             <!-- آمار اصلی -->
@@ -156,9 +156,22 @@
                                     <span class="font-bold text-blue-600">{{ number_format($config->total_processed) }}</span>
                                 </div>
                                 <div>
-                                    <span class="text-gray-600">✅ موفق:</span>
+                                    <span class="text-gray-600">✅ جدید:</span>
                                     <span class="font-bold text-green-600">{{ number_format($config->total_success) }}</span>
                                 </div>
+
+                                {{-- آمار بهبود یافته --}}
+                                @php
+                                    $totalEnhanced = \App\Models\ExecutionLog::where('config_id', $config->id)
+                                        ->sum('total_enhanced');
+                                @endphp
+                                @if($totalEnhanced > 0)
+                                    <div>
+                                        <span class="text-gray-600">🔧 بهبود:</span>
+                                        <span class="font-bold text-purple-600">{{ number_format($totalEnhanced) }}</span>
+                                    </div>
+                                @endif
+
                                 <div>
                                     <span class="text-gray-600">❌ خطا:</span>
                                     <span class="font-bold text-red-600">{{ number_format($config->total_failed) }}</span>
@@ -187,15 +200,26 @@
                                 </div>
                             </div>
 
-                            <!-- نرخ موفقیت -->
+                            <!-- نرخ موفقیت واقعی (شامل بهبود یافته‌ها) -->
                             @if ($config->total_processed > 0)
                                 @php
-                                    $successRate = round(($config->total_success / $config->total_processed) * 100, 1);
+                                    $realSuccessCount = $config->total_success + $totalEnhanced;
+                                    $realSuccessRate = round(($realSuccessCount / $config->total_processed) * 100, 1);
+                                    $enhancementRate = $totalEnhanced > 0 ? round(($totalEnhanced / $config->total_processed) * 100, 1) : 0;
                                 @endphp
                                 <div class="pt-2 border-t border-gray-200">
-                                    <div class="text-xs text-gray-600 mb-1">نرخ موفقیت: {{ $successRate }}%</div>
+                                    <div class="text-xs text-gray-600 mb-1">
+                                        نرخ تأثیر: {{ $realSuccessRate }}%
+                                        @if($enhancementRate > 0)
+                                            ({{ $enhancementRate }}% بهبود)
+                                        @endif
+                                    </div>
                                     <div class="w-full bg-gray-200 rounded-full h-1.5">
-                                        <div class="bg-green-600 h-1.5 rounded-full" style="width: {{ $successRate }}%"></div>
+                                        <div class="bg-gradient-to-r from-green-600 to-purple-600 h-1.5 rounded-full"
+                                             style="width: {{ $realSuccessRate }}%"></div>
+                                    </div>
+                                    <div class="text-xs text-gray-500 mt-1">
+                                        {{ number_format($realSuccessCount) }} کتاب تأثیرگذار از {{ number_format($config->total_processed) }}
                                     </div>
                                 </div>
                             @endif
@@ -217,6 +241,60 @@
                             @endif
                         </div>
                     </td>
+
+                    {{-- در همان فایل، بخش Bottom Info Panel را بهبود دهید --}}
+
+                    <!-- Bottom Info Panel بهبود یافته -->
+                    <div class="mt-6 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg p-4">
+                        <h3 class="text-blue-800 font-medium mb-2">🧠 ویژگی‌های سیستم کرال هوشمند پیشرفته:</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm text-blue-700">
+                            <div class="space-y-1">
+                                <div class="font-medium">⚡ تشخیص خودکار نقطه شروع:</div>
+                                <ul class="text-xs space-y-1 text-blue-600">
+                                    <li>• اگر قبلاً از منبع کتاب نگرفته: از ID 1</li>
+                                    <li>• اگر قبلاً گرفته: از آخرین ID + 1</li>
+                                    <li>• اگر start_page مشخص شده: از همان ID</li>
+                                </ul>
+                            </div>
+                            <div class="space-y-1">
+                                <div class="font-medium">🔧 بروزرسانی هوشمند کتاب‌ها:</div>
+                                <ul class="text-xs space-y-1 text-blue-600">
+                                    <li>• تکمیل فیلدهای خالی (سال، صفحات، زبان)</li>
+                                    <li>• بهبود توضیحات ناقص</li>
+                                    <li>• ادغام ISBN و نویسندگان جدید</li>
+                                    <li>• بروزرسانی هش‌ها و تصاویر</li>
+                                </ul>
+                            </div>
+                            <div class="space-y-1">
+                                <div class="font-medium">📊 ردیابی دقیق تغییرات:</div>
+                                <ul class="text-xs space-y-1 text-blue-600">
+                                    <li>• تشخیص کتاب‌های جدید vs بهبود یافته</li>
+                                    <li>• آمار تفصیلی هر نوع تغییر</li>
+                                    <li>• محاسبه نرخ تأثیر واقعی</li>
+                                    <li>• لاگ کامل تمام بهبودها</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        {{-- نمایش آمار کلی سیستم --}}
+                        @php
+                            $systemStats = [
+                                'total_books_enhanced' => \App\Models\ExecutionLog::sum('total_enhanced'),
+                                'total_successful_runs' => \App\Models\ExecutionLog::where('status', 'completed')->count(),
+                                'total_books_created' => \App\Models\ExecutionLog::sum('total_success'),
+                            ];
+                        @endphp
+
+                        @if($systemStats['total_books_enhanced'] > 0)
+                            <div class="mt-3 pt-3 border-t border-blue-200">
+                                <div class="text-xs text-blue-600 space-x-4 space-x-reverse text-center">
+                                    <span>🎯 <strong>{{ number_format($systemStats['total_books_created']) }}</strong> کتاب جدید ایجاد شده</span>
+                                    <span>🔧 <strong>{{ number_format($systemStats['total_books_enhanced']) }}</strong> کتاب بهبود یافته</span>
+                                    <span>✅ <strong>{{ number_format($systemStats['total_successful_runs']) }}</strong> اجرای موفق</span>
+                                </div>
+                            </div>
+                        @endif
+                    </div>
 
                     <!-- وضعیت اجرا -->
                     <td class="p-4">
