@@ -349,21 +349,87 @@ class FieldExtractor
 
     private function extractAuthors($authorsData): ?string
     {
-        if (is_string($authorsData)) {
-            return trim($authorsData);
+        if (empty($authorsData)) {
+            return null;
         }
 
+        Log::debug('شروع استخراج نویسندگان', [
+            'input_type' => gettype($authorsData),
+            'input_data' => $authorsData
+        ]);
+
+        // اگر رشته است
+        if (is_string($authorsData)) {
+            $cleanAuthors = trim($authorsData);
+            if (!empty($cleanAuthors)) {
+                Log::debug('نویسندگان از رشته استخراج شد', ['authors' => $cleanAuthors]);
+                return $cleanAuthors;
+            }
+        }
+
+        // اگر آرایه است
         if (is_array($authorsData)) {
             $names = [];
+
             foreach ($authorsData as $author) {
-                if (is_array($author) && isset($author['name'])) {
-                    $names[] = trim($author['name']);
+                if (is_array($author)) {
+                    // بررسی کلیدهای مختلف برای نام نویسنده
+                    $possibleKeys = ['name', 'full_name', 'author_name', 'firstname', 'lastname', 'title'];
+                    $authorName = '';
+
+                    foreach ($possibleKeys as $key) {
+                        if (isset($author[$key]) && !empty(trim($author[$key]))) {
+                            if ($key === 'firstname' || $key === 'lastname') {
+                                $authorName .= trim($author[$key]) . ' ';
+                            } else {
+                                $authorName = trim($author[$key]);
+                                break;
+                            }
+                        }
+                    }
+
+                    // اگر firstname و lastname جداگانه بودند
+                    if (empty($authorName) && (isset($author['firstname']) || isset($author['lastname']))) {
+                        $authorName = trim(($author['firstname'] ?? '') . ' ' . ($author['lastname'] ?? ''));
+                    }
+
+                    if (!empty($authorName)) {
+                        $names[] = trim($authorName);
+                    }
+
                 } elseif (is_string($author)) {
-                    $names[] = trim($author);
+                    $cleanAuthor = trim($author);
+                    if (!empty($cleanAuthor)) {
+                        $names[] = $cleanAuthor;
+                    }
                 }
             }
-            return !empty($names) ? implode(', ', $names) : null;
+
+            if (!empty($names)) {
+                $result = implode(', ', array_unique($names));
+                Log::debug('نویسندگان از آرایه استخراج شد', [
+                    'authors_array' => $names,
+                    'final_string' => $result
+                ]);
+                return $result;
+            }
         }
+
+        // اگر object است
+        if (is_object($authorsData)) {
+            if (isset($authorsData->name)) {
+                $authorName = trim($authorsData->name);
+                if (!empty($authorName)) {
+                    Log::debug('نویسنده از object استخراج شد', ['author' => $authorName]);
+                    return $authorName;
+                }
+            }
+        }
+
+        Log::warning('نتوانستیم نویسندگان را استخراج کنیم', [
+            'input_type' => gettype($authorsData),
+            'input_data' => $authorsData
+        ]);
 
         return null;
     }

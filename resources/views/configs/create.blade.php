@@ -77,12 +77,13 @@
                     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         <div>
                             <label for="start_page" class="block text-sm font-medium text-gray-700 mb-2">
-                                صفحه شروع (اختیاری)
+                                صفحه شروع
                             </label>
-                            <input type="number" id="start_page" name="start_page" value="{{ old('start_page') }}"
+                            <input type="number" id="start_page" name="start_page" value="{{ old('start_page', 1) }}"
                                    min="1"
-                                   class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 @error('start_page') border-red-500 @enderror">
-                            <p class="text-xs text-gray-500 mt-1">خالی = تشخیص خودکار بهترین نقطه شروع</p>
+                                   class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 @error('start_page') border-red-500 @enderror"
+                                   placeholder="1">
+                            <p class="text-xs text-gray-500 mt-1">پیشفرض: از ID شماره 1 شروع</p>
                             @error('start_page')
                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                             @enderror
@@ -268,7 +269,7 @@
                     <h3 class="text-md font-medium text-gray-900 mb-2">🔍 پیش‌نمایش تنظیمات:</h3>
                     <div class="text-sm text-gray-700 space-y-1" id="config-preview">
                         <div>📊 <strong>منبع:</strong> <span id="preview-source">-</span></div>
-                        <div>🔢 <strong>شروع از ID:</strong> <span id="preview-start">تشخیص خودکار</span></div>
+                        <div>🔢 <strong>شروع از ID:</strong> <span id="preview-start">1</span></div>
                         <div>📄 <strong>تعداد کل:</strong> <span id="preview-total">1000</span> ID</div>
                         <div>⏱️ <strong>تخمین زمان:</strong> <span id="preview-time">-</span></div>
                     </div>
@@ -293,7 +294,7 @@
         // به‌روزرسانی پیش‌نمایش
         function updatePreview() {
             const baseUrl = document.getElementById('base_url').value;
-            const startPage = document.getElementById('start_page').value;
+            const startPage = document.getElementById('start_page').value || 1;
             const maxPages = document.getElementById('max_pages').value || 1000;
             const delaySeconds = document.getElementById('delay_seconds').value || 3;
 
@@ -311,7 +312,7 @@
             }
 
             // شروع
-            document.getElementById('preview-start').textContent = startPage || 'تشخیص خودکار';
+            document.getElementById('preview-start').textContent = startPage;
 
             // تعداد کل
             document.getElementById('preview-total').textContent = maxPages;

@@ -7,7 +7,10 @@
             <a href="{{ route('configs.show', $config) }}" class="text-gray-600 hover:text-gray-800">←</a>
             <div>
                 <h1 class="text-2xl font-semibold">ویرایش کانفیگ</h1>
-                <p class="text-gray-600">{{ $config->name }} - آخرین ID پردازش شده: {{ $config->last_source_id }}</p>
+                @php
+                    $lastIdFromSources = $config->getLastSourceIdFromBookSources();
+                @endphp
+                <p class="text-gray-600">{{ $config->name }} - آخرین ID در book_sources: {{ $lastIdFromSources > 0 ? $lastIdFromSources : 'هیچ' }}</p>
             </div>
         </div>
 
@@ -31,12 +34,12 @@
                     <span class="font-medium">{{ $config->source_name }}</span>
                 </div>
                 <div>
-                    <span class="text-gray-600">آخرین ID:</span>
-                    <span class="font-medium text-blue-600">{{ $config->last_source_id }}</span>
+                    <span class="text-gray-600">آخرین ID در کانفیگ:</span>
+                    <span class="font-medium text-blue-600">{{ $config->last_source_id ?? 0 }}</span>
                 </div>
                 <div>
-                    <span class="text-gray-600">کل موفقیت:</span>
-                    <span class="font-medium text-green-600">{{ number_format($config->total_success) }}</span>
+                    <span class="text-gray-600">آخرین ID در book_sources:</span>
+                    <span class="font-medium text-purple-600">{{ $lastIdFromSources }}</span>
                 </div>
                 <div>
                     <span class="text-gray-600">نرخ موفقیت:</span>
@@ -90,8 +93,8 @@
                     <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
                         <h3 class="text-yellow-800 font-medium mb-2">⚠️ نکات مهم:</h3>
                         <ul class="text-yellow-700 text-sm space-y-1">
-                            <li>• آخرین ID پردازش شده: <strong>{{ $config->last_source_id }}</strong></li>
-                            <li>• اگر "صفحه شروع" را خالی بگذارید، از ID {{ $config->last_source_id + 1 }} ادامه می‌یابد</li>
+                            <li>• آخرین ID در book_sources: <strong>{{ $lastIdFromSources > 0 ? $lastIdFromSources : 'هیچ رکوردی ثبت نشده' }}</strong></li>
+                            <li>• اگر "صفحه شروع" را خالی بگذارید، از ID {{ $lastIdFromSources > 0 ? $lastIdFromSources + 1 : 1 }} ادامه می‌یابد</li>
                             <li>• اگر عدد مشخصی وارد کنید، از همان ID شروع می‌شود</li>
                             <li>• توجه: تغییر این تنظیمات بر روی اجرای بعدی تأثیر می‌گذارد</li>
                         </ul>
@@ -104,9 +107,10 @@
                             </label>
                             <input type="number" id="start_page" name="start_page"
                                    value="{{ old('start_page', $config->start_page) }}" min="1"
-                                   class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 @error('start_page') border-red-500 @enderror">
+                                   class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 @error('start_page') border-red-500 @enderror"
+                                   placeholder="{{ $lastIdFromSources > 0 ? $lastIdFromSources + 1 : 1 }}">
                             <p class="text-xs text-gray-500 mt-1">
-                                خالی = از ID {{ $config->last_source_id + 1 }} ادامه
+                                خالی = از ID {{ $lastIdFromSources > 0 ? $lastIdFromSources + 1 : 1 }} ادامه
                             </p>
                             @error('start_page')
                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
@@ -303,7 +307,7 @@
                     <h3 class="text-md font-medium text-gray-900 mb-2">🔍 پیش‌نمایش تنظیمات جدید:</h3>
                     <div class="text-sm text-gray-700 space-y-1" id="config-preview">
                         <div>📊 <strong>منبع:</strong> <span id="preview-source">{{ $config->source_name }}</span></div>
-                        <div>🔢 <strong>شروع از ID:</strong> <span id="preview-start">{{ $config->last_source_id + 1 }} (ادامه)</span></div>
+                        <div>🔢 <strong>شروع از ID:</strong> <span id="preview-start">{{ $lastIdFromSources > 0 ? $lastIdFromSources + 1 : 1 }} (ادامه)</span></div>
                         <div>📄 <strong>تعداد کل:</strong> <span id="preview-total">{{ $config->max_pages }}</span> ID</div>
                         <div>⏱️ <strong>تخمین زمان:</strong> <span id="preview-time">-</span></div>
                     </div>
@@ -331,7 +335,7 @@
             const startPage = document.getElementById('start_page').value;
             const maxPages = document.getElementById('max_pages').value || {{ $config->max_pages }};
             const delaySeconds = document.getElementById('delay_seconds').value || {{ $config->delay_seconds }};
-            const currentLastId = {{ $config->last_source_id }};
+            const lastIdFromSources = {{ $lastIdFromSources }};
 
             // نام منبع
             if (baseUrl) {
@@ -345,7 +349,7 @@
             }
 
             // شروع
-            const nextStart = startPage || (currentLastId + 1);
+            const nextStart = startPage || (lastIdFromSources > 0 ? lastIdFromSources + 1 : 1);
             document.getElementById('preview-start').textContent = startPage ?
                 startPage :
                 `${nextStart} (ادامه)`;

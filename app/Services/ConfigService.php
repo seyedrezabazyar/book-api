@@ -15,13 +15,17 @@ class ConfigService
         $configData = $this->buildConfigData($data);
         $sourceName = $this->extractSourceName($data['base_url']);
 
+        // اگر start_page خالی است، آن را null بگذاریم تا getSmartStartPage کار کند
+        $startPage = !empty($data['start_page']) ? (int)$data['start_page'] : null;
+
         return Config::create([
             ...$data,
             'source_type' => 'api',
             'source_name' => $sourceName,
             'config_data' => $configData,
             'created_by' => Auth::id(),
-            'current_page' => $data['start_page'] ?? 1,
+            'start_page' => $startPage,
+            'current_page' => $startPage ?? 1, // اگر start_page null است، current_page را 1 قرار بده
             'total_processed' => 0,
             'total_success' => 0,
             'total_failed' => 0,
@@ -39,10 +43,21 @@ class ConfigService
         $configData = $this->buildConfigData($data);
         $sourceName = $this->extractSourceName($data['base_url']);
 
+        // اگر start_page خالی است، آن را null بگذاریم
+        $startPage = !empty($data['start_page']) ? (int)$data['start_page'] : null;
+
         $config->update([
             ...$data,
             'source_name' => $sourceName,
-            'config_data' => $configData
+            'config_data' => $configData,
+            'start_page' => $startPage
+        ]);
+
+        Log::info("🔧 کانفیگ ویرایش شد", [
+            'config_id' => $config->id,
+            'start_page' => $startPage,
+            'source_name' => $sourceName,
+            'smart_start_page' => $config->getSmartStartPage()
         ]);
 
         return $config;

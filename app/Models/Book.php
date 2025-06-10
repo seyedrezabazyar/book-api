@@ -103,6 +103,16 @@ class Book extends Model
     public static function createWithDetails(array $bookData, array $hashData = [], ?string $sourceName = null, ?string $sourceId = null): self
     {
         return DB::transaction(function () use ($bookData, $hashData, $sourceName, $sourceId) {
+
+            Log::info('شروع ایجاد کتاب با جزئیات', [
+                'title' => $bookData['title'] ?? 'نامشخص',
+                'author' => $bookData['author'] ?? 'نامشخص',
+                'has_hash_data' => !empty($hashData),
+                'source_name' => $sourceName,
+                'source_id' => $sourceId
+            ]);
+
+            // ایجاد یا پیدا کردن دسته‌بندی
             $category = Category::firstOrCreate(
                 ['name' => $bookData['category'] ?? 'عمومی'],
                 [
@@ -112,20 +122,25 @@ class Book extends Model
                 ]
             );
 
-            $publisher = isset($bookData['publisher']) ? Publisher::firstOrCreate(
-                ['name' => $bookData['publisher']],
-                [
-                    'slug' => Str::slug($bookData['publisher'] . '_' . time()),
-                    'is_active' => true,
-                    'books_count' => 0,
-                ]
-            ) : null;
+            // ایجاد یا پیدا کردن ناشر
+            $publisher = null;
+            if (!empty($bookData['publisher'])) {
+                $publisher = Publisher::firstOrCreate(
+                    ['name' => $bookData['publisher']],
+                    [
+                        'slug' => Str::slug($bookData['publisher'] . '_' . time()),
+                        'is_active' => true,
+                        'books_count' => 0,
+                    ]
+                );
+            }
 
+            // ایجاد کتاب
             $book = self::create([
                 'title' => $bookData['title'],
                 'description' => $bookData['description'] ?? null,
                 'excerpt' => Str::limit($bookData['description'] ?? $bookData['title'], 200),
-                'slug' => Str::slug($bookData['title'] . '_' . time()),
+                'slug' => Str::slug($bookData['title'] . '_' . time() . '_' . rand(1000, 9999)),
                 'isbn' => $bookData['isbn'] ?? null,
                 'publication_year' => $bookData['publication_year'] ?? null,
                 'pages_count' => $bookData['pages_count'] ?? null,
@@ -138,39 +153,124 @@ class Book extends Model
                 'status' => 'active',
             ]);
 
+            Log::info('کتاب اصلی ایجاد شد', [
+                'book_id' => $book->id,
+                'title' => $book->title
+            ]);
+
+            // ایجاد هش‌ها
             if (!empty($hashData['md5'])) {
-                BookHash::create([
-                    'book_id' => $book->id,
-                    'md5' => $hashData['md5'],
-                    'sha1' => $hashData['sha1'] ?? null,
-                    'sha256' => $hashData['sha256'] ?? null,
-                    'crc32' => $hashData['crc32'] ?? null,
-                    'ed2k_hash' => $hashData['ed2k'] ?? null,
-                    'btih' => $hashData['btih'] ?? null,
-                    'magnet_link' => $hashData['magnet'] ?? null,
-                ]);
+                try {
+                    BookHash::create([
+                        'book_id' => $book->id,
+                        'md5' => $hashData['md5'],
+                        'sha1' => $hashData['sha1'] ?? null,
+                        'sha256' => $hashData['sha256'] ?? null,
+                        'crc32' => $hashData['crc32'] ?? null,
+                        'ed2k_hash' => $hashData['ed2k'] ?? null,
+                        'btih' => $hashData['btih'] ?? null,
+                        'magnet_link' => $hashData['magnet'] ?? null,
+                    ]);
+
+                    Log::info('هش‌های کتاب ایجاد شد', [
+                        'book_id' => $book->id,
+                        'hash_types' => array_keys(array_filter($hashData))
+                    ]);
+                } catch (\Exception $e) {
+                    Log::error('خطا در ایجاد هش‌های کتاب', [
+                        'book_id' => $book->id,
+                        'error' => $e->getMessage()
+                    ]);
+                }
             }
 
+            // اضافه کردن نویسندگان - اصلاح شده
             if (!empty($bookData['author'])) {
-                $book->addAuthorsWithTimestamps($bookData['author']);
-            }
-
-            if (!empty($bookData['image_url'])) {
-                BookImage::create([
+                Log::info('شروع اضافه کردن نویسندگان', [
                     'book_id' => $book->id,
-                    'image_url' => $bookData['image_url'],
+                    'authors_string' => $bookData['author']
+                ]);
+
+                try {
+                    $addedAuthors = $book->addAuthorsWithTimestamps($bookData['author']);
+
+                    Log::info('نتیجه اضافه کردن نویسندگان', [
+                        'book_id' => $book->id,
+                        'added_authors' => $addedAuthors,
+                        'added_count' => count($addedAuthors)
+                    ]);
+
+                    // بروزرسانی تعداد کتاب‌های دسته‌بندی
+                    $category->increment('books_count');
+                    if ($publisher) {
+                        $publisher->increment('books_count');
+                    }
+
+                } catch (\Exception $e) {
+                    Log::error('خطا در اضافه کردن نویسندگان', [
+                        'book_id' => $book->id,
+                        'authors_string' => $bookData['author'],
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                }
+            } else {
+                Log::warning('هیچ نویسنده‌ای برای اضافه کردن یافت نشد', [
+                    'book_id' => $book->id,
+                    'book_data_keys' => array_keys($bookData)
                 ]);
             }
 
-            if ($sourceName && $sourceId) {
-                BookSource::recordBookSource($book->id, $sourceName, $sourceId);
+            // اضافه کردن تصویر
+            if (!empty($bookData['image_url'])) {
+                try {
+                    BookImage::create([
+                        'book_id' => $book->id,
+                        'image_url' => $bookData['image_url'],
+                    ]);
+
+                    Log::info('تصویر کتاب اضافه شد', [
+                        'book_id' => $book->id,
+                        'image_url' => $bookData['image_url']
+                    ]);
+                } catch (\Exception $e) {
+                    Log::error('خطا در اضافه کردن تصویر', [
+                        'book_id' => $book->id,
+                        'error' => $e->getMessage()
+                    ]);
+                }
             }
 
-            Log::info('✨ کتاب جدید ایجاد شد', [
+            // ثبت منبع
+            if ($sourceName && $sourceId) {
+                try {
+                    BookSource::recordBookSource($book->id, $sourceName, $sourceId);
+
+                    Log::info('منبع کتاب ثبت شد', [
+                        'book_id' => $book->id,
+                        'source_name' => $sourceName,
+                        'source_id' => $sourceId
+                    ]);
+                } catch (\Exception $e) {
+                    Log::error('خطا در ثبت منبع کتاب', [
+                        'book_id' => $book->id,
+                        'source_name' => $sourceName,
+                        'source_id' => $sourceId,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            // بررسی نهایی نویسندگان
+            $finalAuthorsCount = $book->authors()->count();
+            Log::info('✨ کتاب با جزئیات کامل ایجاد شد', [
                 'book_id' => $book->id,
                 'title' => $book->title,
                 'md5' => $hashData['md5'] ?? null,
                 'source' => $sourceName,
+                'final_authors_count' => $finalAuthorsCount,
+                'category' => $category->name,
+                'publisher' => $publisher?->name
             ]);
 
             return $book;
@@ -179,35 +279,130 @@ class Book extends Model
 
     public function addAuthorsWithTimestamps(string $authorsString): array
     {
+        if (empty(trim($authorsString))) {
+            Log::info('رشته نویسندگان خالی است', ['book_id' => $this->id]);
+            return [];
+        }
+
+        // تمیز کردن و تفکیک نام‌های نویسندگان
+        $authorsString = trim($authorsString);
+        $separators = [',', '،', ';', '؛', '&', 'and', 'و'];
+
+        // جایگزینی جداکننده‌های مختلف با کاما
+        foreach ($separators as $separator) {
+            $authorsString = str_ireplace($separator, ',', $authorsString);
+        }
+
         $authorNames = array_filter(array_map('trim', explode(',', $authorsString)));
-        $existingAuthors = $this->authors()->pluck('name')->toArray();
+
+        if (empty($authorNames)) {
+            Log::warning('هیچ نام نویسنده‌ای یافت نشد', [
+                'book_id' => $this->id,
+                'original_string' => $authorsString
+            ]);
+            return [];
+        }
+
         $addedAuthors = [];
 
+        // دریافت نویسندگان موجود این کتاب
+        $existingAuthorNames = $this->authors()->pluck('name')->map(function($name) {
+            return strtolower(trim($name));
+        })->toArray();
+
+        Log::info('شروع اضافه کردن نویسندگان', [
+            'book_id' => $this->id,
+            'book_title' => $this->title,
+            'author_names' => $authorNames,
+            'existing_authors' => $existingAuthorNames
+        ]);
+
         foreach ($authorNames as $name) {
-            if (empty($name)) {
+            $name = trim($name);
+
+            if (empty($name) || strlen($name) < 2) {
+                Log::warning('نام نویسنده نامعتبر رد شد', ['name' => $name]);
                 continue;
             }
 
-            if (!in_array(mb_strtolower($name), array_map('mb_strtolower', $existingAuthors))) {
+            $normalizedName = strtolower(trim($name));
+
+            // بررسی اینکه آیا این نویسنده قبلاً برای این کتاب ثبت شده
+            if (in_array($normalizedName, $existingAuthorNames)) {
+                Log::info('نویسنده قبلاً برای این کتاب ثبت شده', [
+                    'book_id' => $this->id,
+                    'author_name' => $name
+                ]);
+                continue;
+            }
+
+            try {
+                // ایجاد یا پیدا کردن نویسنده
                 $author = Author::firstOrCreate(
                     ['name' => $name],
                     [
-                        'slug' => Str::slug($name . '_' . time()),
+                        'slug' => Str::slug($name . '_' . time() . '_' . rand(1000, 9999)),
                         'is_active' => true,
+                        'books_count' => 0
                     ]
                 );
 
-                if (!$this->authors()->where('author_id', $author->id)->exists()) {
-                    $this->authors()->attach($author->id);
+                Log::info('نویسنده ایجاد یا پیدا شد', [
+                    'author_id' => $author->id,
+                    'author_name' => $author->name,
+                    'was_recently_created' => $author->wasRecentlyCreated
+                ]);
+
+                // بررسی اینکه آیا رابطه book-author وجود دارد
+                $relationExists = $this->authors()->where('author_id', $author->id)->exists();
+
+                if (!$relationExists) {
+                    // اضافه کردن رابطه
+                    $this->authors()->attach($author->id, [
+                        'created_at' => now(),
+                        'updated_at' => now()
+                    ]);
+
                     $addedAuthors[] = $name;
+
+                    // بروزرسانی تعداد کتاب‌های نویسنده
+                    $author->increment('books_count');
+
+                    Log::info('نویسنده به کتاب اضافه شد', [
+                        'book_id' => $this->id,
+                        'author_id' => $author->id,
+                        'author_name' => $author->name
+                    ]);
+                } else {
+                    Log::info('رابطه book-author قبلاً وجود داشت', [
+                        'book_id' => $this->id,
+                        'author_id' => $author->id,
+                        'author_name' => $author->name
+                    ]);
                 }
+
+            } catch (\Exception $e) {
+                Log::error('خطا در اضافه کردن نویسنده', [
+                    'book_id' => $this->id,
+                    'author_name' => $name,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
             }
         }
 
         if (!empty($addedAuthors)) {
-            Log::info('👤 نویسندگان جدید اضافه شدند', [
+            Log::info('نویسندگان جدید با موفقیت اضافه شدند', [
                 'book_id' => $this->id,
+                'book_title' => $this->title,
                 'added_authors' => $addedAuthors,
+                'total_added' => count($addedAuthors)
+            ]);
+        } else {
+            Log::warning('هیچ نویسنده جدیدی اضافه نشد', [
+                'book_id' => $this->id,
+                'original_string' => $authorsString,
+                'parsed_names' => $authorNames
             ]);
         }
 

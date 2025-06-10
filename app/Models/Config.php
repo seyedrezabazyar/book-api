@@ -75,7 +75,7 @@ class Config extends Model
     }
 
     /**
-     * تعیین صفحه شروع هوشمند
+     * تعیین صفحه شروع هوشمند - اصلاح شده
      */
     public function getSmartStartPage(): int
     {
@@ -88,18 +88,7 @@ class Config extends Model
             return $this->start_page;
         }
 
-        // اولویت 2: اگر auto_resume فعال باشد، از آخرین ID ادامه بده
-        if ($this->auto_resume && $this->last_source_id > 0) {
-            $nextId = $this->last_source_id + 1;
-            Log::info("🔄 ادامه خودکار از آخرین ID", [
-                'config_id' => $this->id,
-                'last_source_id' => $this->last_source_id,
-                'next_start' => $nextId
-            ]);
-            return $nextId;
-        }
-
-        // اولویت 3: آخرین ID از book_sources برای این منبع
+        // اولویت 2: آخرین ID از book_sources برای این منبع (اصلی)
         try {
             $lastIdFromSources = BookSource::where('source_name', $this->source_name)
                 ->whereRaw('source_id REGEXP "^[0-9]+$"')
@@ -108,7 +97,7 @@ class Config extends Model
 
             if ($lastIdFromSources > 0) {
                 $nextId = (int)$lastIdFromSources + 1;
-                Log::info("📊 استفاده از آخرین ID در منبع", [
+                Log::info("📊 شروع از آخرین ID در book_sources", [
                     'config_id' => $this->id,
                     'source_name' => $this->source_name,
                     'last_id_from_sources' => $lastIdFromSources,
@@ -117,10 +106,22 @@ class Config extends Model
                 return $nextId;
             }
         } catch (\Exception $e) {
-            Log::warning("خطا در دریافت آخرین ID از منبع", [
+            Log::warning("خطا در دریافت آخرین ID از book_sources", [
                 'config_id' => $this->id,
+                'source_name' => $this->source_name,
                 'error' => $e->getMessage()
             ]);
+        }
+
+        // اولویت 3: اگر auto_resume فعال باشد و last_source_id موجود باشد
+        if ($this->auto_resume && $this->last_source_id > 0) {
+            $nextId = $this->last_source_id + 1;
+            Log::info("🔄 ادامه از last_source_id", [
+                'config_id' => $this->id,
+                'last_source_id' => $this->last_source_id,
+                'next_start' => $nextId
+            ]);
+            return $nextId;
         }
 
         // پیش‌فرض: از 1 شروع کن
@@ -129,6 +130,28 @@ class Config extends Model
             'source_name' => $this->source_name
         ]);
         return 1;
+    }
+
+    /**
+     * دریافت آخرین ID ثبت شده در book_sources برای این منبع
+     */
+    public function getLastSourceIdFromBookSources(): int
+    {
+        try {
+            $lastId = BookSource::where('source_name', $this->source_name)
+                ->whereRaw('source_id REGEXP "^[0-9]+$"')
+                ->orderByRaw('CAST(source_id AS UNSIGNED) DESC')
+                ->value('source_id');
+
+            return $lastId ? (int)$lastId : 0;
+        } catch (\Exception $e) {
+            Log::error("خطا در دریافت آخرین ID از book_sources", [
+                'config_id' => $this->id,
+                'source_name' => $this->source_name,
+                'error' => $e->getMessage()
+            ]);
+            return 0;
+        }
     }
 
     /**
