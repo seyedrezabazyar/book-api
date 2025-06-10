@@ -23,14 +23,14 @@ class ProcessSinglePageJob implements ShouldQueue
 
     protected int $configId;
     protected string $executionId;
-    protected int $sourceId; // تغییر نام از pageNumber به sourceId
+    protected int $sourceId;
 
     public function __construct($config, int $sourceId, string $executionId)
     {
         // اگر Config object باشد، ID را استخراج کن
         $this->configId = is_object($config) ? $config->id : (int)$config;
         $this->executionId = $executionId;
-        $this->sourceId = $sourceId; // حالا source ID است نه page number
+        $this->sourceId = $sourceId;
 
         // تنظیم صف بر اساس اولویت
         $this->onQueue('default');
@@ -106,11 +106,13 @@ class ProcessSinglePageJob implements ShouldQueue
                 'config_id' => $this->configId,
                 'execution_id' => $this->executionId,
                 'source_id' => $this->sourceId,
-                'result' => $result
+                'result_action' => $result['action'] ?? 'unknown',
+                'result_stats' => $result['stats'] ?? []
             ]);
 
             // برنامه‌ریزی source ID بعدی (اگر لازم باشد)
             $this->scheduleNextSourceIdIfNeeded($config, $executionLog, $result);
+
         } catch (\Exception $e) {
             Log::error("❌ خطا در ProcessSinglePageJob", [
                 'config_id' => $this->configId,
@@ -126,8 +128,25 @@ class ProcessSinglePageJob implements ShouldQueue
                 $executionLog->addLogEntry("❌ خطای Job در source ID {$this->sourceId}", [
                     'error' => $e->getMessage(),
                     'job_attempt' => $this->attempts(),
-                    'max_attempts' => $this->tries
+                    'max_attempts' => $this->tries,
+                    'source_id' => $this->sourceId
                 ]);
+
+                // بروزرسانی آمار خطا
+                try {
+                    $executionLog->updateProgress([
+                        'total_processed' => 1,
+                        'total_success' => 0,
+                        'total_failed' => 1,
+                        'total_duplicate' => 0,
+                        'total_enhanced' => 0
+                    ]);
+                } catch (\Exception $updateError) {
+                    Log::error("❌ خطا در بروزرسانی آمار خطا", [
+                        'execution_id' => $this->executionId,
+                        'update_error' => $updateError->getMessage()
+                    ]);
+                }
             }
 
             // اگر این آخرین تلاش است، اجرا را متوقف کن
@@ -152,20 +171,19 @@ class ProcessSinglePageJob implements ShouldQueue
             return;
         }
 
-        // اگر این source ID موجود نبود، Job پایان اجرا را dispatch کن
-        if (isset($result['action']) && $result['action'] === 'no_book_found') {
-            // چند source ID پشت سر هم خالی بود؟
+        // اگر این source ID موجود نبود، چند تا پشت سر هم چک کن
+        if (isset($result['action']) && in_array($result['action'], ['no_book_found', 'failed'])) {
             $recentFailures = $this->countRecentFailures($config, $this->sourceId);
 
             if ($recentFailures >= 5) {
-                Log::info("📄 {$recentFailures} source ID پشت سر هم خالی بود، اجرا تمام می‌شود", [
+                Log::info("📄 {$recentFailures} source ID پشت سر هم ناموفق بود، اجرا تمام می‌شود", [
                     'config_id' => $this->configId,
                     'execution_id' => $this->executionId,
                     'last_source_id' => $this->sourceId
                 ]);
 
                 // Job پایان اجرا را dispatch کن
-                ProcessSinglePageJob::dispatch($this->configId, -1, $this->executionId)
+                self::dispatch($this->configId, -1, $this->executionId)
                     ->delay(now()->addSeconds(5));
                 return;
             }
@@ -185,7 +203,7 @@ class ProcessSinglePageJob implements ShouldQueue
             ]);
 
             // Job پایان اجرا را dispatch کن
-            ProcessSinglePageJob::dispatch($this->configId, -1, $this->executionId)
+            self::dispatch($this->configId, -1, $this->executionId)
                 ->delay(now()->addSeconds(5));
             return;
         }
@@ -194,10 +212,10 @@ class ProcessSinglePageJob implements ShouldQueue
         $nextSourceId = $this->sourceId + 1;
         $delay = $config->delay_seconds ?? 3;
 
-        ProcessSinglePageJob::dispatch($this->configId, $nextSourceId, $this->executionId)
+        self::dispatch($this->configId, $nextSourceId, $this->executionId)
             ->delay(now()->addSeconds($delay));
 
-        Log::info("📄 Source ID بعدی برنامه‌ریزی شد", [
+        Log::debug("📄 Source ID بعدی برنامه‌ریزی شد", [
             'config_id' => $this->configId,
             'execution_id' => $this->executionId,
             'current_source_id' => $this->sourceId,
@@ -212,18 +230,29 @@ class ProcessSinglePageJob implements ShouldQueue
     private function countRecentFailures(Config $config, int $currentSourceId): int
     {
         $failures = 0;
+
+        // بررسی آخرین 10 source ID
         for ($i = 1; $i <= 10; $i++) {
             $checkId = $currentSourceId - $i;
             if ($checkId < 1) break;
 
-            $hasFailure = \App\Models\ScrapingFailure::where('config_id', $config->id)
-                ->where('error_details->source_id', $checkId)
-                ->exists();
+            try {
+                // بررسی در ScrapingFailure
+                $hasFailure = \App\Models\ScrapingFailure::where('config_id', $config->id)
+                    ->where('error_details->source_id', $checkId)
+                    ->exists();
 
-            if ($hasFailure) {
-                $failures++;
-            } else {
-                break; // اگر یکی موفق بود، شمارش را بشکن
+                if ($hasFailure) {
+                    $failures++;
+                } else {
+                    break; // اگر یکی موفق بود، شمارش را بشکن
+                }
+            } catch (\Exception $e) {
+                Log::error("❌ خطا در بررسی شکست‌های اخیر", [
+                    'check_id' => $checkId,
+                    'error' => $e->getMessage()
+                ]);
+                break;
             }
         }
 
@@ -246,36 +275,42 @@ class ProcessSinglePageJob implements ShouldQueue
             'error' => $e->getMessage()
         ]);
 
-        // متوقف کردن کانفیگ
-        $config = Config::find($this->configId);
-        if ($config) {
-            $config->update(['is_running' => false]);
+        try {
+            // متوقف کردن کانفیگ
+            $config = Config::find($this->configId);
+            if ($config) {
+                $config->update(['is_running' => false]);
+            }
+
+            // متوقف کردن ExecutionLog با خطا
+            $finalStats = [
+                'stopped_manually' => false,
+                'stopped_due_to_error' => true,
+                'final_error' => $e->getMessage(),
+                'failed_source_id' => $this->sourceId,
+                'stopped_at' => now()->toISOString()
+            ];
+
+            $executionLog->update([
+                'status' => ExecutionLog::STATUS_FAILED,
+                'error_message' => "خطای مکرر در source ID {$this->sourceId}: " . $e->getMessage(),
+                'stop_reason' => 'خطای مکرر در Job',
+                'finished_at' => now(),
+                'execution_time' => $executionLog->started_at ? now()->diffInSeconds($executionLog->started_at) : 0
+            ]);
+
+            $executionLog->addLogEntry("💥 اجرا به دلیل خطای مکرر متوقف شد", $finalStats);
+
+            // حذف Jobs باقی‌مانده
+            $this->cleanupRemainingJobs();
+
+        } catch (\Exception $stopError) {
+            Log::error("❌ خطا در متوقف کردن اجرا", [
+                'config_id' => $this->configId,
+                'execution_id' => $this->executionId,
+                'stop_error' => $stopError->getMessage()
+            ]);
         }
-
-        // متوقف کردن ExecutionLog با خطا
-        $finalStats = [
-            'total_processed_at_stop' => $config ? $config->total_processed : 0,
-            'total_success_at_stop' => $config ? $config->total_success : 0,
-            'total_failed_at_stop' => $config ? $config->total_failed : 0,
-            'stopped_manually' => false,
-            'stopped_due_to_error' => true,
-            'final_error' => $e->getMessage(),
-            'failed_source_id' => $this->sourceId,
-            'stopped_at' => now()->toISOString()
-        ];
-
-        $executionLog->update([
-            'status' => ExecutionLog::STATUS_FAILED,
-            'error_message' => "خطای مکرر در source ID {$this->sourceId}: " . $e->getMessage(),
-            'stop_reason' => 'خطای مکرر در Job',
-            'finished_at' => now(),
-            'execution_time' => $executionLog->started_at ? now()->diffInSeconds($executionLog->started_at) : 0
-        ]);
-
-        $executionLog->addLogEntry("💥 اجرا به دلیل خطای مکرر متوقف شد", $finalStats);
-
-        // حذف Jobs باقی‌مانده
-        $this->cleanupRemainingJobs();
     }
 
     /**
@@ -350,9 +385,21 @@ class ProcessSinglePageJob implements ShouldQueue
                     'error' => $exception->getMessage(),
                     'failed_at' => now()->toISOString()
                 ]);
+
+                // بروزرسانی آمار خطا
+                $executionLog->updateProgress([
+                    'total_processed' => 1,
+                    'total_success' => 0,
+                    'total_failed' => 1,
+                    'total_duplicate' => 0,
+                    'total_enhanced' => 0
+                ]);
             }
         } catch (\Exception $e) {
-            Log::error("❌ خطا در ثبت failed log", ['error' => $e->getMessage()]);
+            Log::error("❌ خطا در ثبت failed log", [
+                'execution_id' => $this->executionId,
+                'error' => $e->getMessage()
+            ]);
         }
     }
 

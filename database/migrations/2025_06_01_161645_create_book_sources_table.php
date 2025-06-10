@@ -12,34 +12,49 @@ return new class extends Migration
         Schema::create('book_sources', function (Blueprint $table) {
             $table->bigIncrements('id');
             $table->unsignedBigInteger('book_id')->index();
-            $table->string('source_name', 100)->index(); // نام منبع (مثل libgen_rs، zlib، ...)
-            $table->string('source_id', 100)->index(); // شناسه کتاب در منبع مقصد
-            $table->timestamp('discovered_at')->useCurrent(); // زمان کشف این منبع
+            $table->string('source_name', 100)->index();
+            $table->string('source_id', 100)->index();
+            $table->timestamp('discovered_at')->useCurrent();
             $table->timestamps();
 
-            // کلید یکتای ترکیبی - یک کتاب نمی‌تواند در یک منبع چندین بار ثبت شود
             $table->unique(['book_id', 'source_name', 'source_id'], 'book_source_unique');
-
-            // Foreign key
             $table->foreign('book_id')->references('id')->on('books')->onDelete('cascade');
+            $table->index(['source_name', 'source_id'], 'idx_source_lookup');
+            $table->index(['book_id', 'source_name'], 'idx_book_sources');
 
-            // ایندکس‌های بهینه برای جستجوهای مختلف
-            $table->index(['source_name', 'source_id'], 'idx_source_lookup'); // برای یافتن کتاب بر اساس منبع و ID
-            $table->index(['book_id', 'source_name'], 'idx_book_sources'); // برای یافتن منابع یک کتاب
-            $table->index(['source_name', 'discovered_at'], 'idx_source_timeline'); // برای تحلیل زمانی منابع
+            try {
+                $table->index(['source_name', 'discovered_at'], 'idx_source_discovery_time');
+            } catch (\Exception $e) {
+                // Index might already exist
+            }
         });
 
-        // ایندکس عددی برای source_id (بعد از ایجاد جدول)
+        // Numeric index for source_id
         try {
             DB::statement('ALTER TABLE book_sources ADD INDEX idx_source_id_numeric ((CAST(source_id AS UNSIGNED)))');
         } catch (\Exception $e) {
-            // اگر MySQL از generated columns پشتیبانی نکند، ایندکس ساده ایجاد می‌کنیم
-            // این ایندکس کمی کندتر است اما با همه نسخه‌های MySQL کار می‌کند
+            // Fallback to simple index
+            Schema::table('book_sources', function (Blueprint $table) {
+                $table->index('source_id', 'idx_source_id');
+            });
         }
     }
 
     public function down(): void
     {
+        if (Schema::hasTable('book_sources')) {
+            Schema::table('book_sources', function (Blueprint $table) {
+                try {
+                    $table->dropIndex('idx_source_discovery_time');
+                    $table->dropIndex('idx_source_lookup');
+                    $table->dropIndex('idx_book_sources');
+                    $table->dropIndex('idx_source_id_numeric');
+                } catch (\Exception $e) {
+                    // Indexes might not exist
+                }
+                $table->dropTimestamps();
+            });
+        }
         Schema::dropIfExists('book_sources');
     }
 };

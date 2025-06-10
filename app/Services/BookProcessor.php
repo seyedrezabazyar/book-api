@@ -17,7 +17,8 @@ class BookProcessor
         private DataValidator $dataValidator
     ) {}
 
-    public function processBook(array $bookData, int $sourceId, Config $config, ExecutionLog $executionLog): array    {
+    public function processBook(array $bookData, int $sourceId, Config $config, ExecutionLog $executionLog): array
+    {
         try {
             // استخراج فیلدها
             $extractedData = $this->fieldExtractor->extractFields($bookData, $config);
@@ -36,7 +37,8 @@ class BookProcessor
             $executionLog->addLogEntry("🔐 محاسبه MD5 برای source ID {$sourceId}", [
                 'source_id' => $sourceId,
                 'md5' => $md5,
-                'title' => $cleanedData['title']
+                'title' => $cleanedData['title'],
+                'extracted_hashes' => $this->extractHashesFromData($cleanedData)
             ]);
 
             // بررسی وجود کتاب
@@ -58,7 +60,8 @@ class BookProcessor
         } catch (\Exception $e) {
             Log::error("❌ خطا در پردازش کتاب", [
                 'source_id' => $sourceId,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
 
             return $this->buildFailureResult($sourceId);
@@ -89,7 +92,8 @@ class BookProcessor
             'title' => $book->title,
             'action' => $result['action'],
             'changes_count' => count($result['changes']),
-            'updated_database' => $result['updated']
+            'updated_database' => $result['updated'],
+            'available_hashes' => $this->extractHashesFromData($newData)
         ]);
 
         return $result;
@@ -97,15 +101,14 @@ class BookProcessor
 
     private function createNewBook(array $data, string $md5, int $sourceId, Config $config, ExecutionLog $executionLog): Book
     {
-        $hashData = [
-            'md5' => $md5,
-            'sha1' => $data['sha1'] ?? null,
-            'sha256' => $data['sha256'] ?? null,
-            'crc32' => $data['crc32'] ?? null,
-            'ed2k' => $data['ed2k'] ?? null,
-            'btih' => $data['btih'] ?? null,
-            'magnet' => $data['magnet'] ?? null,
-        ];
+        // استخراج کامل هش‌ها
+        $hashData = $this->extractAllHashes($data, $md5);
+
+        Log::info("📦 ایجاد کتاب جدید با هش‌ها", [
+            'source_id' => $sourceId,
+            'title' => $data['title'],
+            'hash_data' => $hashData
+        ]);
 
         $book = Book::createWithDetails(
             $data,
@@ -118,10 +121,157 @@ class BookProcessor
             'source_id' => $sourceId,
             'book_id' => $book->id,
             'title' => $book->title,
-            'md5' => $md5
+            'md5' => $md5,
+            'all_hashes' => $hashData
         ]);
 
         return $book;
+    }
+
+    /**
+     * استخراج کامل تمام هش‌ها از داده‌ها
+     */
+    private function extractAllHashes(array $data, string $md5): array
+    {
+        $hashData = [
+            'md5' => $md5, // اولویت با MD5 محاسبه شده
+        ];
+
+        // هش‌های مختلف که ممکن است در داده‌ها باشند
+        $hashFields = [
+            'sha1' => 'sha1',
+            'sha256' => 'sha256',
+            'crc32' => 'crc32',
+            'ed2k' => 'ed2k',
+            'ed2k_hash' => 'ed2k',
+            'btih' => 'btih',
+            'magnet' => 'magnet',
+            'magnet_link' => 'magnet'
+        ];
+
+        foreach ($hashFields as $sourceKey => $targetKey) {
+            if (!empty($data[$sourceKey])) {
+                $hashValue = trim($data[$sourceKey]);
+
+                // اعتبارسنجی هش بر اساس نوع
+                if ($this->isValidHash($hashValue, $targetKey)) {
+                    $hashData[$targetKey] = $hashValue;
+
+                    Log::debug("✅ هش معتبر یافت شد", [
+                        'type' => $targetKey,
+                        'value' => $hashValue,
+                        'source_key' => $sourceKey
+                    ]);
+                } else {
+                    Log::warning("⚠️ هش نامعتبر رد شد", [
+                        'type' => $targetKey,
+                        'value' => $hashValue,
+                        'source_key' => $sourceKey
+                    ]);
+                }
+            }
+        }
+
+        // بررسی هش‌های تودرتو در ساختار پیچیده‌تر
+        if (isset($data['hashes']) && is_array($data['hashes'])) {
+            foreach ($data['hashes'] as $key => $value) {
+                if (!empty($value) && isset($hashFields[$key])) {
+                    $targetKey = $hashFields[$key];
+                    $hashValue = trim($value);
+
+                    if ($this->isValidHash($hashValue, $targetKey) && !isset($hashData[$targetKey])) {
+                        $hashData[$targetKey] = $hashValue;
+
+                        Log::debug("✅ هش از ساختار تودرتو یافت شد", [
+                            'type' => $targetKey,
+                            'value' => $hashValue
+                        ]);
+                    }
+                }
+            }
+        }
+
+        // اگر MD5 اصلی در داده‌ها موجود است و با محاسبه شده متفاوت است
+        if (!empty($data['md5']) && $data['md5'] !== $md5) {
+            Log::warning("⚠️ MD5 دریافتی با محاسبه شده متفاوت است", [
+                'received_md5' => $data['md5'],
+                'calculated_md5' => $md5,
+                'using' => 'calculated'
+            ]);
+        }
+
+        Log::info("🔐 هش‌های استخراج شده", [
+            'hash_count' => count($hashData),
+            'hash_types' => array_keys($hashData),
+            'has_extended_hashes' => count($hashData) > 1
+        ]);
+
+        return $hashData;
+    }
+
+    /**
+     * اعتبارسنجی هش بر اساس نوع
+     */
+    private function isValidHash(string $hash, string $type): bool
+    {
+        $hash = trim($hash);
+
+        if (empty($hash)) {
+            return false;
+        }
+
+        switch ($type) {
+            case 'md5':
+                return preg_match('/^[a-f0-9]{32}$/i', $hash);
+
+            case 'sha1':
+                return preg_match('/^[a-f0-9]{40}$/i', $hash);
+
+            case 'sha256':
+                return preg_match('/^[a-f0-9]{64}$/i', $hash);
+
+            case 'crc32':
+                return preg_match('/^[a-f0-9]{8}$/i', $hash);
+
+            case 'ed2k':
+                return preg_match('/^[a-f0-9]{32}$/i', $hash);
+
+            case 'btih':
+                return preg_match('/^[a-f0-9]{40}$/i', $hash);
+
+            case 'magnet':
+                return str_starts_with(strtolower($hash), 'magnet:?xt=');
+
+            default:
+                return !empty($hash);
+        }
+    }
+
+    /**
+     * استخراج خلاصه هش‌ها برای لاگ
+     */
+    private function extractHashesFromData(array $data): array
+    {
+        $hashes = [];
+
+        $hashFields = ['md5', 'sha1', 'sha256', 'crc32', 'ed2k', 'btih', 'magnet'];
+
+        foreach ($hashFields as $field) {
+            if (!empty($data[$field])) {
+                $hashes[$field] = substr($data[$field], 0, 16) . (strlen($data[$field]) > 16 ? '...' : '');
+            }
+        }
+
+        // بررسی ساختار تودرتو
+        if (isset($data['hashes']) && is_array($data['hashes'])) {
+            foreach ($data['hashes'] as $key => $value) {
+                if (!empty($value) && in_array($key, $hashFields)) {
+                    $hashes[$key] = substr($value, 0, 16) . (strlen($value) > 16 ? '...' : '');
+                }
+            }
+        }
+
+        return $hashes;
     }
 
     private function recordBookSource(int $bookId, string $sourceName, int $sourceId): void
@@ -148,7 +298,13 @@ class BookProcessor
         return [
             'source_id' => $sourceId,
             'action' => 'created',
-            'stats' => ['total' => 1, 'success' => 1, 'failed' => 0, 'duplicate' => 0],
+            'stats' => [
+                'total_processed' => 1,
+                'total_success' => 1,
+                'total_failed' => 0,
+                'total_duplicate' => 0,
+                'total_enhanced' => 0
+            ],
             'book_id' => $book->id,
             'title' => $book->title
         ];
@@ -172,10 +328,19 @@ class BookProcessor
         return [
             'source_id' => $sourceId,
             'action' => 'failed',
-            'stats' => ['total' => 1, 'success' => 0, 'failed' => 1, 'duplicate' => 0]
+            'stats' => [
+                'total_processed' => 1,
+                'total_success' => 0,
+                'total_failed' => 1,
+                'total_duplicate' => 0,
+                'total_enhanced' => 0
+            ]
         ];
     }
 
+    /**
+     * تعیین آمار بر اساس نتیجه بروزرسانی - اصلاح شده
+     */
     private function determineStatsFromUpdate(array $updateResult): array
     {
         $action = $updateResult['action'];
@@ -185,28 +350,31 @@ class BookProcessor
             case 'enriched':
             case 'merged':
                 return [
-                    'total' => 1,
-                    'success' => 1,
-                    'failed' => 0,
-                    'duplicate' => 0,
-                    'enhanced' => 1
+                    'total_processed' => 1,
+                    'total_success' => 0,
+                    'total_failed' => 0,
+                    'total_duplicate' => 0,
+                    'total_enhanced' => 1
                 ];
 
             case 'updated':
                 return [
-                    'total' => 1,
-                    'success' => 0,
-                    'failed' => 0,
-                    'duplicate' => 1,
-                    'updated' => 1
+                    'total_processed' => 1,
+                    'total_success' => 0,
+                    'total_failed' => 0,
+                    'total_duplicate' => 1,
+                    'total_enhanced' => 0
                 ];
 
+            case 'no_changes':
+            case 'unchanged':
             default:
                 return [
-                    'total' => 1,
-                    'success' => 0,
-                    'failed' => 0,
-                    'duplicate' => 1
+                    'total_processed' => 1,
+                    'total_success' => 0,
+                    'total_failed' => 0,
+                    'total_duplicate' => 1,
+                    'total_enhanced' => 0
                 ];
         }
     }

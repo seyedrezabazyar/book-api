@@ -157,18 +157,30 @@ class Config extends Model
     }
 
     /**
-     * بروزرسانی آخرین source_id و آمار
+     * بروزرسانی آمار با منطق بهبود یافته
      */
     public function updateProgress(int $sourceId, array $stats): void
     {
         try {
             \Illuminate\Support\Facades\DB::transaction(function () use ($sourceId, $stats) {
-                $this->increment('total_processed', $stats['total'] ?? 0);
-                $this->increment('total_success', $stats['success'] ?? 0);
-                $this->increment('total_failed', $stats['failed'] ?? 0);
+                // استخراج آمار با کلیدهای مختلف
+                $totalToAdd = $this->extractStatValue($stats, ['total_processed', 'total']);
+                $successToAdd = $this->extractStatValue($stats, ['total_success', 'success']);
+                $failedToAdd = $this->extractStatValue($stats, ['total_failed', 'failed']);
+
+                // بروزرسانی آمار
+                if ($totalToAdd > 0) {
+                    $this->increment('total_processed', $totalToAdd);
+                }
+                if ($successToAdd > 0) {
+                    $this->increment('total_success', $successToAdd);
+                }
+                if ($failedToAdd > 0) {
+                    $this->increment('total_failed', $failedToAdd);
+                }
 
                 // بروزرسانی آخرین ID اگر بزرگتر باشد
-                if ($sourceId > $this->last_source_id) {
+                if ($sourceId > ($this->last_source_id ?? 0)) {
                     $this->update([
                         'last_source_id' => $sourceId,
                         'current_page' => $sourceId,
@@ -177,26 +189,45 @@ class Config extends Model
                 }
             });
 
-            Log::info("📊 آمار کانفیگ بروزرسانی شد", [
+            Log::debug("📊 آمار کانفیگ بروزرسانی شد", [
                 'config_id' => $this->id,
                 'source_id' => $sourceId,
-                'stats' => $stats,
+                'stats_added' => [
+                    'total_processed' => $totalToAdd,
+                    'total_success' => $successToAdd,
+                    'total_failed' => $failedToAdd
+                ],
                 'new_totals' => [
-                    'total_processed' => $this->total_processed,
-                    'total_success' => $this->total_success,
-                    'total_failed' => $this->total_failed
+                    'total_processed' => $this->fresh()->total_processed,
+                    'total_success' => $this->fresh()->total_success,
+                    'total_failed' => $this->fresh()->total_failed
                 ]
             ]);
         } catch (\Exception $e) {
-            Log::error("خطا در بروزرسانی آمار کانفیگ", [
+            Log::error("❌ خطا در بروزرسانی آمار کانفیگ", [
                 'config_id' => $this->id,
+                'source_id' => $sourceId,
+                'stats' => $stats,
                 'error' => $e->getMessage()
             ]);
         }
     }
 
     /**
-     * همگام‌سازی آمار از لاگ‌ها
+     * استخراج مقدار آمار با کلیدهای مختلف
+     */
+    private function extractStatValue(array $stats, array $possibleKeys): int
+    {
+        foreach ($possibleKeys as $key) {
+            if (isset($stats[$key]) && is_numeric($stats[$key])) {
+                return (int)$stats[$key];
+            }
+        }
+        return 0;
+    }
+
+    /**
+     * همگام‌سازی آمار از لاگ‌ها - بهبود یافته
      */
     public function syncStatsFromLogs(): void
     {
@@ -204,28 +235,28 @@ class Config extends Model
             $stats = $this->executionLogs()
                 ->whereIn('status', ['completed', 'stopped'])
                 ->selectRaw('
-                SUM(total_processed) as total_processed,
-                SUM(total_success) as total_success,
-                SUM(total_failed) as total_failed,
-                SUM(total_enhanced) as total_enhanced
-            ')
+                    SUM(total_processed) as total_processed,
+                    SUM(total_success) as total_success,
+                    SUM(total_failed) as total_failed,
+                    SUM(total_enhanced) as total_enhanced,
+                    SUM(total_duplicate) as total_duplicate
+                ')
                 ->first();
 
-            if ($stats) {
-                $this->update([
-                    'total_processed' => $stats->total_processed ?? 0,
-                    'total_success' => $stats->total_success ?? 0,
-                    'total_failed' => $stats->total_failed ?? 0,
-                ]);
+            if ($stats && $stats->total_processed > 0) {
+                $updateData = [
+                    'total_processed' => $stats->total_processed,
+                    'total_success' => $stats->total_success,
+                    'total_failed' => $stats->total_failed,
+                ];
+
+                $this->update($updateData);
 
                 Log::info("🔄 آمار کانفیگ از لاگ‌ها همگام‌سازی شد", [
                     'config_id' => $this->id,
-                    'synced_stats' => [
-                        'total_processed' => $stats->total_processed,
-                        'total_success' => $stats->total_success,
-                        'total_enhanced' => $stats->total_enhanced,
-                        'total_failed' => $stats->total_failed,
-                    ]
+                    'synced_stats' => $updateData,
+                    'total_enhanced' => $stats->total_enhanced,
+                    'total_duplicate' => $stats->total_duplicate
                 ]);
             }
         } catch (\Exception $e) {
@@ -233,6 +264,60 @@ class Config extends Model
                 'config_id' => $this->id,
                 'error' => $e->getMessage()
             ]);
+        }
+    }
+
+    /**
+     * دریافت آمار کامل شامل enhanced
+     */
+    public function getCompleteStats(): array
+    {
+        try {
+            $stats = $this->executionLogs()
+                ->whereIn('status', ['completed', 'stopped'])
+                ->selectRaw('
+                    SUM(total_processed) as total_processed,
+                    SUM(total_success) as total_success,
+                    SUM(total_failed) as total_failed,
+                    SUM(total_enhanced) as total_enhanced,
+                    SUM(total_duplicate) as total_duplicate
+                ')
+                ->first();
+
+            $totalEnhanced = $stats ? ($stats->total_enhanced ?? 0) : 0;
+            $totalDuplicate = $stats ? ($stats->total_duplicate ?? 0) : 0;
+
+            $realSuccessCount = $this->total_success + $totalEnhanced;
+            $realSuccessRate = $this->total_processed > 0 ?
+                round(($realSuccessCount / $this->total_processed) * 100, 2) : 0;
+
+            return [
+                'total_processed' => $this->total_processed,
+                'total_success' => $this->total_success,
+                'total_failed' => $this->total_failed,
+                'total_enhanced' => $totalEnhanced,
+                'total_duplicate' => $totalDuplicate,
+                'real_success_count' => $realSuccessCount,
+                'real_success_rate' => $realSuccessRate,
+                'enhancement_rate' => $this->total_processed > 0 ?
+                    round(($totalEnhanced / $this->total_processed) * 100, 2) : 0
+            ];
+        } catch (\Exception $e) {
+            Log::error("❌ خطا در دریافت آمار کامل", [
+                'config_id' => $this->id,
+                'error' => $e->getMessage()
+            ]);
+
+            return [
+                'total_processed' => $this->total_processed ?? 0,
+                'total_success' => $this->total_success ?? 0,
+                'total_failed' => $this->total_failed ?? 0,
+                'total_enhanced' => 0,
+                'total_duplicate' => 0,
+                'real_success_count' => $this->total_success ?? 0,
+                'real_success_rate' => 0,
+                'enhancement_rate' => 0
+            ];
         }
     }
 

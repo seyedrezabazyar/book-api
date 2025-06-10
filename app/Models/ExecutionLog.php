@@ -62,35 +62,51 @@ class ExecutionLog extends Model
         return $query->orderBy('created_at', 'desc');
     }
 
+    /**
+     * نرخ موفقیت ساده (فقط success)
+     */
     public function getSuccessRateAttribute(): float
     {
         if ($this->total_processed === 0) return 0;
-        return round(($this->total_success / $this->total_processed) * 100, 1);
+        return round(($this->total_success / $this->total_processed) * 100, 2);
     }
 
     /**
-     * دریافت نرخ موفقیت واقعی (شامل کتاب‌های بهبود یافته)
+     * نرخ موفقیت واقعی (شامل کتاب‌های بهبود یافته)
      */
     public function getRealSuccessRateAttribute(): float
     {
         if ($this->total_processed === 0) return 0;
 
         $realSuccess = $this->total_success + $this->total_enhanced;
-        return round(($realSuccess / $this->total_processed) * 100, 1);
+        return round(($realSuccess / $this->total_processed) * 100, 2);
     }
 
+    /**
+     * ایجاد ExecutionLog جدید
+     */
     public static function createNew(Config $config): self
     {
         return self::create([
             'config_id' => $config->id,
-            'execution_id' => uniqid('exec_'),
+            'execution_id' => uniqid('exec_' . time() . '_'),
             'status' => self::STATUS_RUNNING,
             'started_at' => now(),
             'last_activity_at' => now(),
             'log_details' => [],
+            'total_processed' => 0,
+            'total_success' => 0,
+            'total_failed' => 0,
+            'total_duplicate' => 0,
+            'total_enhanced' => 0,
+            'execution_time' => 0,
+            'success_rate' => 0,
         ]);
     }
 
+    /**
+     * افزودن ورودی لاگ
+     */
     public function addLogEntry(string $message, array $context = []): void
     {
         try {
@@ -153,14 +169,21 @@ class ExecutionLog extends Model
     }
 
     /**
-     * بروزرسانی پیشرفت با آمار جدید
+     * بروزرسانی پیشرفت با آمار جدید - اصلاح شده
      */
     public function updateProgress(array $pageStats): void
     {
-        Log::info("📊 بروزرسانی ExecutionLog progress", [
+        Log::debug("📊 شروع بروزرسانی ExecutionLog progress", [
             'log_id' => $this->id,
             'execution_id' => $this->execution_id,
-            'incoming_stats' => $pageStats
+            'incoming_stats' => $pageStats,
+            'current_stats' => [
+                'total_processed' => $this->total_processed,
+                'total_success' => $this->total_success,
+                'total_enhanced' => $this->total_enhanced,
+                'total_failed' => $this->total_failed,
+                'total_duplicate' => $this->total_duplicate,
+            ]
         ]);
 
         try {
@@ -171,24 +194,24 @@ class ExecutionLog extends Model
                     throw new \Exception("ExecutionLog {$this->id} یافت نشد");
                 }
 
-                // آمار سنتی
-                $totalToAdd = is_numeric($pageStats['total'] ?? 0) ? (int)($pageStats['total'] ?? 0) : 0;
-                $successToAdd = is_numeric($pageStats['success'] ?? 0) ? (int)($pageStats['success'] ?? 0) : 0;
-                $failedToAdd = is_numeric($pageStats['failed'] ?? 0) ? (int)($pageStats['failed'] ?? 0) : 0;
-                $duplicateToAdd = is_numeric($pageStats['duplicate'] ?? 0) ? (int)($pageStats['duplicate'] ?? 0) : 0;
+                // پردازش آمار ورودی با کلیدهای استاندارد
+                $totalToAdd = $this->extractStatValue($pageStats, ['total_processed', 'total']);
+                $successToAdd = $this->extractStatValue($pageStats, ['total_success', 'success']);
+                $failedToAdd = $this->extractStatValue($pageStats, ['total_failed', 'failed']);
+                $duplicateToAdd = $this->extractStatValue($pageStats, ['total_duplicate', 'duplicate']);
+                $enhancedToAdd = $this->extractStatValue($pageStats, ['total_enhanced', 'enhanced']);
 
-                // آمار جدید
-                $enhancedToAdd = is_numeric($pageStats['enhanced'] ?? 0) ? (int)($pageStats['enhanced'] ?? 0) : 0;
-
+                // بروزرسانی آمار
                 $log->increment('total_processed', $totalToAdd);
                 $log->increment('total_success', $successToAdd);
                 $log->increment('total_failed', $failedToAdd);
                 $log->increment('total_duplicate', $duplicateToAdd);
                 $log->increment('total_enhanced', $enhancedToAdd);
 
-                // محاسبه نرخ موفقیت جدید
-                $newTotal = $log->total_processed + $totalToAdd;
-                $newActualSuccess = ($log->total_success + $successToAdd) + ($log->total_enhanced + $enhancedToAdd);
+                // محاسبه و بروزرسانی نرخ موفقیت
+                $log->refresh(); // دریافت مقادیر جدید
+                $newTotal = $log->total_processed;
+                $newActualSuccess = $log->total_success + $log->total_enhanced;
                 $newSuccessRate = $newTotal > 0 ? round(($newActualSuccess / $newTotal) * 100, 2) : 0;
 
                 $log->update([
@@ -207,29 +230,52 @@ class ExecutionLog extends Model
                     'total_enhanced' => $this->total_enhanced,
                     'total_failed' => $this->total_failed,
                     'total_duplicate' => $this->total_duplicate,
-                    'success_rate' => $this->success_rate
+                    'success_rate' => $this->success_rate,
+                    'real_success_rate' => $this->real_success_rate
                 ]
             ]);
 
             Log::info("✅ ExecutionLog progress بروزرسانی شد", [
                 'log_id' => $this->id,
                 'execution_id' => $this->execution_id,
+                'added_stats' => [
+                    'total_processed' => $totalToAdd,
+                    'total_success' => $successToAdd,
+                    'total_enhanced' => $enhancedToAdd,
+                    'total_failed' => $failedToAdd,
+                    'total_duplicate' => $duplicateToAdd
+                ],
                 'final_stats' => [
                     'total_processed' => $this->total_processed,
                     'total_success' => $this->total_success,
                     'total_enhanced' => $this->total_enhanced,
                     'total_failed' => $this->total_failed,
-                    'total_duplicate' => $this->total_duplicate
+                    'total_duplicate' => $this->total_duplicate,
+                    'real_success_rate' => $this->real_success_rate
                 ]
             ]);
         } catch (\Exception $e) {
             Log::error("❌ خطا در بروزرسانی ExecutionLog progress", [
                 'log_id' => $this->id,
                 'error' => $e->getMessage(),
-                'pageStats' => $pageStats
+                'pageStats' => $pageStats,
+                'trace' => $e->getTraceAsString()
             ]);
             throw $e;
         }
+    }
+
+    /**
+     * استخراج مقدار آمار با کلیدهای مختلف
+     */
+    private function extractStatValue(array $stats, array $possibleKeys): int
+    {
+        foreach ($possibleKeys as $key) {
+            if (isset($stats[$key]) && is_numeric($stats[$key])) {
+                return (int)$stats[$key];
+            }
+        }
+        return 0;
     }
 
     /**
@@ -237,32 +283,79 @@ class ExecutionLog extends Model
      */
     public function markCompleted(array $stats): void
     {
-        $executionTime = $this->started_at ? now()->diffInSeconds($this->started_at) : 0;
+        try {
+            $executionTime = $this->calculateExecutionTime();
 
-        $this->update([
-            'status' => self::STATUS_COMPLETED,
-            'total_processed' => $stats['total'] ?? 0,
-            'total_success' => $stats['success'] ?? 0,
-            'total_failed' => $stats['failed'] ?? 0,
-            'total_duplicate' => $stats['duplicate'] ?? 0,
-            'total_enhanced' => $stats['enhanced'] ?? 0,
-            'execution_time' => $stats['execution_time'] ?? $executionTime,
-            'finished_at' => now(),
-            'last_activity_at' => now(),
-        ]);
+            // استخراج آمار نهایی
+            $finalStats = [
+                'total_processed' => $this->extractStatValue($stats, ['total_processed', 'total']) ?: $this->total_processed,
+                'total_success' => $this->extractStatValue($stats, ['total_success', 'success']) ?: $this->total_success,
+                'total_failed' => $this->extractStatValue($stats, ['total_failed', 'failed']) ?: $this->total_failed,
+                'total_duplicate' => $this->extractStatValue($stats, ['total_duplicate', 'duplicate']) ?: $this->total_duplicate,
+                'total_enhanced' => $this->extractStatValue($stats, ['total_enhanced', 'enhanced']) ?: $this->total_enhanced,
+            ];
 
-        // بروزرسانی آمار کانفیگ
-        $this->config?->syncStatsFromLogs();
+            // محاسبه نرخ موفقیت نهایی
+            $totalProcessed = $finalStats['total_processed'];
+            $realSuccess = $finalStats['total_success'] + $finalStats['total_enhanced'];
+            $finalSuccessRate = $totalProcessed > 0 ? round(($realSuccess / $totalProcessed) * 100, 2) : 0;
 
-        $this->addLogEntry('✅ اجرا با موفقیت تمام شد', [
-            'final_stats' => $stats,
-            'execution_time' => $executionTime
-        ]);
+            $this->update([
+                'status' => self::STATUS_COMPLETED,
+                'total_processed' => $finalStats['total_processed'],
+                'total_success' => $finalStats['total_success'],
+                'total_failed' => $finalStats['total_failed'],
+                'total_duplicate' => $finalStats['total_duplicate'],
+                'total_enhanced' => $finalStats['total_enhanced'],
+                'execution_time' => $executionTime,
+                'success_rate' => $finalSuccessRate,
+                'finished_at' => now(),
+                'last_activity_at' => now(),
+            ]);
+
+            // بروزرسانی آمار کانفیگ
+            $this->config?->syncStatsFromLogs();
+
+            $this->addLogEntry('✅ اجرا با موفقیت تمام شد', [
+                'final_stats' => $finalStats,
+                'execution_time_seconds' => $executionTime,
+                'final_success_rate' => $finalSuccessRate,
+                'real_success_rate' => $this->real_success_rate
+            ]);
+
+            Log::info("✅ ExecutionLog مارک completed شد", [
+                'execution_id' => $this->execution_id,
+                'execution_time' => $executionTime,
+                'final_stats' => $finalStats,
+                'success_rate' => $finalSuccessRate
+            ]);
+        } catch (\Exception $e) {
+            Log::error("❌ خطا در markCompleted", [
+                'execution_id' => $this->execution_id,
+                'error' => $e->getMessage(),
+                'stats' => $stats
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * محاسبه زمان اجرا
+     */
+    private function calculateExecutionTime(): float
+    {
+        if ($this->started_at) {
+            $endTime = $this->finished_at ?: now();
+            $seconds = $this->started_at->diffInSeconds($endTime);
+            return max(0, $seconds); // اطمینان از مثبت بودن
+        }
+
+        return 0;
     }
 
     public function markFailed(string $errorMessage): void
     {
-        $executionTime = $this->started_at ? now()->diffInSeconds($this->started_at) : 0;
+        $executionTime = $this->calculateExecutionTime();
 
         $this->update([
             'status' => self::STATUS_FAILED,
@@ -274,7 +367,7 @@ class ExecutionLog extends Model
 
         $this->addLogEntry('❌ اجرا با خطا متوقف شد', [
             'error' => $errorMessage,
-            'execution_time' => $executionTime
+            'execution_time_seconds' => $executionTime
         ]);
     }
 
@@ -284,26 +377,31 @@ class ExecutionLog extends Model
     public function stop(array $finalStats = []): void
     {
         try {
-            $executionTime = $this->started_at ? now()->diffInSeconds($this->started_at) : 0;
-            $executionTime = max(0, $executionTime);
+            $executionTime = $this->calculateExecutionTime();
 
             $config = $this->config;
             $actualStats = [
-                'total_processed' => $config ? $config->total_processed : 0,
-                'total_success' => $config ? $config->total_success : 0,
-                'total_failed' => $config ? $config->total_failed : 0,
-                'total_enhanced' => $this->total_enhanced
+                'total_processed' => $this->total_processed,
+                'total_success' => $this->total_success,
+                'total_failed' => $this->total_failed,
+                'total_enhanced' => $this->total_enhanced,
+                'total_duplicate' => $this->total_duplicate
             ];
+
+            // محاسبه نرخ موفقیت نهایی
+            $realSuccess = $actualStats['total_success'] + $actualStats['total_enhanced'];
+            $finalSuccessRate = $actualStats['total_processed'] > 0 ?
+                round(($realSuccess / $actualStats['total_processed']) * 100, 2) : 0;
 
             $this->update([
                 'status' => self::STATUS_STOPPED,
                 'total_processed' => max($finalStats['total_processed_at_stop'] ?? 0, $actualStats['total_processed']),
                 'total_success' => max($finalStats['total_success_at_stop'] ?? 0, $actualStats['total_success']),
                 'total_failed' => max($finalStats['total_failed_at_stop'] ?? 0, $actualStats['total_failed']),
-                'total_duplicate' => $finalStats['total_duplicate_at_stop'] ?? $this->total_duplicate,
-                'total_enhanced' => $finalStats['total_enhanced_at_stop'] ?? $this->total_enhanced,
+                'total_duplicate' => max($finalStats['total_duplicate_at_stop'] ?? 0, $actualStats['total_duplicate']),
+                'total_enhanced' => max($finalStats['total_enhanced_at_stop'] ?? 0, $actualStats['total_enhanced']),
                 'execution_time' => $executionTime,
-                'success_rate' => $this->calculateFinalSuccessRate($actualStats),
+                'success_rate' => $finalSuccessRate,
                 'stop_reason' => $finalStats['stopped_manually'] ?? false ? 'متوقف شده توسط کاربر' : 'متوقف شده',
                 'error_message' => $finalStats['stopped_manually'] ?? false ? 'متوقف شده توسط کاربر' : $this->error_message,
                 'finished_at' => now(),
@@ -318,13 +416,8 @@ class ExecutionLog extends Model
                 'stopped_manually' => $finalStats['stopped_manually'] ?? false,
                 'execution_time_seconds' => $executionTime,
                 'stopped_at' => now()->toISOString(),
-                'final_stats' => [
-                    'total_processed' => $this->total_processed,
-                    'total_success' => $this->total_success,
-                    'total_enhanced' => $this->total_enhanced,
-                    'total_failed' => $this->total_failed,
-                    'real_success_rate' => $this->real_success_rate
-                ]
+                'final_stats' => $actualStats,
+                'final_success_rate' => $finalSuccessRate
             ]);
 
             Log::info("⏹️ ExecutionLog متوقف شد", [
@@ -348,39 +441,17 @@ class ExecutionLog extends Model
     }
 
     /**
-     * محاسبه نرخ موفقیت نهایی
-     */
-    private function calculateFinalSuccessRate(array $stats): float
-    {
-        $totalProcessed = $stats['total_processed'] ?? $this->total_processed;
-        if ($totalProcessed <= 0) return 0;
-
-        $realSuccess = ($stats['total_success'] ?? $this->total_success) +
-            ($stats['total_enhanced'] ?? $this->total_enhanced);
-
-        return round(($realSuccess / $totalProcessed) * 100, 2);
-    }
-
-    /**
-     * محاسبه زمان اجرا صحیح
+     * دریافت زمان اجرا صحیح
      */
     public function getCorrectExecutionTime(): float
     {
+        // اولویت با زمان ذخیره شده
         if ($this->execution_time && $this->execution_time > 0) {
             return $this->execution_time;
         }
 
-        if ($this->started_at && $this->finished_at) {
-            $diff = $this->finished_at->diffInSeconds($this->started_at);
-            return max(0, $diff);
-        }
-
-        if ($this->started_at && $this->status === 'running') {
-            $diff = now()->diffInSeconds($this->started_at);
-            return max(0, $diff);
-        }
-
-        return 0;
+        // محاسبه از تاریخ‌ها
+        return $this->calculateExecutionTime();
     }
 
     /**
@@ -448,7 +519,9 @@ class ExecutionLog extends Model
     public function getStatsDetailedSummary(): string
     {
         if ($this->status === 'running') {
-            return 'در حال اجرا...';
+            $executionTime = $this->getCorrectExecutionTime();
+            $timeText = $executionTime > 0 ? ' (' . round($executionTime / 60, 1) . 'دقیقه)' : '';
+            return 'در حال اجرا' . $timeText;
         }
 
         $parts = [];
@@ -479,201 +552,14 @@ class ExecutionLog extends Model
             $parts[] = "📈 {$realSuccessRate}% موثر";
         }
 
-        return empty($parts) ? 'بدون آمار' : implode(' | ', $parts);
-    }
-
-    /**
-     * دریافت آمار عملکرد
-     */
-    public function getPerformanceStats(): array
-    {
-        $stats = [
-            'total_processed' => $this->total_processed,
-            'total_success' => $this->total_success,
-            'total_enhanced' => $this->total_enhanced,
-            'total_duplicate' => $this->total_duplicate,
-            'total_failed' => $this->total_failed,
-            'success_rate' => $this->success_rate,
-            'real_success_rate' => $this->real_success_rate,
-            'execution_time' => $this->execution_time
-        ];
-
-        // محاسبه آمار اضافی
-        if ($this->total_processed > 0) {
-            $stats['duplicate_rate'] = round(($this->total_duplicate / $this->total_processed) * 100, 1);
-            $stats['enhancement_rate'] = round(($this->total_enhanced / $this->total_processed) * 100, 1);
-            $stats['failure_rate'] = round(($this->total_failed / $this->total_processed) * 100, 1);
-        }
-
-        if ($this->execution_time > 0) {
-            $stats['records_per_second'] = round($this->total_processed / $this->execution_time, 2);
-            $stats['records_per_minute'] = round(($this->total_processed / $this->execution_time) * 60, 2);
-        }
-
-        return $stats;
-    }
-
-    /**
-     * دریافت خلاصه آمار برای نمایش
-     */
-    public function getStatsSummary(): string
-    {
-        if ($this->status === 'running') {
-            return 'در حال اجرا...';
-        }
-
-        $parts = [];
-
-        if ($this->total_processed > 0) {
-            $parts[] = "کل: " . number_format($this->total_processed);
-        }
-
-        if ($this->total_success > 0) {
-            $parts[] = "✅ " . number_format($this->total_success);
-        }
-
-        if ($this->total_failed > 0) {
-            $parts[] = "❌ " . number_format($this->total_failed);
-        }
-
-        if ($this->total_duplicate > 0) {
-            $parts[] = "🔄 " . number_format($this->total_duplicate);
+        // اضافه کردن زمان اجرا
+        $executionTime = $this->getCorrectExecutionTime();
+        if ($executionTime > 0) {
+            $timeText = $executionTime > 60 ? round($executionTime / 60, 1) . 'دقیقه' : round($executionTime) . 'ثانیه';
+            $parts[] = "⏱️ {$timeText}";
         }
 
         return empty($parts) ? 'بدون آمار' : implode(' | ', $parts);
-    }
-
-    /**
-     * اطلاعات کامل لاگ برای debugging
-     */
-    public function getDebugInfo(): array
-    {
-        return [
-            'id' => $this->id,
-            'execution_id' => $this->execution_id,
-            'config_id' => $this->config_id,
-            'status' => $this->status,
-            'stats' => [
-                'total_processed' => $this->total_processed,
-                'total_success' => $this->total_success,
-                'total_enhanced' => $this->total_enhanced,
-                'total_duplicate' => $this->total_duplicate,
-                'total_failed' => $this->total_failed,
-                'success_rate' => $this->success_rate,
-                'real_success_rate' => $this->real_success_rate,
-            ],
-            'timing' => [
-                'started_at' => $this->started_at?->toISOString(),
-                'finished_at' => $this->finished_at?->toISOString(),
-                'last_activity_at' => $this->last_activity_at?->toISOString(),
-                'execution_time' => $this->execution_time,
-                'correct_execution_time' => $this->getCorrectExecutionTime(),
-            ],
-            'errors' => [
-                'error_message' => $this->error_message,
-                'stop_reason' => $this->stop_reason,
-            ],
-            'log_entries_count' => is_array($this->log_details) ? count($this->log_details) : 0,
-        ];
-    }
-
-    /**
-     * صادرات آمار برای گزارش
-     */
-    public function exportStats(): array
-    {
-        $executionTime = $this->getCorrectExecutionTime();
-
-        return [
-            'execution_info' => [
-                'id' => $this->execution_id,
-                'config_name' => $this->config?->name,
-                'started_at' => $this->started_at?->format('Y-m-d H:i:s'),
-                'finished_at' => $this->finished_at?->format('Y-m-d H:i:s'),
-                'duration_seconds' => $executionTime,
-                'status' => $this->status_text,
-            ],
-            'processing_stats' => [
-                'total_processed' => $this->total_processed,
-                'total_success' => $this->total_success,
-                'total_enhanced' => $this->total_enhanced,
-                'total_duplicate' => $this->total_duplicate,
-                'total_failed' => $this->total_failed,
-            ],
-            'performance_metrics' => [
-                'success_rate_percent' => $this->success_rate,
-                'real_success_rate_percent' => $this->real_success_rate,
-                'records_per_second' => $executionTime > 0 ? round($this->total_processed / $executionTime, 2) : 0,
-                'efficiency_score' => $this->calculateEfficiencyScore(),
-            ]
-        ];
-    }
-
-    /**
-     * محاسبه امتیاز کارایی
-     */
-    private function calculateEfficiencyScore(): float
-    {
-        if ($this->total_processed <= 0) return 0;
-
-        $realSuccess = $this->total_success + $this->total_enhanced;
-        $realSuccessRate = ($realSuccess / $this->total_processed) * 100;
-        $failureRate = ($this->total_failed / $this->total_processed) * 100;
-
-        // امتیاز بر اساس موفقیت واقعی و کمینه کردن خطا
-        $score = $realSuccessRate - ($failureRate * 0.5);
-
-        return round(max(0, min(100, $score)), 1);
-    }
-
-    /**
-     * بررسی سلامت اجرا
-     */
-    public function getHealthStatus(): array
-    {
-        $health = [
-            'overall' => 'good',
-            'issues' => [],
-            'warnings' => [],
-            'recommendations' => []
-        ];
-
-        // بررسی نرخ خطا
-        if ($this->total_processed > 0) {
-            $failureRate = ($this->total_failed / $this->total_processed) * 100;
-
-            if ($failureRate > 50) {
-                $health['overall'] = 'critical';
-                $health['issues'][] = "نرخ خطای بالا: {$failureRate}%";
-            } elseif ($failureRate > 20) {
-                $health['overall'] = 'warning';
-                $health['warnings'][] = "نرخ خطای متوسط: {$failureRate}%";
-            }
-        }
-
-        // بررسی زمان اجرا
-        $executionTime = $this->getCorrectExecutionTime();
-        if ($executionTime > 3600) { // بیش از 1 ساعت
-            $health['warnings'][] = "زمان اجرای طولانی: " . gmdate('H:i:s', $executionTime);
-            $health['recommendations'][] = "تنظیمات delay و batch size را بررسی کنید";
-        }
-
-        // بررسی وضعیت نامتعارف
-        if ($this->status === 'running' && $this->last_activity_at < now()->subMinutes(30)) {
-            $health['overall'] = 'critical';
-            $health['issues'][] = "اجرا ممکن است متوقف شده باشد (آخرین فعالیت: " . $this->last_activity_at?->diffForHumans() . ")";
-        }
-
-        // بررسی نرخ تأثیرگذاری
-        if ($this->total_processed > 0) {
-            $impactRate = $this->real_success_rate;
-            if ($impactRate < 10) {
-                $health['warnings'][] = "نرخ تأثیرگذاری پایین: {$impactRate}%";
-                $health['recommendations'][] = "تنظیمات منبع داده و API را بررسی کنید";
-            }
-        }
-
-        return $health;
     }
 
     /**
@@ -682,12 +568,13 @@ class ExecutionLog extends Model
     public function getQuickSummary(): string
     {
         if ($this->status === 'running') {
-            $runtime = $this->started_at ? now()->diffInMinutes($this->started_at) : 0;
-            return "🔄 در حال اجرا ({$runtime} دقیقه) - {$this->total_processed} پردازش شده";
+            $runtime = $this->getCorrectExecutionTime();
+            $timeText = $runtime > 60 ? round($runtime / 60, 1) . 'دقیقه' : round($runtime) . 'ثانیه';
+            return "🔄 در حال اجرا ({$timeText}) - {$this->total_processed} پردازش شده";
         }
 
         $executionTime = $this->getCorrectExecutionTime();
-        $timeText = $executionTime > 60 ? round($executionTime / 60, 1) . 'دقیقه' : $executionTime . 'ثانیه';
+        $timeText = $executionTime > 60 ? round($executionTime / 60, 1) . 'دقیقه' : round($executionTime) . 'ثانیه';
 
         return "{$this->status_text} در {$timeText} - {$this->total_processed} پردازش، {$this->real_success_rate}% موثر";
     }

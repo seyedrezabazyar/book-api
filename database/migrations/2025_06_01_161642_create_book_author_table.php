@@ -1,9 +1,9 @@
 <?php
-// فایل: database/migrations/2025_06_01_161642_create_book_author_table.php
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\DB;
 
 return new class extends Migration
 {
@@ -14,20 +14,31 @@ return new class extends Migration
             $table->unsignedBigInteger('author_id')->index();
             $table->timestamps();
 
-            // کلید اصلی ترکیبی
             $table->primary(['book_id', 'author_id']);
-
-            // Foreign Keys
             $table->foreign('book_id')->references('id')->on('books')->onDelete('cascade');
             $table->foreign('author_id')->references('id')->on('authors')->onDelete('cascade');
-
-            // ایندکس برای جستجوی معکوس (کتاب‌های یک نویسنده)
-            $table->index(['author_id', 'book_id']);
+            $table->index(['author_id', 'book_id'], 'idx_author_book');
         });
+
+        // Update existing records
+        if (Schema::hasTable('book_author')) {
+            DB::table('book_author')
+                ->whereNull('created_at')
+                ->update([
+                    'created_at' => now(),
+                    'updated_at' => now()
+                ]);
+        }
     }
 
     public function down(): void
     {
+        if (Schema::hasTable('book_author')) {
+            Schema::table('book_author', function (Blueprint $table) {
+                $table->dropIndex('idx_author_book');
+                $table->dropTimestamps();
+            });
+        }
         Schema::dropIfExists('book_author');
     }
 };

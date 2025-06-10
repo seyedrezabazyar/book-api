@@ -38,7 +38,18 @@ class ApiDataService
             // بررسی تکراری بودن
             if ($this->bookProcessor->isSourceAlreadyProcessed($this->config->source_name, $sourceId)) {
                 $executionLog->addLogEntry("⏭️ Source ID {$sourceId} قبلاً پردازش شده");
-                return $this->buildResult($sourceId, 'skipped', ['total' => 0, 'success' => 0, 'failed' => 0, 'duplicate' => 1]);
+
+                $stats = [
+                    'total_processed' => 1,
+                    'total_success' => 0,
+                    'total_failed' => 0,
+                    'total_duplicate' => 1,
+                    'total_enhanced' => 0
+                ];
+
+                $this->updateStats($executionLog, $stats);
+
+                return $this->buildResult($sourceId, 'skipped', $stats);
             }
 
             // درخواست API
@@ -46,32 +57,109 @@ class ApiDataService
 
             if (!$response->successful()) {
                 $this->logFailure($sourceId, "HTTP {$response->status()}: {$response->reason()}");
-                return $this->buildResult($sourceId, 'failed', ['total' => 1, 'success' => 0, 'failed' => 1, 'duplicate' => 0]);
+
+                $stats = [
+                    'total_processed' => 1,
+                    'total_success' => 0,
+                    'total_failed' => 1,
+                    'total_duplicate' => 0,
+                    'total_enhanced' => 0
+                ];
+
+                $this->updateStats($executionLog, $stats);
+
+                return $this->buildResult($sourceId, 'failed', $stats);
             }
 
             // استخراج داده‌ها
             $data = $response->json();
             if (empty($data)) {
                 $this->logFailure($sourceId, 'پاسخ API خالی است');
-                return $this->buildResult($sourceId, 'no_book_found', ['total' => 1, 'success' => 0, 'failed' => 1, 'duplicate' => 0]);
+
+                $stats = [
+                    'total_processed' => 1,
+                    'total_success' => 0,
+                    'total_failed' => 1,
+                    'total_duplicate' => 0,
+                    'total_enhanced' => 0
+                ];
+
+                $this->updateStats($executionLog, $stats);
+
+                return $this->buildResult($sourceId, 'no_book_found', $stats);
             }
 
             $bookData = $this->extractBookData($data, $sourceId);
             if (empty($bookData) || empty($bookData['title'])) {
                 $this->logFailure($sourceId, 'ساختار کتاب در پاسخ API یافت نشد');
-                return $this->buildResult($sourceId, 'no_book_found', ['total' => 1, 'success' => 0, 'failed' => 1, 'duplicate' => 0]);
+
+                $stats = [
+                    'total_processed' => 1,
+                    'total_success' => 0,
+                    'total_failed' => 1,
+                    'total_duplicate' => 0,
+                    'total_enhanced' => 0
+                ];
+
+                $this->updateStats($executionLog, $stats);
+
+                return $this->buildResult($sourceId, 'no_book_found', $stats);
             }
 
             // پردازش کتاب
-            return $this->bookProcessor->processBook($bookData, $sourceId, $this->config, $executionLog);
+            $result = $this->bookProcessor->processBook($bookData, $sourceId, $this->config, $executionLog);
+
+            // بروزرسانی آمار از نتیجه BookProcessor
+            if (isset($result['stats'])) {
+                $this->updateStats($executionLog, $result['stats']);
+            }
+
+            return $result;
 
         } catch (\Exception $e) {
             Log::error("❌ خطا در پردازش source ID {$sourceId}", [
                 'config_id' => $this->config->id,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
 
-            return $this->buildResult($sourceId, 'failed', ['total' => 1, 'success' => 0, 'failed' => 1, 'duplicate' => 0]);
+            $stats = [
+                'total_processed' => 1,
+                'total_success' => 0,
+                'total_failed' => 1,
+                'total_duplicate' => 0,
+                'total_enhanced' => 0
+            ];
+
+            $this->updateStats($executionLog, $stats);
+
+            return $this->buildResult($sourceId, 'failed', $stats);
+        }
+    }
+
+    /**
+     * بروزرسانی آمار ExecutionLog و Config
+     */
+    private function updateStats(ExecutionLog $executionLog, array $stats): void
+    {
+        try {
+            // بروزرسانی ExecutionLog
+            $executionLog->updateProgress($stats);
+
+            // بروزرسانی Config
+            $this->config->updateProgress($executionLog->id ?? 0, $stats);
+
+            Log::debug("📊 آمار بروزرسانی شد", [
+                'execution_id' => $executionLog->execution_id,
+                'stats' => $stats
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error("❌ خطا در بروزرسانی آمار", [
+                'execution_id' => $executionLog->execution_id,
+                'stats' => $stats,
+                'error' => $e->getMessage()
+            ]);
         }
     }
 
@@ -115,46 +203,66 @@ class ApiDataService
             $result['title'] = $book->title;
         }
 
-        // بروزرسانی آمار کانفیگ
-        $this->config->updateProgress($sourceId, $stats);
-
         return $result;
     }
 
     private function completeExecution(ExecutionLog $executionLog): array
     {
-        $finalStats = [
-            'total' => $this->config->total_processed,
-            'success' => $this->config->total_success,
-            'failed' => $this->config->total_failed,
-            'execution_time' => $executionLog->started_at ? now()->diffInSeconds($executionLog->started_at) : 0
-        ];
+        try {
+            // محاسبه آمار نهایی از ExecutionLog
+            $finalStats = [
+                'total_processed' => $executionLog->total_processed,
+                'total_success' => $executionLog->total_success,
+                'total_failed' => $executionLog->total_failed,
+                'total_duplicate' => $executionLog->total_duplicate,
+                'total_enhanced' => $executionLog->total_enhanced,
+                'execution_time' => $executionLog->started_at ? now()->diffInSeconds($executionLog->started_at) : 0
+            ];
 
-        $executionLog->markCompleted($finalStats);
-        $this->config->update(['is_running' => false]);
+            $executionLog->markCompleted($finalStats);
+            $this->config->update(['is_running' => false]);
 
-        Log::info("🎉 اجرا کامل شد", [
-            'config_id' => $this->config->id,
-            'execution_id' => $executionLog->execution_id,
-            'final_stats' => $finalStats
-        ]);
+            Log::info("🎉 اجرا کامل شد", [
+                'config_id' => $this->config->id,
+                'execution_id' => $executionLog->execution_id,
+                'final_stats' => $finalStats
+            ]);
 
-        return ['action' => 'completed'];
+            return ['action' => 'completed', 'final_stats' => $finalStats];
+
+        } catch (\Exception $e) {
+            Log::error("❌ خطا در تکمیل اجرا", [
+                'config_id' => $this->config->id,
+                'execution_id' => $executionLog->execution_id,
+                'error' => $e->getMessage()
+            ]);
+
+            return ['action' => 'completed_with_error'];
+        }
     }
 
     private function logFailure(int $sourceId, string $reason): void
     {
-        ScrapingFailure::logFailure(
-            $this->config->id,
-            $this->config->buildApiUrl($sourceId),
-            "Source ID {$sourceId}: {$reason}",
-            [
+        try {
+            ScrapingFailure::logFailure(
+                $this->config->id,
+                $this->config->buildApiUrl($sourceId),
+                "Source ID {$sourceId}: {$reason}",
+                [
+                    'source_id' => $sourceId,
+                    'source_name' => $this->config->source_name,
+                    'reason' => $reason,
+                    'timestamp' => now()->toISOString()
+                ],
+                null,
+                404
+            );
+        } catch (\Exception $e) {
+            Log::error("❌ خطا در ثبت failure", [
                 'source_id' => $sourceId,
-                'source_name' => $this->config->source_name,
-                'reason' => $reason
-            ],
-            null,
-            404
-        );
+                'reason' => $reason,
+                'error' => $e->getMessage()
+            ]);
+        }
     }
 }
