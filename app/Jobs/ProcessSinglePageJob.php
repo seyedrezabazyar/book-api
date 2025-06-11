@@ -19,7 +19,6 @@ class ProcessSinglePageJob implements ShouldQueue
 
     public $timeout = 300; // 5 دقیقه
     public $tries = 2;
-    public $maxExceptions = 2;
 
     protected int $configId;
     protected string $executionId;
@@ -495,30 +494,6 @@ class ProcessSinglePageJob implements ShouldQueue
                 'error' => $e->getMessage()
             ]);
         }
-    }
-
-    /**
-     * تعریف شناسه منحصر به فرد برای Job
-     */
-    public function uniqueId(): string
-    {
-        return "intelligent_process_{$this->configId}_{$this->executionId}_{$this->sourceId}";
-    }
-
-    /**
-     * تعیین اینکه آیا Job باید منحصر به فرد باشد
-     */
-    public function shouldBeUnique(): bool
-    {
-        return true;
-    }
-
-    /**
-     * مدت زمان نگهداری منحصر به فرد بودن (ثانیه)
-     */
-    public function uniqueFor(): int
-    {
-        return 300; // 5 دقیقه
     }
 
     /**

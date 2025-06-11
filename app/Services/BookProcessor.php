@@ -68,6 +68,13 @@ class BookProcessor
      */
     private function handleExistingBook(Book $existingBook, array $newData, int $sourceId, Config $config, ExecutionLog $executionLog): array
     {
+        Log::info("📚 پردازش کتاب موجود", [
+            'book_id' => $existingBook->id,
+            'title' => $existingBook->title,
+            'source_id' => $sourceId,
+            'new_data_fields' => array_keys($newData)
+        ]);
+
         // 1. بررسی وجود منبع قبلی
         $sourceExists = BookSource::where('book_id', $existingBook->id)
             ->where('source_name', $config->source_name)
@@ -75,7 +82,6 @@ class BookProcessor
             ->exists();
 
         if ($sourceExists) {
-            // این source قبلاً ثبت شده - نیازی به پردازش مجدد نیست
             $executionLog->addLogEntry("⏭️ Source قبلاً ثبت شده", [
                 'book_id' => $existingBook->id,
                 'source_id' => $sourceId,
@@ -91,29 +97,23 @@ class BookProcessor
             ], $existingBook);
         }
 
-        // 2. مقایسه فیلدها و تصمیم‌گیری برای به‌روزرسانی
-        $comparisonResult = $this->compareBookFields($existingBook, $newData);
+        // 2. آنالیز جامع فیلدها برای تشخیص نیاز به آپدیت
+        $updateAnalysis = $this->analyzeUpdateNeeds($existingBook, $newData);
 
-        $executionLog->addLogEntry("📊 مقایسه فیلدهای کتاب", [
+        $executionLog->addLogEntry("🔍 آنالیز نیاز به آپدیت", [
             'book_id' => $existingBook->id,
             'source_id' => $sourceId,
-            'title' => $existingBook->title,
-            'fields_identical' => $comparisonResult['all_identical'],
-            'missing_fields' => $comparisonResult['missing_fields'],
-            'better_fields' => $comparisonResult['better_fields'],
-            'new_authors' => $comparisonResult['new_authors'],
-            'new_isbns' => $comparisonResult['new_isbns']
+            'analysis' => $updateAnalysis
         ]);
 
-        // 3. اگر همه فیلدها یکسان هستند
-        if ($comparisonResult['all_identical']) {
-            // فقط منبع جدید اضافه کن
+        // 3. اگر هیچ آپدیتی لازم نیست، فقط منبع را اضافه کن
+        if (!$updateAnalysis['needs_update']) {
             $this->recordBookSource($existingBook->id, $config->source_name, $sourceId);
 
-            $executionLog->addLogEntry("🔄 کتاب یکسان، فقط منبع جدید اضافه شد", [
+            $executionLog->addLogEntry("📌 فقط منبع جدید اضافه شد", [
                 'book_id' => $existingBook->id,
                 'source_id' => $sourceId,
-                'action' => 'source_only_added'
+                'reason' => 'no_updates_needed'
             ]);
 
             return $this->buildResult($sourceId, 'source_added', [
@@ -125,8 +125,8 @@ class BookProcessor
             ], $existingBook);
         }
 
-        // 4. اگر نیاز به به‌روزرسانی هست
-        $updateResult = $this->performSmartUpdate($existingBook, $newData, $comparisonResult);
+        // 4. انجام آپدیت هوشمند
+        $updateResult = $this->performIntelligentUpdate($existingBook, $newData, $updateAnalysis);
 
         // 5. ثبت منبع جدید
         $this->recordBookSource($existingBook->id, $config->source_name, $sourceId);
@@ -135,9 +135,9 @@ class BookProcessor
             'book_id' => $existingBook->id,
             'source_id' => $sourceId,
             'title' => $existingBook->title,
-            'update_action' => $updateResult['action'],
-            'changes_count' => count($updateResult['changes']),
-            'database_updated' => $updateResult['updated']
+            'update_summary' => $updateResult['summary'],
+            'fields_updated' => $updateResult['updated_fields'],
+            'database_changed' => $updateResult['database_updated']
         ]);
 
         return $this->buildResult($sourceId, $updateResult['action'], [
@@ -150,260 +150,416 @@ class BookProcessor
     }
 
     /**
-     * پردازش کتاب جدید
+     * آنالیز نیاز به آپدیت کتاب موجود
      */
-    private function handleNewBook(array $data, string $md5, int $sourceId, Config $config, ExecutionLog $executionLog): array
+    private function analyzeUpdateNeeds(Book $existingBook, array $newData): array
     {
-        // استخراج کامل هش‌ها
-        $hashData = $this->extractAllHashes($data, $md5);
-
-        Log::info("📦 ایجاد کتاب جدید با هش‌ها", [
-            'source_id' => $sourceId,
-            'title' => $data['title'],
-            'hash_data' => $hashData
-        ]);
-
-        $book = Book::createWithDetails(
-            $data,
-            $hashData,
-            $config->source_name,
-            (string)$sourceId
-        );
-
-        $executionLog->addLogEntry("✨ کتاب جدید ایجاد شد", [
-            'source_id' => $sourceId,
-            'book_id' => $book->id,
-            'title' => $book->title,
-            'md5' => $md5,
-            'all_hashes' => $hashData
-        ]);
-
-        return $this->buildResult($sourceId, 'created', [
-            'total_processed' => 1,
-            'total_success' => 1,
-            'total_failed' => 0,
-            'total_duplicate' => 0,
-            'total_enhanced' => 0
-        ], $book);
-    }
-
-    /**
-     * مقایسه دقیق فیلدهای کتاب
-     */
-    private function compareBookFields(Book $existingBook, array $newData): array
-    {
-        $result = [
-            'all_identical' => true,
-            'missing_fields' => [],
-            'better_fields' => [],
+        $analysis = [
+            'needs_update' => false,
+            'empty_fields' => [],
+            'improvable_fields' => [],
             'new_authors' => [],
             'new_isbns' => [],
-            'identical_fields' => [],
-            'different_fields' => []
+            'new_hashes' => [],
+            'new_images' => [],
+            'total_improvements' => 0
         ];
 
-        // فیلدهای اصلی برای مقایسه
-        $fieldsToCompare = [
-            'title', 'description', 'publication_year', 'pages_count',
-            'language', 'format', 'file_size', 'category', 'publisher'
-        ];
+        // بررسی فیلدهای خالی که می‌توانند پر شوند
+        $analysis['empty_fields'] = $this->findEmptyFieldsToFill($existingBook, $newData);
+        if (!empty($analysis['empty_fields'])) {
+            $analysis['needs_update'] = true;
+            $analysis['total_improvements'] += count($analysis['empty_fields']);
+        }
 
-        foreach ($fieldsToCompare as $field) {
-            $existingValue = $this->getBookFieldValue($existingBook, $field);
-            $newValue = $newData[$field] ?? null;
-
-            if ($this->isFieldEmpty($existingValue) && !$this->isFieldEmpty($newValue)) {
-                // فیلد در دیتابیس خالی است اما داده جدید دارد
-                $result['missing_fields'][] = $field;
-                $result['all_identical'] = false;
-            } elseif ($this->isNewFieldBetter($existingValue, $newValue, $field)) {
-                // داده جدید بهتر یا کامل‌تر است
-                $result['better_fields'][] = $field;
-                $result['all_identical'] = false;
-            } elseif ($this->normalizeForComparison($existingValue) === $this->normalizeForComparison($newValue)) {
-                $result['identical_fields'][] = $field;
-            } else {
-                $result['different_fields'][] = [
-                    'field' => $field,
-                    'existing' => $existingValue,
-                    'new' => $newValue
-                ];
-            }
+        // بررسی فیلدهایی که می‌توانند بهبود یابند
+        $analysis['improvable_fields'] = $this->findImprovableFields($existingBook, $newData);
+        if (!empty($analysis['improvable_fields'])) {
+            $analysis['needs_update'] = true;
+            $analysis['total_improvements'] += count($analysis['improvable_fields']);
         }
 
         // بررسی نویسندگان جدید
         if (!empty($newData['author'])) {
-            $newAuthors = $this->findNewAuthors($existingBook, $newData['author']);
-            if (!empty($newAuthors)) {
-                $result['new_authors'] = $newAuthors;
-                $result['all_identical'] = false;
+            $analysis['new_authors'] = $this->findNewAuthors($existingBook, $newData['author']);
+            if (!empty($analysis['new_authors'])) {
+                $analysis['needs_update'] = true;
+                $analysis['total_improvements'] += count($analysis['new_authors']);
             }
         }
 
         // بررسی ISBN های جدید
         if (!empty($newData['isbn'])) {
-            $newIsbns = $this->findNewIsbns($existingBook, $newData['isbn']);
-            if (!empty($newIsbns)) {
-                $result['new_isbns'] = $newIsbns;
-                $result['all_identical'] = false;
+            $analysis['new_isbns'] = $this->findNewIsbns($existingBook, $newData['isbn']);
+            if (!empty($analysis['new_isbns'])) {
+                $analysis['needs_update'] = true;
+                $analysis['total_improvements'] += count($analysis['new_isbns']);
             }
         }
 
-        return $result;
+        // بررسی هش‌های جدید
+        $analysis['new_hashes'] = $this->findNewHashes($existingBook, $newData);
+        if (!empty($analysis['new_hashes'])) {
+            $analysis['needs_update'] = true;
+            $analysis['total_improvements'] += count($analysis['new_hashes']);
+        }
+
+        // بررسی تصاویر جدید
+        if (!empty($newData['image_url'])) {
+            $analysis['new_images'] = $this->findNewImages($existingBook, $newData['image_url']);
+            if (!empty($analysis['new_images'])) {
+                $analysis['needs_update'] = true;
+                $analysis['total_improvements'] += count($analysis['new_images']);
+            }
+        }
+
+        Log::debug("🔍 آنالیز آپدیت کامل شد", [
+            'book_id' => $existingBook->id,
+            'needs_update' => $analysis['needs_update'],
+            'total_improvements' => $analysis['total_improvements'],
+            'improvement_types' => array_keys(array_filter([
+                'empty_fields' => !empty($analysis['empty_fields']),
+                'improvable_fields' => !empty($analysis['improvable_fields']),
+                'new_authors' => !empty($analysis['new_authors']),
+                'new_isbns' => !empty($analysis['new_isbns']),
+                'new_hashes' => !empty($analysis['new_hashes']),
+                'new_images' => !empty($analysis['new_images'])
+            ]))
+        ]);
+
+        return $analysis;
     }
 
     /**
-     * انجام به‌روزرسانی هوشمند
+     * یافتن فیلدهای خالی که می‌توانند پر شوند
      */
-    private function performSmartUpdate(Book $book, array $newData, array $comparisonResult): array
+    private function findEmptyFieldsToFill(Book $existingBook, array $newData): array
     {
-        $changes = [];
-        $updated = false;
+        $emptyFields = [];
+        $fieldsToCheck = [
+            'description', 'publication_year', 'pages_count', 'file_size',
+            'language', 'format', 'isbn', 'publisher', 'category'
+        ];
 
-        // به‌روزرسانی فیلدهای خالی
-        foreach ($comparisonResult['missing_fields'] as $field) {
-            $newValue = $newData[$field];
-            $this->setBookFieldValue($book, $field, $newValue);
-            $changes['filled_fields'][] = [
-                'field' => $field,
-                'old_value' => null,
-                'new_value' => $newValue
-            ];
-            $updated = true;
+        foreach ($fieldsToCheck as $field) {
+            $currentValue = $this->getBookFieldValue($existingBook, $field);
+            $newValue = $newData[$field] ?? null;
+
+            if ($this->isFieldEmpty($currentValue) && !$this->isFieldEmpty($newValue)) {
+                $emptyFields[$field] = [
+                    'current' => $currentValue,
+                    'new' => $newValue,
+                    'reason' => 'field_is_empty'
+                ];
+            }
         }
 
-        // به‌روزرسانی فیلدهای بهتر
-        foreach ($comparisonResult['better_fields'] as $field) {
-            $oldValue = $this->getBookFieldValue($book, $field);
-            $newValue = $newData[$field];
-            $this->setBookFieldValue($book, $field, $newValue);
+        return $emptyFields;
+    }
+
+    /**
+     * یافتن فیلدهایی که می‌توانند بهبود یابند
+     */
+    private function findImprovableFields(Book $existingBook, array $newData): array
+    {
+        $improvableFields = [];
+
+        // بررسی توضیحات برای بهبود
+        if (isset($newData['description'])) {
+            $currentDesc = $existingBook->description;
+            $newDesc = $newData['description'];
+
+            if (!$this->isFieldEmpty($currentDesc) && !$this->isFieldEmpty($newDesc)) {
+                if ($this->isDescriptionBetter($currentDesc, $newDesc)) {
+                    $improvableFields['description'] = [
+                        'current_length' => strlen($currentDesc),
+                        'new_length' => strlen($newDesc),
+                        'reason' => 'longer_description'
+                    ];
+                }
+            }
+        }
+
+        // بررسی سال انتشار برای دقت بیشتر
+        if (isset($newData['publication_year'])) {
+            $currentYear = $existingBook->publication_year;
+            $newYear = $newData['publication_year'];
+
+            if (!$this->isFieldEmpty($currentYear) && !$this->isFieldEmpty($newYear)) {
+                if ($this->isYearMoreAccurate($currentYear, $newYear)) {
+                    $improvableFields['publication_year'] = [
+                        'current' => $currentYear,
+                        'new' => $newYear,
+                        'reason' => 'more_accurate_year'
+                    ];
+                }
+            }
+        }
+
+        // بررسی تعداد صفحات برای دقت بیشتر
+        if (isset($newData['pages_count'])) {
+            $currentPages = $existingBook->pages_count;
+            $newPages = $newData['pages_count'];
+
+            if (!$this->isFieldEmpty($currentPages) && !$this->isFieldEmpty($newPages)) {
+                if (is_numeric($newPages) && $newPages > 0 && $newPages > $currentPages && $newPages <= 10000) {
+                    $improvableFields['pages_count'] = [
+                        'current' => $currentPages,
+                        'new' => $newPages,
+                        'reason' => 'higher_page_count'
+                    ];
+                }
+            }
+        }
+
+        // بررسی اندازه فایل برای دقت بیشتر
+        if (isset($newData['file_size'])) {
+            $currentSize = $existingBook->file_size;
+            $newSize = $newData['file_size'];
+
+            if (!$this->isFieldEmpty($currentSize) && !$this->isFieldEmpty($newSize)) {
+                if (is_numeric($newSize) && $newSize > $currentSize) {
+                    $improvableFields['file_size'] = [
+                        'current' => $currentSize,
+                        'new' => $newSize,
+                        'reason' => 'larger_file_size'
+                    ];
+                }
+            }
+        }
+
+        return $improvableFields;
+    }
+
+    /**
+     * انجام آپدیت هوشمند
+     */
+    private function performIntelligentUpdate(Book $book, array $newData, array $analysis): array
+    {
+        $changes = [];
+        $databaseUpdated = false;
+        $updatedFields = [];
+
+        Log::info("🔄 شروع آپدیت هوشمند کتاب", [
+            'book_id' => $book->id,
+            'improvements_count' => $analysis['total_improvements']
+        ]);
+
+        // آپدیت فیلدهای خالی
+        foreach ($analysis['empty_fields'] as $field => $info) {
+            $this->setBookFieldValue($book, $field, $info['new']);
+            $changes['filled_fields'][] = [
+                'field' => $field,
+                'old_value' => $info['current'],
+                'new_value' => $info['new']
+            ];
+            $updatedFields[] = $field;
+            $databaseUpdated = true;
+
+            Log::debug("✅ فیلد خالی پر شد", [
+                'book_id' => $book->id,
+                'field' => $field,
+                'new_value' => $this->truncateValue($info['new'])
+            ]);
+        }
+
+        // آپدیت فیلدهای قابل بهبود
+        foreach ($analysis['improvable_fields'] as $field => $info) {
+            $this->setBookFieldValue($book, $field, $info['new'] ?? $newData[$field]);
             $changes['improved_fields'][] = [
                 'field' => $field,
-                'old_value' => $oldValue,
-                'new_value' => $newValue
+                'old_value' => $info['current'],
+                'new_value' => $info['new'] ?? $newData[$field],
+                'reason' => $info['reason']
             ];
-            $updated = true;
+            $updatedFields[] = $field;
+            $databaseUpdated = true;
+
+            Log::debug("⬆️ فیلد بهبود یافت", [
+                'book_id' => $book->id,
+                'field' => $field,
+                'reason' => $info['reason']
+            ]);
         }
 
         // اضافه کردن نویسندگان جدید
-        if (!empty($comparisonResult['new_authors'])) {
-            $addedAuthors = $book->addAuthorsWithTimestamps(implode(', ', $comparisonResult['new_authors']));
+        if (!empty($analysis['new_authors'])) {
+            $addedAuthors = $book->addAuthorsArray($analysis['new_authors']);
             if (!empty($addedAuthors)) {
                 $changes['new_authors'] = $addedAuthors;
+                Log::debug("👥 نویسندگان جدید اضافه شدند", [
+                    'book_id' => $book->id,
+                    'new_authors' => $addedAuthors
+                ]);
             }
         }
 
         // اضافه کردن ISBN های جدید
-        if (!empty($comparisonResult['new_isbns'])) {
-            $currentIsbns = $book->isbn ? explode(',', $book->isbn) : [];
-            $allIsbns = array_unique(array_merge($currentIsbns, $comparisonResult['new_isbns']));
-            $book->isbn = implode(', ', array_map('trim', $allIsbns));
-            $changes['new_isbns'] = $comparisonResult['new_isbns'];
-            $updated = true;
+        if (!empty($analysis['new_isbns'])) {
+            $this->addNewIsbns($book, $analysis['new_isbns']);
+            $changes['new_isbns'] = $analysis['new_isbns'];
+            $databaseUpdated = true;
+            Log::debug("📚 ISBN های جدید اضافه شدند", [
+                'book_id' => $book->id,
+                'new_isbns' => $analysis['new_isbns']
+            ]);
         }
 
-        // ذخیره تغییرات
-        if ($updated) {
+        // ذخیره تغییرات فیلدهای اصلی
+        if ($databaseUpdated) {
             $book->save();
+            Log::info("💾 تغییرات کتاب ذخیره شد", [
+                'book_id' => $book->id,
+                'updated_fields' => $updatedFields
+            ]);
         }
 
-        // به‌روزرسانی هش‌ها
-        $hashResult = $this->updateBookHashes($book, $newData);
+        // آپدیت هش‌ها
+        $hashResult = $this->updateBookHashes($book, $analysis['new_hashes']);
         if ($hashResult['updated']) {
             $changes['updated_hashes'] = $hashResult;
         }
 
-        // به‌روزرسانی تصاویر
-        if (!empty($newData['image_url'])) {
-            $imageResult = $this->updateBookImages($book, $newData['image_url']);
-            if ($imageResult['updated']) {
-                $changes['updated_images'] = $imageResult;
-            }
+        // آپدیت تصاویر
+        $imageResult = $this->updateBookImages($book, $analysis['new_images']);
+        if ($imageResult['updated']) {
+            $changes['updated_images'] = $imageResult;
         }
 
         $action = $this->determineUpdateAction($changes);
+        $summary = $this->generateUpdateSummary($changes);
+
+        Log::info("✅ آپدیت هوشمند تمام شد", [
+            'book_id' => $book->id,
+            'action' => $action,
+            'database_updated' => $databaseUpdated,
+            'changes_count' => count($changes),
+            'summary' => $summary
+        ]);
 
         return [
-            'updated' => $updated,
+            'database_updated' => $databaseUpdated,
             'changes' => $changes,
-            'action' => $action
+            'action' => $action,
+            'summary' => $summary,
+            'updated_fields' => $updatedFields
         ];
     }
 
     /**
-     * یافتن نویسندگان جدید
+     * تولید خلاصه تغییرات
      */
+    private function generateUpdateSummary(array $changes): string
+    {
+        $summary = [];
+
+        if (isset($changes['filled_fields'])) {
+            $summary[] = count($changes['filled_fields']) . " فیلد خالی پر شد";
+        }
+
+        if (isset($changes['improved_fields'])) {
+            $summary[] = count($changes['improved_fields']) . " فیلد بهبود یافت";
+        }
+
+        if (isset($changes['new_authors'])) {
+            $summary[] = count($changes['new_authors']) . " نویسنده جدید";
+        }
+
+        if (isset($changes['new_isbns'])) {
+            $summary[] = count($changes['new_isbns']) . " ISBN جدید";
+        }
+
+        if (isset($changes['updated_hashes']['added_hashes'])) {
+            $summary[] = count($changes['updated_hashes']['added_hashes']) . " هش جدید";
+        }
+
+        if (isset($changes['updated_images'])) {
+            $summary[] = "تصویر جدید";
+        }
+
+        return !empty($summary) ? implode(', ', $summary) : 'بدون تغییر';
+    }
+
     private function findNewAuthors(Book $book, string $newAuthorsString): array
     {
         if (empty($newAuthorsString)) {
             return [];
         }
 
-        // دریافت نویسندگان موجود
         $existingAuthors = $book->authors()->pluck('name')->map(function($name) {
             return strtolower(trim($name));
         })->toArray();
 
-        // پارس کردن نویسندگان جدید
         $newAuthors = $this->parseAuthors($newAuthorsString);
-        $newAuthorsList = [];
+        $uniqueNewAuthors = [];
 
         foreach ($newAuthors as $author) {
             $normalizedAuthor = strtolower(trim($author));
             if (!in_array($normalizedAuthor, $existingAuthors) && strlen(trim($author)) >= 2) {
-                $newAuthorsList[] = trim($author);
+                $uniqueNewAuthors[] = trim($author);
             }
         }
 
-        return $newAuthorsList;
+        return $uniqueNewAuthors;
     }
 
-    /**
-     * یافتن ISBN های جدید
-     */
     private function findNewIsbns(Book $book, string $newIsbnString): array
     {
         if (empty($newIsbnString)) {
             return [];
         }
 
-        // دریافت ISBN های موجود
         $existingIsbns = $book->isbn ? array_map('trim', explode(',', $book->isbn)) : [];
         $existingIsbnsCleaned = array_map(function($isbn) {
             return preg_replace('/[^0-9X]/i', '', $isbn);
         }, $existingIsbns);
 
-        // پارس کردن ISBN های جدید
         $newIsbns = array_map('trim', explode(',', $newIsbnString));
-        $newIsbnsList = [];
+        $uniqueNewIsbns = [];
 
         foreach ($newIsbns as $isbn) {
             $cleanedIsbn = preg_replace('/[^0-9X]/i', '', $isbn);
             if (!in_array($cleanedIsbn, $existingIsbnsCleaned) && strlen($cleanedIsbn) >= 10) {
-                $newIsbnsList[] = trim($isbn);
+                $uniqueNewIsbns[] = trim($isbn);
             }
         }
 
-        return $newIsbnsList;
+        return $uniqueNewIsbns;
     }
 
-    /**
-     * پارس کردن نویسندگان
-     */
-    private function parseAuthors(string $authorsString): array
+    private function findNewHashes(Book $book, array $newData): array
     {
-        $separators = [',', '،', ';', '؛', '&', 'and', 'و'];
-
-        foreach ($separators as $separator) {
-            $authorsString = str_ireplace($separator, ',', $authorsString);
+        if (!$book->hashes) {
+            return [];
         }
 
-        return array_filter(array_map('trim', explode(',', $authorsString)));
+        $newHashes = [];
+        $hashFields = ['sha1', 'sha256', 'crc32', 'ed2k', 'btih', 'magnet'];
+
+        foreach ($hashFields as $field) {
+            if (!empty($newData[$field])) {
+                $dbField = $field === 'ed2k' ? 'ed2k_hash' : ($field === 'magnet' ? 'magnet_link' : $field);
+
+                if (empty($book->hashes->$dbField)) {
+                    $newHashes[$field] = $newData[$field];
+                }
+            }
+        }
+
+        return $newHashes;
     }
 
-    /**
-     * بررسی خالی بودن فیلد
-     */
+    private function findNewImages(Book $book, string $imageUrl): array
+    {
+        if (empty($imageUrl) || !filter_var($imageUrl, FILTER_VALIDATE_URL)) {
+            return [];
+        }
+
+        $imageExists = $book->images()->where('image_url', $imageUrl)->exists();
+
+        return $imageExists ? [] : [$imageUrl];
+    }
+
     private function isFieldEmpty($value): bool
     {
         if ($value === null || $value === '') {
@@ -421,57 +577,47 @@ class BookProcessor
         return false;
     }
 
-    /**
-     * بررسی بهتر بودن داده جدید
-     */
-    private function isNewFieldBetter($existingValue, $newValue, string $fieldType): bool
+    private function isDescriptionBetter($current, $new): bool
     {
-        if ($this->isFieldEmpty($newValue)) {
+        $currentLength = strlen(trim($current ?? ''));
+        $newLength = strlen(trim($new ?? ''));
+
+        // توضیحات جدید باید حداقل 50% طولانی‌تر باشد
+        return $newLength > ($currentLength * 1.5);
+    }
+
+    private function isYearMoreAccurate($current, $new): bool
+    {
+        if (!is_numeric($new) || $new < 1000 || $new > date('Y') + 2) {
             return false;
         }
 
-        if ($this->isFieldEmpty($existingValue)) {
+        if (!is_numeric($current)) {
             return true;
         }
 
-        switch ($fieldType) {
-            case 'description':
-                return strlen(trim($newValue)) > strlen(trim($existingValue)) * 1.2;
-
-            case 'pages_count':
-                return is_numeric($newValue) && is_numeric($existingValue) &&
-                    $newValue > $existingValue && $newValue <= 10000;
-
-            case 'file_size':
-                return is_numeric($newValue) && is_numeric($existingValue) &&
-                    $newValue > $existingValue;
-
-            case 'publication_year':
-                $currentYear = date('Y');
-                return is_numeric($newValue) && $newValue >= 1000 &&
-                    $newValue <= $currentYear &&
-                    (abs($newValue - $currentYear) < abs($existingValue - $currentYear));
-
-            default:
-                return false;
-        }
+        $currentYear = date('Y');
+        return abs($new - $currentYear) < abs($current - $currentYear);
     }
 
-    /**
-     * نرمال‌سازی برای مقایسه
-     */
-    private function normalizeForComparison($value): string
+    private function addNewIsbns(Book $book, array $newIsbns): void
     {
-        if ($value === null) {
-            return '';
-        }
-
-        return strtolower(trim((string)$value));
+        $currentIsbns = $book->isbn ? array_map('trim', explode(',', $book->isbn)) : [];
+        $allIsbns = array_unique(array_merge($currentIsbns, $newIsbns));
+        $book->isbn = implode(', ', $allIsbns);
     }
 
-    /**
-     * دریافت مقدار فیلد کتاب
-     */
+    private function parseAuthors(string $authorsString): array
+    {
+        $separators = [',', '،', ';', '؛', '&', 'and', 'و'];
+
+        foreach ($separators as $separator) {
+            $authorsString = str_ireplace($separator, ',', $authorsString);
+        }
+
+        return array_filter(array_map('trim', explode(',', $authorsString)));
+    }
+
     private function getBookFieldValue(Book $book, string $field)
     {
         switch ($field) {
@@ -484,17 +630,28 @@ class BookProcessor
         }
     }
 
-    /**
-     * تنظیم مقدار فیلد کتاب
-     */
     private function setBookFieldValue(Book $book, string $field, $value): void
     {
         switch ($field) {
             case 'category':
-                // منطق تنظیم دسته‌بندی
+                // اگر دسته‌بندی جدید باشد، ایجاد کن
+                if (!empty($value)) {
+                    $category = \App\Models\Category::firstOrCreate(
+                        ['name' => $value],
+                        ['slug' => \Illuminate\Support\Str::slug($value . '_' . time()), 'is_active' => true]
+                    );
+                    $book->category_id = $category->id;
+                }
                 break;
             case 'publisher':
-                // منطق تنظیم ناشر
+                // اگر ناشر جدید باشد، ایجاد کن
+                if (!empty($value)) {
+                    $publisher = \App\Models\Publisher::firstOrCreate(
+                        ['name' => $value],
+                        ['slug' => \Illuminate\Support\Str::slug($value . '_' . time()), 'is_active' => true]
+                    );
+                    $book->publisher_id = $publisher->id;
+                }
                 break;
             default:
                 $book->$field = $value;
@@ -502,9 +659,14 @@ class BookProcessor
         }
     }
 
-    /**
-     * تشخیص نوع عملیات به‌روزرسانی
-     */
+    private function truncateValue($value, int $length = 100): string
+    {
+        if (is_string($value) && strlen($value) > $length) {
+            return substr($value, 0, $length) . '...';
+        }
+        return (string)$value;
+    }
+
     private function determineUpdateAction(array $changes): string
     {
         if (empty($changes)) {
@@ -526,6 +688,39 @@ class BookProcessor
         return 'updated';
     }
 
+    private function handleNewBook(array $data, string $md5, int $sourceId, Config $config, ExecutionLog $executionLog): array
+    {
+        $hashData = $this->extractAllHashes($data, $md5);
+
+        Log::info("📦 ایجاد کتاب جدید", [
+            'source_id' => $sourceId,
+            'title' => $data['title'],
+            'hash_data' => array_keys($hashData)
+        ]);
+
+        $book = Book::createWithDetails(
+            $data,
+            $hashData,
+            $config->source_name,
+            (string)$sourceId
+        );
+
+        $executionLog->addLogEntry("✨ کتاب جدید ایجاد شد", [
+            'source_id' => $sourceId,
+            'book_id' => $book->id,
+            'title' => $book->title,
+            'md5' => $md5
+        ]);
+
+        return $this->buildResult($sourceId, 'created', [
+            'total_processed' => 1,
+            'total_success' => 1,
+            'total_failed' => 0,
+            'total_duplicate' => 0,
+            'total_enhanced' => 0
+        ], $book);
+    }
+
     public function isSourceAlreadyProcessed(string $sourceName, int $sourceId): bool
     {
         return BookSource::where('source_name', $sourceName)
@@ -533,12 +728,9 @@ class BookProcessor
             ->exists();
     }
 
-    // متدهای کمکی که قبلاً وجود داشتند...
-
     private function extractAllHashes(array $data, string $md5): array
     {
         $hashData = ['md5' => $md5];
-
         $hashFields = [
             'sha1' => 'sha1', 'sha256' => 'sha256', 'crc32' => 'crc32',
             'ed2k' => 'ed2k', 'ed2k_hash' => 'ed2k',
@@ -557,45 +749,37 @@ class BookProcessor
         return $hashData;
     }
 
-    private function updateBookHashes(Book $book, array $data): array
+    private function updateBookHashes(Book $book, array $newHashes): array
     {
-        if (!$book->hashes) {
-            return ['updated' => false, 'reason' => 'no_hash_record'];
+        if (!$book->hashes || empty($newHashes)) {
+            return ['updated' => false];
         }
 
-        $hashFields = ['sha1', 'sha256', 'crc32', 'ed2k', 'btih', 'magnet'];
         $updates = [];
-        $addedHashes = [];
-
-        foreach ($hashFields as $field) {
+        foreach ($newHashes as $field => $value) {
             $dbField = $field === 'ed2k' ? 'ed2k_hash' : ($field === 'magnet' ? 'magnet_link' : $field);
-
-            if (!empty($data[$field]) && empty($book->hashes->$dbField)) {
-                $updates[$dbField] = $data[$field];
-                $addedHashes[] = $field;
-            }
+            $updates[$dbField] = $value;
         }
 
         if (!empty($updates)) {
             $book->hashes->update($updates);
-            return ['updated' => true, 'added_hashes' => $addedHashes, 'updates' => $updates];
+            return ['updated' => true, 'added_hashes' => array_keys($newHashes)];
         }
 
-        return ['updated' => false, 'reason' => 'no_new_hashes'];
+        return ['updated' => false];
     }
 
-    private function updateBookImages(Book $book, string $imageUrl): array
+    private function updateBookImages(Book $book, array $newImages): array
     {
-        if (empty($imageUrl) || !filter_var($imageUrl, FILTER_VALIDATE_URL)) {
-            return ['updated' => false, 'reason' => 'invalid_url'];
+        if (empty($newImages)) {
+            return ['updated' => false];
         }
 
-        if (!$book->images()->where('image_url', $imageUrl)->exists()) {
+        foreach ($newImages as $imageUrl) {
             $book->images()->create(['image_url' => $imageUrl]);
-            return ['updated' => true, 'action' => 'added_new_image', 'image_url' => $imageUrl];
         }
 
-        return ['updated' => false, 'reason' => 'image_exists'];
+        return ['updated' => true, 'added_images' => count($newImages)];
     }
 
     private function isValidHash(string $hash, string $type): bool
@@ -622,7 +806,7 @@ class BookProcessor
 
         foreach ($hashFields as $field) {
             if (!empty($data[$field])) {
-                $hashes[$field] = substr($data[$field], 0, 16) . (strlen($data[$field]) > 16 ? '...' : '');
+                $hashes[$field] = substr($data[$field], 0, 16) . '...';
             }
         }
 

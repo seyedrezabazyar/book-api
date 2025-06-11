@@ -42,25 +42,6 @@ class FailedRequest extends Model
     }
 
     /**
-     * اسکوپ‌ها
-     */
-    public function scopeUnresolved($query)
-    {
-        return $query->where('is_resolved', false);
-    }
-
-    public function scopeNeedsRetry($query)
-    {
-        return $query->where('is_resolved', false)
-            ->where('retry_count', '<', self::MAX_RETRY_COUNT);
-    }
-
-    public function scopeBySource($query, string $sourceName)
-    {
-        return $query->where('source_name', $sourceName);
-    }
-
-    /**
      * ثبت درخواست ناموفق جدید یا بروزرسانی موجود
      */
     public static function recordFailure(
@@ -123,48 +104,6 @@ class FailedRequest extends Model
     }
 
     /**
-     * علامت‌گذاری به عنوان حل شده
-     */
-    public function markAsResolved(): void
-    {
-        $this->update([
-            'is_resolved' => true,
-            'last_attempt_at' => now()
-        ]);
-
-        Log::info("✅ source ID ناموفق حل شد", [
-            'config_id' => $this->config_id,
-            'source_name' => $this->source_name,
-            'source_id' => $this->source_id,
-            'total_attempts' => $this->retry_count + 1
-        ]);
-    }
-
-    /**
-     * بررسی وجود source ID ناموفق
-     */
-    public static function isSourceIdFailed(string $sourceName, string $sourceId): bool
-    {
-        return self::where('source_name', $sourceName)
-            ->where('source_id', $sourceId)
-            ->where('is_resolved', false)
-            ->exists();
-    }
-
-    /**
-     * دریافت تمام source ID های ناموفق که نیاز به تلاش مجدد دارند
-     */
-    public static function getRetryableSourceIds(string $sourceName, int $limit = 50): array
-    {
-        return self::where('source_name', $sourceName)
-            ->needsRetry()
-            ->orderBy('first_failed_at')
-            ->limit($limit)
-            ->pluck('source_id')
-            ->toArray();
-    }
-
-    /**
      * پاکسازی درخواست‌های قدیمی حل شده
      */
     public static function cleanupOldResolved(int $daysOld = 30): int
@@ -208,27 +147,4 @@ class FailedRequest extends Model
         ];
     }
 
-    /**
-     * گزارش تفصیلی
-     */
-    public function getDetailedInfo(): array
-    {
-        return [
-            'id' => $this->id,
-            'config_id' => $this->config_id,
-            'source_name' => $this->source_name,
-            'source_id' => $this->source_id,
-            'url' => $this->url,
-            'error_message' => $this->error_message,
-            'http_status' => $this->http_status,
-            'retry_count' => $this->retry_count,
-            'max_retries' => self::MAX_RETRY_COUNT,
-            'is_resolved' => $this->is_resolved,
-            'should_retry' => $this->shouldRetry(),
-            'first_failed_at' => $this->first_failed_at,
-            'last_attempt_at' => $this->last_attempt_at,
-            'days_since_first_failure' => $this->first_failed_at ?
-                $this->first_failed_at->diffInDays(now()) : 0
-        ];
-    }
 }

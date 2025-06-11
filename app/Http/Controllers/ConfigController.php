@@ -115,14 +115,6 @@ class ConfigController extends Controller
         return response()->json($this->executionService->getWorkerStatus());
     }
 
-    public function getStats(): JsonResponse
-    {
-        return response()->json([
-            'success' => true,
-            'data' => $this->statsService->getSystemStats()
-        ]);
-    }
-
     public function fixLogStatus(ExecutionLog $log): JsonResponse
     {
         return $this->executionService->fixLogStatus($log);

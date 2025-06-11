@@ -34,41 +34,4 @@ class Category extends Model
     {
         return $this->hasMany(Book::class);
     }
-
-    /**
-     * اسکوپ برای دریافت دسته‌های فعال
-     */
-    public function scopeActive($query)
-    {
-        return $query->where('is_active', true);
-    }
-
-    /**
-     * اسکوپ برای جستجو
-     */
-    public function scopeSearch($query, $search)
-    {
-        if (!empty($search)) {
-            return $query->where('name', 'like', "%{$search}%");
-        }
-        return $query;
-    }
-
-    /**
-     * دریافت کتاب‌های فعال این دسته
-     */
-    public function activeBooks()
-    {
-        return $this->books()->where('status', 'active');
-    }
-
-    /**
-     * بروزرسانی تعداد کتاب‌ها
-     */
-    public function updateBooksCount(): void
-    {
-        $this->update([
-            'books_count' => $this->books()->count()
-        ]);
-    }
 }

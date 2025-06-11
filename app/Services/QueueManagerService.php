@@ -307,21 +307,6 @@ class QueueManagerService
     }
 
     /**
-     * پاک کردن Jobs شکست خورده
-     */
-    public static function clearFailedJobs(): int
-    {
-        try {
-            $deleted = \DB::table('failed_jobs')->delete();
-            Log::info("Jobs شکست خورده پاک شدند", ['count' => $deleted]);
-            return $deleted;
-        } catch (\Exception $e) {
-            Log::error('خطا در پاک کردن Jobs شکست خورده', ['error' => $e->getMessage()]);
-            return 0;
-        }
-    }
-
-    /**
      * آمار صف
      */
     public static function getQueueStats(): array

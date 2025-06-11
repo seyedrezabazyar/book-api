@@ -52,36 +52,6 @@ class ExecutionLog extends Model
         return $this->belongsTo(Config::class);
     }
 
-    public function scopeCompleted($query)
-    {
-        return $query->where('status', self::STATUS_COMPLETED);
-    }
-
-    public function scopeLatest($query)
-    {
-        return $query->orderBy('created_at', 'desc');
-    }
-
-    /**
-     * نرخ موفقیت ساده (فقط success)
-     */
-    public function getSuccessRateAttribute(): float
-    {
-        if ($this->total_processed === 0) return 0;
-        return round(($this->total_success / $this->total_processed) * 100, 2);
-    }
-
-    /**
-     * نرخ موفقیت واقعی (شامل کتاب‌های بهبود یافته)
-     */
-    public function getRealSuccessRateAttribute(): float
-    {
-        if ($this->total_processed === 0) return 0;
-
-        $realSuccess = $this->total_success + $this->total_enhanced;
-        return round(($realSuccess / $this->total_processed) * 100, 2);
-    }
-
     /**
      * ایجاد ExecutionLog جدید
      */
@@ -441,141 +411,10 @@ class ExecutionLog extends Model
     }
 
     /**
-     * دریافت زمان اجرا صحیح
-     */
-    public function getCorrectExecutionTime(): float
-    {
-        // اولویت با زمان ذخیره شده
-        if ($this->execution_time && $this->execution_time > 0) {
-            return $this->execution_time;
-        }
-
-        // محاسبه از تاریخ‌ها
-        return $this->calculateExecutionTime();
-    }
-
-    /**
      * بررسی وضعیت‌ها
      */
     public function isRunning(): bool
     {
         return $this->status === self::STATUS_RUNNING;
-    }
-
-    public function isCompleted(): bool
-    {
-        return $this->status === self::STATUS_COMPLETED;
-    }
-
-    public function isFailed(): bool
-    {
-        return $this->status === self::STATUS_FAILED;
-    }
-
-    public function isStopped(): bool
-    {
-        return $this->status === self::STATUS_STOPPED;
-    }
-
-    /**
-     * دریافت رنگ وضعیت برای UI
-     */
-    public function getStatusColorAttribute(): string
-    {
-        switch ($this->status) {
-            case self::STATUS_COMPLETED:
-                return 'green';
-            case self::STATUS_FAILED:
-                return 'red';
-            case self::STATUS_STOPPED:
-                return 'orange';
-            default:
-                return 'yellow';
-        }
-    }
-
-    /**
-     * دریافت متن وضعیت
-     */
-    public function getStatusTextAttribute(): string
-    {
-        switch ($this->status) {
-            case self::STATUS_RUNNING:
-                return 'در حال اجرا';
-            case self::STATUS_COMPLETED:
-                return 'تمام شده';
-            case self::STATUS_FAILED:
-                return 'ناموفق';
-            case self::STATUS_STOPPED:
-                return 'متوقف شده';
-            default:
-                return 'نامشخص';
-        }
-    }
-
-    /**
-     * دریافت خلاصه آمار تفصیلی
-     */
-    public function getStatsDetailedSummary(): string
-    {
-        if ($this->status === 'running') {
-            $executionTime = $this->getCorrectExecutionTime();
-            $timeText = $executionTime > 0 ? ' (' . round($executionTime / 60, 1) . 'دقیقه)' : '';
-            return 'در حال اجرا' . $timeText;
-        }
-
-        $parts = [];
-
-        if ($this->total_processed > 0) {
-            $parts[] = "کل: " . number_format($this->total_processed);
-        }
-
-        if ($this->total_success > 0) {
-            $parts[] = "✅ جدید: " . number_format($this->total_success);
-        }
-
-        if ($this->total_enhanced > 0) {
-            $parts[] = "🔧 بهبود: " . number_format($this->total_enhanced);
-        }
-
-        if ($this->total_duplicate > 0) {
-            $parts[] = "🔄 تکراری: " . number_format($this->total_duplicate);
-        }
-
-        if ($this->total_failed > 0) {
-            $parts[] = "❌ خطا: " . number_format($this->total_failed);
-        }
-
-        // اضافه کردن نرخ موفقیت واقعی
-        if ($this->total_processed > 0) {
-            $realSuccessRate = $this->real_success_rate;
-            $parts[] = "📈 {$realSuccessRate}% موثر";
-        }
-
-        // اضافه کردن زمان اجرا
-        $executionTime = $this->getCorrectExecutionTime();
-        if ($executionTime > 0) {
-            $timeText = $executionTime > 60 ? round($executionTime / 60, 1) . 'دقیقه' : round($executionTime) . 'ثانیه';
-            $parts[] = "⏱️ {$timeText}";
-        }
-
-        return empty($parts) ? 'بدون آمار' : implode(' | ', $parts);
-    }
-
-    /**
-     * خلاصه اجرا برای نمایش سریع
-     */
-    public function getQuickSummary(): string
-    {
-        if ($this->status === 'running') {
-            $runtime = $this->getCorrectExecutionTime();
-            $timeText = $runtime > 60 ? round($runtime / 60, 1) . 'دقیقه' : round($runtime) . 'ثانیه';
-            return "🔄 در حال اجرا ({$timeText}) - {$this->total_processed} پردازش شده";
-        }
-
-        $executionTime = $this->getCorrectExecutionTime();
-        $timeText = $executionTime > 60 ? round($executionTime / 60, 1) . 'دقیقه' : round($executionTime) . 'ثانیه';
-
-        return "{$this->status_text} در {$timeText} - {$this->total_processed} پردازش، {$this->real_success_rate}% موثر";
     }
 }

@@ -72,42 +72,39 @@ class Config extends Model
      */
     public function getSmartStartPage(): int
     {
-        // 🔥 اولویت اول: اگر کاربر start_page مشخص کرده، حتماً از آن استفاده کن
-        if ($this->start_page !== null && $this->start_page > 0) {
-            Log::info("🎯 شروع از start_page مشخص شده توسط کاربر", [
+        // اولویت 1: اگر start_page توسط کاربر مشخص شده (هر عدد مثبت)، از آن استفاده کن
+        if ($this->start_page && $this->start_page > 0) {
+            Log::info("🎯 شروع از start_page تعیین شده توسط کاربر", [
                 'config_id' => $this->id,
                 'start_page' => $this->start_page,
-                'user_override' => true,
-                'reason' => 'user_defined_start_page'
+                'user_override' => true
             ]);
             return $this->start_page;
         }
 
-        // اولویت دوم: ادامه هوشمند از آخرین ID در book_sources
+        // اولویت 2: آخرین ID از book_sources برای این منبع (حالت هوشمند)
         $lastIdFromSources = $this->getLastSourceIdFromBookSources();
 
         if ($lastIdFromSources > 0) {
             $nextId = $lastIdFromSources + 1;
-            Log::info("📊 ادامه هوشمند از آخرین ID در book_sources", [
+            Log::info("📊 شروع هوشمند از آخرین ID در book_sources", [
                 'config_id' => $this->id,
                 'source_name' => $this->source_name,
                 'last_id_from_sources' => $lastIdFromSources,
                 'next_start' => $nextId,
-                'smart_mode' => true,
-                'reason' => 'smart_continuation'
+                'smart_mode' => true
             ]);
             return $nextId;
         }
 
-        // اولویت سوم: اگر auto_resume فعال باشد و last_source_id موجود باشد
+        // اولویت 3: اگر auto_resume فعال باشد و last_source_id موجود باشد
         if ($this->auto_resume && $this->last_source_id > 0) {
             $nextId = $this->last_source_id + 1;
             Log::info("🔄 ادامه از last_source_id", [
                 'config_id' => $this->id,
                 'last_source_id' => $this->last_source_id,
                 'next_start' => $nextId,
-                'auto_resume' => true,
-                'reason' => 'auto_resume'
+                'auto_resume' => true
             ]);
             return $nextId;
         }
@@ -116,8 +113,7 @@ class Config extends Model
         Log::info("🆕 شروع جدید از ID 1 (پیش‌فرض)", [
             'config_id' => $this->id,
             'source_name' => $this->source_name,
-            'default_start' => true,
-            'reason' => 'default_start'
+            'default_start' => true
         ]);
         return 1;
     }
@@ -136,7 +132,7 @@ class Config extends Model
 
             $result = $lastSourceRecord ? (int)$lastSourceRecord->source_id : 0;
 
-            Log::debug("🔍 بررسی آخرین ID در book_sources", [
+            Log::info("🔍 بررسی آخرین ID در book_sources", [
                 'config_id' => $this->id,
                 'source_name' => $this->source_name,
                 'last_id' => $result,
@@ -190,49 +186,6 @@ class Config extends Model
 
         // اگر مشخص نشده، null برگردان (فیلد فرم خالی خواهد بود)
         return null;
-    }
-
-    /**
-     * بررسی وجود فیلدهای مفقود در book_sources برای این منبع
-     */
-    public function getMissingSourceIds(int $startId, int $endId, int $limit = 100): array
-    {
-        try {
-            // دریافت ID های موجود در این بازه
-            $existingIds = \DB::table('book_sources')
-                ->where('source_name', $this->source_name)
-                ->whereRaw('source_id REGEXP "^[0-9]+$"')
-                ->whereBetween(\DB::raw('CAST(source_id AS UNSIGNED)'), [$startId, $endId])
-                ->pluck('source_id')
-                ->map(fn($id) => (int)$id)
-                ->sort()
-                ->values()
-                ->toArray();
-
-            // محاسبه ID های مفقود
-            $allIds = range($startId, $endId);
-            $missingIds = array_diff($allIds, $existingIds);
-
-            // محدود کردن نتایج
-            $missingIds = array_slice(array_values($missingIds), 0, $limit);
-
-            Log::info("🔍 جستجوی ID های مفقود", [
-                'source_name' => $this->source_name,
-                'range' => "{$startId}-{$endId}",
-                'existing_count' => count($existingIds),
-                'missing_count' => count($missingIds),
-                'sample_missing' => array_slice($missingIds, 0, 10)
-            ]);
-
-            return $missingIds;
-        } catch (\Exception $e) {
-            Log::error("❌ خطا در یافتن ID های مفقود", [
-                'config_id' => $this->id,
-                'source_name' => $this->source_name,
-                'error' => $e->getMessage()
-            ]);
-            return [];
-        }
     }
 
     /**
@@ -463,21 +416,5 @@ class Config extends Model
             'btih' => 'BitTorrent Info Hash',
             'magnet' => 'Magnet Link'
         ];
-    }
-
-    /**
-     * ریست کردن آمار برای شروع مجدد
-     */
-    public function resetForRestart(): void
-    {
-        $this->update([
-            'current_page' => $this->getSmartStartPage(),
-            'is_running' => false
-        ]);
-
-        Log::info("🔄 کانفیگ برای شروع مجدد ریست شد", [
-            'config_id' => $this->id,
-            'new_start_page' => $this->current_page
-        ]);
     }
 }
