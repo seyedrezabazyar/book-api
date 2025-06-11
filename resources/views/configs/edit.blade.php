@@ -12,12 +12,10 @@
                     $config->refresh(); // refresh کردن مدل
                     $lastIdFromSources = $config->getLastSourceIdFromBookSources();
                     $nextSmartId = $config->getSmartStartPage();
-                    $displayNextId = $lastIdFromSources > 0 ? $lastIdFromSources + 1 : 1;
-
-                    // استفاده از متد جدید برای نمایش در فرم
+                    $hasUserDefined = $config->hasUserDefinedStartPage();
                     $formStartPage = $config->getStartPageForForm();
 
-                    // اگر فرم خالی است، مقدار placeholder را برای نمایش در فرم تنظیم کن
+                    // مقدار نمایشی در فرم
                     $actualFormValue = $formStartPage ?: '';
                 @endphp
                 <p class="text-gray-600">{{ $config->name }} - آخرین ID در book_sources: {{ $lastIdFromSources > 0 ? number_format($lastIdFromSources) : 'هیچ' }}</p>
@@ -35,10 +33,11 @@
             </div>
         @endif
 
-        <!-- وضعیت فعلی کانفیگ -->
+        <!-- وضعیت فعلی کانفیگ - بهبود یافته -->
         <div class="bg-gradient-to-r from-green-50 to-blue-50 border border-green-200 rounded-lg p-4">
-            <h3 class="text-green-800 font-medium mb-2">📊 وضعیت فعلی کانفیگ:</h3>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <h3 class="text-green-800 font-medium mb-3">📊 وضعیت فعلی کانفیگ:</h3>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-3">
                 <div>
                     <span class="text-gray-600">منبع:</span>
                     <span class="font-medium">{{ $config->source_name }}</span>
@@ -59,16 +58,42 @@
                 </div>
             </div>
 
-            <!-- Debug info اضافی -->
-            <div class="mt-2 text-xs text-gray-500 border-t pt-2">
-                <div>🔍 Smart Start Page: {{ $nextSmartId }}</div>
-                <div>📝 Start Page در دیتابیس: {{ $config->start_page ?? 'null' }}</div>
-                <div>📊 کل رکوردهای {{ $config->source_name }}: {{ \App\Models\BookSource::where('source_name', $config->source_name)->count() }}</div>
-                @if($formStartPage)
-                    <div>⚠️ کاربر start_page را روی {{ $formStartPage }} تنظیم کرده</div>
+            <!-- نمایش وضعیت منطق -->
+            <div class="border-t pt-3">
+                @if($hasUserDefined)
+                    <div class="bg-orange-100 border border-orange-300 rounded p-3">
+                        <h4 class="text-orange-800 font-medium mb-1">⚙️ حالت دستی فعال</h4>
+                        <div class="text-orange-700 text-sm">
+                            <div>• start_page تنظیم شده: <strong>{{ number_format($formStartPage) }}</strong></div>
+                            <div>• اجرای بعدی از ID <strong>{{ number_format($nextSmartId) }}</strong> شروع خواهد شد</div>
+                            @if($formStartPage <= $lastIdFromSources)
+                                <div class="text-red-600 font-medium mt-1">⚠️ این ID قبلاً پردازش شده! ID های تکراری پردازش خواهند شد</div>
+                            @endif
+                        </div>
+                    </div>
                 @else
-                    <div>✅ start_page خالی - شروع از ID {{ $displayNextId }} (هوشمند)</div>
+                    <div class="bg-green-100 border border-green-300 rounded p-3">
+                        <h4 class="text-green-800 font-medium mb-1">🧠 حالت هوشمند فعال</h4>
+                        <div class="text-green-700 text-sm">
+                            <div>• start_page: <strong>خالی</strong> (null)</div>
+                            <div>• اجرای بعدی از ID <strong>{{ number_format($nextSmartId) }}</strong> شروع خواهد شد</div>
+                            @if($lastIdFromSources > 0)
+                                <div class="text-green-600">✅ ادامه هوشمند از آخرین ID ثبت شده</div>
+                            @else
+                                <div class="text-blue-600">🆕 شروع جدید از ID 1</div>
+                            @endif
+                        </div>
+                    </div>
                 @endif
+            </div>
+
+            <!-- Debug info اضافی -->
+            <div class="mt-3 text-xs text-gray-500 border-t pt-2">
+                <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
+                    <div>🔍 Smart Start Page: {{ $nextSmartId }}</div>
+                    <div>📝 start_page در DB: {{ $config->start_page ?? 'null' }}</div>
+                    <div>📊 کل رکوردها: {{ \App\Models\BookSource::where('source_name', $config->source_name)->count() }}</div>
+                </div>
             </div>
         </div>
 
@@ -108,45 +133,49 @@
                     </div>
                 </div>
 
-                <!-- Smart Crawling Settings -->
+                <!-- Smart Crawling Settings - بهبود یافته -->
                 <div class="border-b border-gray-200 pb-6">
                     <h2 class="text-lg font-medium text-gray-900 mb-4">تنظیمات کرال هوشمند 🧠</h2>
 
-                    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
-                        <h3 class="text-yellow-800 font-medium mb-2">⚠️ نکات مهم:</h3>
-                        <ul class="text-yellow-700 text-sm space-y-1">
-                            <li>• آخرین ID در book_sources: <strong>{{ $lastIdFromSources > 0 ? number_format($lastIdFromSources) : 'هیچ رکوردی ثبت نشده' }}</strong></li>
-                            <li>• <strong>حالت پیش‌فرض:</strong> ادامه هوشمند از ID <strong>{{ number_format($displayNextId) }}</strong></li>
-                            <li>• برای شروع از ID خاص: عدد دلخواه را وارد کنید</li>
-                            <li>• برای شروع مجدد از اول: عدد 1 را وارد کنید</li>
-                            <li>• تغییر این تنظیمات بر روی اجرای بعدی تأثیر می‌گذارد</li>
-                            @if($formStartPage)
-                                <li class="text-orange-600 font-medium">• ⚠️ در حال حاضر حالت دستی فعال است (شروع از {{ number_format($formStartPage) }})</li>
-                            @else
-                                <li class="text-green-600 font-medium">• ✅ حالت هوشمند فعال است (ادامه از آخرین ID)</li>
-                            @endif
+                    <!-- راهنمای جدید -->
+                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                        <h3 class="text-blue-800 font-medium mb-2">🔧 منطق start_page (اصلاح شده):</h3>
+                        <ul class="text-blue-700 text-sm space-y-1">
+                            <li><strong>✅ اولویت اول:</strong> اگر start_page مقدار داشته باشد → دقیقاً از همان شروع می‌شود</li>
+                            <li><strong>🧠 اولویت دوم:</strong> اگر start_page خالی باشد → ادامه هوشمند از آخرین ID</li>
+                            <li><strong>🔄 شروع مجدد:</strong> برای شروع از اول، عدد 1 وارد کنید</li>
+                            <li><strong>📈 ادامه هوشمند:</strong> برای ادامه از آخرین ID، فیلد را خالی کنید</li>
                         </ul>
                     </div>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         <div>
                             <label for="start_page" class="block text-sm font-medium text-gray-700 mb-2">
-                                صفحه شروع (اختیاری)
+                                صفحه شروع (اختیاری) 🎯
                             </label>
                             <input type="number" id="start_page" name="start_page"
                                    value="{{ old('start_page', $actualFormValue) }}" min="1"
                                    class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 @error('start_page') border-red-500 @enderror"
-                                   placeholder="{{ $displayNextId }}">
-                            <p class="text-xs text-gray-500 mt-1">
-                                @if($formStartPage)
-                                    <span class="text-orange-600">مشخص شده: {{ number_format($formStartPage) }} (حالت دستی)</span>
+                                   placeholder="خالی = حالت هوشمند">
+
+                            <!-- نمایش وضعیت فعلی -->
+                            <div class="text-xs mt-1" id="start-page-status">
+                                @if($hasUserDefined)
+                                    <span class="text-orange-600">
+                                        🎯 مشخص شده: {{ number_format($formStartPage) }} (حالت دستی)
+                                    </span>
                                 @else
-                                    <span class="text-green-600">خالی = از ID {{ number_format($displayNextId) }} ادامه (هوشمند)</span>
+                                    <span class="text-green-600">
+                                        🧠 خالی = از ID {{ number_format($nextSmartId) }} ادامه (هوشمند)
+                                    </span>
                                 @endif
-                            </p>
-                            @if($formStartPage && $formStartPage <= $lastIdFromSources)
-                                <p class="text-xs text-red-600 mt-1">⚠️ این ID قبلاً پردازش شده! برای ادامه هوشمند، فیلد را خالی کنید</p>
+                            </div>
+
+                            <!-- هشدار در صورت نیاز -->
+                            @if($hasUserDefined && $formStartPage <= $lastIdFromSources)
+                                <p class="text-xs text-red-600 mt-1">⚠️ این ID قبلاً پردازش شده!</p>
                             @endif
+
                             @error('start_page')
                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                             @enderror
@@ -191,6 +220,54 @@
                                     📝 بهبود توضیحات
                                 </label>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Quick Actions - بهبود یافته -->
+                <div class="bg-gradient-to-r from-blue-50 to-green-50 rounded-lg p-4">
+                    <h3 class="text-blue-800 font-medium mb-3">⚡ عملیات سریع:</h3>
+                    <div class="flex flex-wrap gap-3">
+                        <button type="button" onclick="enableSmartMode()"
+                                class="px-3 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700 transition-colors">
+                            🧠 حالت هوشمند
+                        </button>
+                        <button type="button" onclick="setStartFromOne()"
+                                class="px-3 py-2 bg-orange-600 text-white rounded text-sm hover:bg-orange-700 transition-colors">
+                            🔄 شروع از ID 1
+                        </button>
+                        @if($lastIdFromSources > 0)
+                            <button type="button" onclick="setStartFromNext()"
+                                    class="px-3 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 transition-colors">
+                                ➡️ شروع از ID {{ $lastIdFromSources + 1 }}
+                            </button>
+                        @endif
+                        <button type="button" onclick="showTestCommand()"
+                                class="px-3 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 transition-colors">
+                            🔍 دستورات تست
+                        </button>
+                    </div>
+                </div>
+
+                <!-- نمایش دستورات CLI -->
+                <div id="cli-commands" class="bg-gray-900 text-green-400 rounded-lg p-4 font-mono text-sm hidden">
+                    <h3 class="text-white font-bold mb-2">🖥️ دستورات CLI مفید:</h3>
+                    <div class="space-y-2">
+                        <div>
+                            <span class="text-gray-400"># تست وضعیت فعلی:</span><br>
+                            <span class="text-green-300">php artisan config:test-start-page {{ $config->id }}</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-400"># تنظیم start_page روی 1:</span><br>
+                            <span class="text-green-300">php artisan config:test-start-page {{ $config->id }} --set-start=1</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-400"># فعال‌سازی حالت هوشمند:</span><br>
+                            <span class="text-green-300">php artisan config:test-start-page {{ $config->id }} --clear</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-400"># Debug کامل:</span><br>
+                            <span class="text-green-300">php artisan config:debug {{ $config->id }}</span>
                         </div>
                     </div>
                 </div>
@@ -339,14 +416,14 @@
 
                 <!-- Preview Section -->
                 <div class="bg-gray-50 rounded-lg p-4">
-                    <h3 class="text-md font-medium text-gray-900 mb-2">🔍 پیش‌نمایش تنظیمات جدید:</h3>
+                    <h3 class="text-md font-medium text-gray-900 mb-2">🔍 پیش‌نمایش تنظیمات:</h3>
                     <div class="text-sm text-gray-700 space-y-1" id="config-preview">
                         <div>📊 <strong>منبع:</strong> <span id="preview-source">{{ $config->source_name }}</span></div>
                         <div>🔢 <strong>شروع از ID:</strong> <span id="preview-start">
-                            @if($formStartPage)
+                            @if($hasUserDefined)
                                     {{ number_format($formStartPage) }} (مشخص شده)
                                 @else
-                                    {{ number_format($displayNextId) }} (ادامه هوشمند)
+                                    {{ number_format($nextSmartId) }} (ادامه هوشمند)
                                 @endif
                         </span></div>
                         <div>📄 <strong>تعداد کل:</strong> <span id="preview-total">{{ number_format($config->max_pages) }}</span> ID</div>
@@ -354,40 +431,17 @@
                         @if($lastIdFromSources > 0)
                             <div class="text-xs text-gray-500">💡 آخرین ID پردازش شده: {{ number_format($lastIdFromSources) }}</div>
                         @endif
-                        @if($formStartPage)
-                            <div class="text-xs text-orange-600">⚠️ کاربر start_page را مشخص کرده - ادامه هوشمند غیرفعال</div>
-                        @else
-                            <div class="text-xs text-green-600">✅ حالت هوشمند فعال - ادامه از آخرین ID</div>
-                        @endif
-                    </div>
-                </div>
-
-                <!-- Quick Actions -->
-                <div class="bg-blue-50 rounded-lg p-4">
-                    <h3 class="text-md font-medium text-blue-800 mb-2">⚡ عملیات سریع:</h3>
-                    <div class="flex gap-3">
-                        <button type="button" onclick="enableSmartMode()" class="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700">
-                            🧠 فعال‌سازی حالت هوشمند
-                        </button>
-                        <button type="button" onclick="setStartFromOne()" class="px-3 py-1 bg-orange-600 text-white rounded text-sm hover:bg-orange-700">
-                            🔄 شروع از ID 1
-                        </button>
-                        @if($lastIdFromSources > 0)
-                            <button type="button" onclick="setStartFromNext()" class="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">
-                                ➡️ شروع از ID {{ $displayNextId }}
-                            </button>
-                        @endif
                     </div>
                 </div>
 
                 <!-- Actions -->
                 <div class="flex items-center justify-end space-x-4 space-x-reverse pt-6">
                     <a href="{{ route('configs.show', $config) }}"
-                       class="px-4 py-2 border border-gray-300 rounded text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                       class="px-4 py-2 border border-gray-300 rounded text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors">
                         انصراف
                     </a>
                     <button type="submit"
-                            class="px-6 py-2 border border-transparent rounded shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700">
+                            class="px-6 py-2 border border-transparent rounded shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 transition-colors">
                         💾 ذخیره تغییرات
                     </button>
                 </div>
@@ -396,6 +450,10 @@
     </div>
 
     <script>
+        // متغیرهای JavaScript
+        const lastIdFromSources = {{ $lastIdFromSources }};
+        const defaultNextId = {{ $nextSmartId }};
+
         // تابع helper برای format کردن اعداد
         function number_format(number) {
             return new Intl.NumberFormat('fa-IR').format(number);
@@ -403,33 +461,61 @@
 
         // عملیات سریع
         function enableSmartMode() {
-            document.getElementById('start_page').value = '';
+            const startPageInput = document.getElementById('start_page');
+            startPageInput.value = '';
+            updateStartPageStatus();
             updatePreview();
-            alert('✅ حالت هوشمند فعال شد! از ID {{ $displayNextId }} ادامه خواهد یافت.');
+            showNotification('✅ حالت هوشمند فعال شد!', 'success');
         }
 
         function setStartFromOne() {
-            document.getElementById('start_page').value = '1';
+            const startPageInput = document.getElementById('start_page');
+            startPageInput.value = '1';
+            updateStartPageStatus();
             updatePreview();
-            alert('⚠️ شروع از ID 1 تنظیم شد. (حالت دستی)');
+            showNotification('🔄 شروع از ID 1 تنظیم شد!', 'warning');
         }
 
         @if($lastIdFromSources > 0)
         function setStartFromNext() {
-            document.getElementById('start_page').value = '{{ $displayNextId }}';
+            const startPageInput = document.getElementById('start_page');
+            startPageInput.value = '{{ $lastIdFromSources + 1 }}';
+            updateStartPageStatus();
             updatePreview();
-            alert('➡️ شروع از ID {{ $displayNextId }} تنظیم شد. (حالت دستی)');
+            showNotification('➡️ شروع از ID {{ $lastIdFromSources + 1 }} تنظیم شد!', 'info');
         }
         @endif
 
-        // به‌روزرسانی پیش‌نمایش
+        function showTestCommand() {
+            const cliDiv = document.getElementById('cli-commands');
+            cliDiv.classList.toggle('hidden');
+        }
+
+        // بروزرسانی وضعیت start_page
+        function updateStartPageStatus() {
+            const startPageInput = document.getElementById('start_page');
+            const statusDiv = document.getElementById('start-page-status');
+            const value = startPageInput.value.trim();
+
+            if (value === '' || value === '0') {
+                statusDiv.innerHTML = `<span class="text-green-600">🧠 خالی = از ID ${number_format(defaultNextId)} ادامه (هوشمند)</span>`;
+            } else {
+                const intValue = parseInt(value);
+                if (intValue > 0) {
+                    const warningText = intValue <= lastIdFromSources ? ' ⚠️ قبلاً پردازش شده!' : '';
+                    statusDiv.innerHTML = `<span class="text-orange-600">🎯 مشخص شده: ${number_format(intValue)} (حالت دستی)${warningText}</span>`;
+                } else {
+                    statusDiv.innerHTML = `<span class="text-red-600">❌ مقدار نامعتبر</span>`;
+                }
+            }
+        }
+
+        // بروزرسانی پیش‌نمایش
         function updatePreview() {
             const baseUrl = document.getElementById('base_url').value;
-            const startPageInput = document.getElementById('start_page').value;
+            const startPageInput = document.getElementById('start_page').value.trim();
             const maxPages = document.getElementById('max_pages').value || {{ $config->max_pages }};
             const delaySeconds = document.getElementById('delay_seconds').value || {{ $config->delay_seconds }};
-            const lastIdFromSources = {{ $lastIdFromSources }};
-            const defaultNextId = {{ $displayNextId }};
 
             // نام منبع
             if (baseUrl) {
@@ -446,9 +532,9 @@
             let startText;
             let startFromId;
 
-            if (startPageInput && startPageInput.trim() !== '' && parseInt(startPageInput) > 0) {
+            if (startPageInput && startPageInput !== '' && parseInt(startPageInput) > 0) {
                 startFromId = parseInt(startPageInput);
-                startText = `${number_format(startFromId)} (مشخص شده توسط کاربر)`;
+                startText = `${number_format(startFromId)} (مشخص شده)`;
             } else {
                 startFromId = defaultNextId;
                 startText = `${number_format(defaultNextId)} (ادامه هوشمند)`;
@@ -471,13 +557,38 @@
             document.getElementById('preview-time').textContent = timeText;
         }
 
+        // نمایش نوتیفیکیشن
+        function showNotification(message, type = 'info') {
+            const colors = {
+                success: 'bg-green-100 border-green-400 text-green-700',
+                warning: 'bg-yellow-100 border-yellow-400 text-yellow-700',
+                error: 'bg-red-100 border-red-400 text-red-700',
+                info: 'bg-blue-100 border-blue-400 text-blue-700'
+            };
+
+            const notification = document.createElement('div');
+            notification.className = `fixed top-4 right-4 p-4 border rounded shadow-lg z-50 ${colors[type]}`;
+            notification.textContent = message;
+
+            document.body.appendChild(notification);
+
+            setTimeout(() => {
+                notification.remove();
+            }, 3000);
+        }
+
         // Event listeners
+        document.getElementById('start_page').addEventListener('input', function() {
+            updateStartPageStatus();
+            updatePreview();
+        });
+
         document.getElementById('base_url').addEventListener('input', updatePreview);
-        document.getElementById('start_page').addEventListener('input', updatePreview);
         document.getElementById('max_pages').addEventListener('input', updatePreview);
         document.getElementById('delay_seconds').addEventListener('input', updatePreview);
 
         // اولین بار
+        updateStartPageStatus();
         updatePreview();
     </script>
 @endsection

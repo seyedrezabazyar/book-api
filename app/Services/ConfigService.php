@@ -15,8 +15,8 @@ class ConfigService
         $configData = $this->buildConfigData($data);
         $sourceName = $this->extractSourceName($data['base_url']);
 
-        // اگر start_page خالی است، آن را null بگذاریم تا getSmartStartPage کار کند
-        $startPage = !empty($data['start_page']) ? (int)$data['start_page'] : null;
+        // اصلاح منطق start_page
+        $startPage = $this->processStartPage($data['start_page'] ?? null);
 
         return Config::create([
             ...$data,
@@ -43,8 +43,10 @@ class ConfigService
         $configData = $this->buildConfigData($data);
         $sourceName = $this->extractSourceName($data['base_url']);
 
-        // اگر start_page خالی است، آن را null بگذاریم
-        $startPage = !empty($data['start_page']) ? (int)$data['start_page'] : null;
+        // اصلاح منطق start_page
+        $startPage = $this->processStartPage($data['start_page'] ?? null);
+
+        $oldStartPage = $config->start_page;
 
         $config->update([
             ...$data,
@@ -55,12 +57,46 @@ class ConfigService
 
         Log::info("🔧 کانفیگ ویرایش شد", [
             'config_id' => $config->id,
-            'start_page' => $startPage,
+            'old_start_page' => $oldStartPage,
+            'new_start_page' => $startPage,
             'source_name' => $sourceName,
-            'smart_start_page' => $config->getSmartStartPage()
+            'smart_start_page' => $config->getSmartStartPage(),
+            'has_user_defined_start' => $config->hasUserDefinedStartPage()
         ]);
 
         return $config;
+    }
+
+    /**
+     * پردازش مقدار start_page با منطق صحیح
+     */
+    private function processStartPage($startPageValue): ?int
+    {
+        // اگر مقدار وجود ندارد یا خالی است
+        if ($startPageValue === null || $startPageValue === '' || $startPageValue === false) {
+            Log::debug("📝 start_page خالی - حالت هوشمند فعال خواهد شد");
+            return null;
+        }
+
+        // تبدیل به عدد صحیح
+        $intValue = (int) $startPageValue;
+
+        // اگر عدد معتبر است (بزرگتر از 0)
+        if ($intValue > 0) {
+            Log::info("🎯 start_page تنظیم شد", [
+                'original_value' => $startPageValue,
+                'processed_value' => $intValue,
+                'mode' => 'user_defined'
+            ]);
+            return $intValue;
+        }
+
+        // اگر عدد نامعتبر است (0 یا منفی)
+        Log::warning("⚠️ start_page نامعتبر دریافت شد، حالت هوشمند فعال می‌شود", [
+            'invalid_value' => $startPageValue,
+            'converted_to' => $intValue
+        ]);
+        return null;
     }
 
     public function delete(Config $config): void

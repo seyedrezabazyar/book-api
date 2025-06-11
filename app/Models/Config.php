@@ -67,56 +67,47 @@ class Config extends Model
     }
 
     /**
-     * تعیین صفحه شروع هوشمند - اصلاح نهایی
-     * اولویت اول با ادامه هوشمند است، مگر اینکه کاربر دستی تغییر داده باشد
+     * تعیین صفحه شروع هوشمند - اصلاح شده
+     * اولویت اول با start_page مشخص شده توسط کاربر است
      */
     public function getSmartStartPage(): int
     {
-        // اولویت 1: ادامه هوشمند از آخرین ID در book_sources
+        // 🔥 اولویت اول: اگر کاربر start_page مشخص کرده، حتماً از آن استفاده کن
+        if ($this->start_page !== null && $this->start_page > 0) {
+            Log::info("🎯 شروع از start_page مشخص شده توسط کاربر", [
+                'config_id' => $this->id,
+                'start_page' => $this->start_page,
+                'user_override' => true,
+                'reason' => 'user_defined_start_page'
+            ]);
+            return $this->start_page;
+        }
+
+        // اولویت دوم: ادامه هوشمند از آخرین ID در book_sources
         $lastIdFromSources = $this->getLastSourceIdFromBookSources();
 
         if ($lastIdFromSources > 0) {
-            // فقط اگر start_page بزرگتر از آخرین ID باشد، از آن استفاده کن
-            // وگرنه ادامه هوشمند
-            if ($this->start_page && $this->start_page > $lastIdFromSources) {
-                Log::info("🎯 شروع از start_page مشخص شده (بزرگتر از آخرین ID)", [
-                    'config_id' => $this->id,
-                    'start_page' => $this->start_page,
-                    'last_id_from_sources' => $lastIdFromSources,
-                    'user_override' => true
-                ]);
-                return $this->start_page;
-            }
-
             $nextId = $lastIdFromSources + 1;
             Log::info("📊 ادامه هوشمند از آخرین ID در book_sources", [
                 'config_id' => $this->id,
                 'source_name' => $this->source_name,
                 'last_id_from_sources' => $lastIdFromSources,
                 'next_start' => $nextId,
-                'smart_mode' => true
+                'smart_mode' => true,
+                'reason' => 'smart_continuation'
             ]);
             return $nextId;
         }
 
-        // اولویت 2: اگر رکوردی در book_sources نیست، از start_page استفاده کن
-        if ($this->start_page && $this->start_page > 0) {
-            Log::info("🎯 شروع از start_page (هیچ رکوردی در book_sources نیست)", [
-                'config_id' => $this->id,
-                'start_page' => $this->start_page,
-                'no_existing_records' => true
-            ]);
-            return $this->start_page;
-        }
-
-        // اولویت 3: اگر auto_resume فعال باشد و last_source_id موجود باشد
+        // اولویت سوم: اگر auto_resume فعال باشد و last_source_id موجود باشد
         if ($this->auto_resume && $this->last_source_id > 0) {
             $nextId = $this->last_source_id + 1;
             Log::info("🔄 ادامه از last_source_id", [
                 'config_id' => $this->id,
                 'last_source_id' => $this->last_source_id,
                 'next_start' => $nextId,
-                'auto_resume' => true
+                'auto_resume' => true,
+                'reason' => 'auto_resume'
             ]);
             return $nextId;
         }
@@ -125,7 +116,8 @@ class Config extends Model
         Log::info("🆕 شروع جدید از ID 1 (پیش‌فرض)", [
             'config_id' => $this->id,
             'source_name' => $this->source_name,
-            'default_start' => true
+            'default_start' => true,
+            'reason' => 'default_start'
         ]);
         return 1;
     }
@@ -144,7 +136,7 @@ class Config extends Model
 
             $result = $lastSourceRecord ? (int)$lastSourceRecord->source_id : 0;
 
-            Log::info("🔍 بررسی آخرین ID در book_sources", [
+            Log::debug("🔍 بررسی آخرین ID در book_sources", [
                 'config_id' => $this->id,
                 'source_name' => $this->source_name,
                 'last_id' => $result,
@@ -199,8 +191,6 @@ class Config extends Model
         // اگر مشخص نشده، null برگردان (فیلد فرم خالی خواهد بود)
         return null;
     }
-
-    // بقیه متدها...
 
     /**
      * بررسی وجود فیلدهای مفقود در book_sources برای این منبع
