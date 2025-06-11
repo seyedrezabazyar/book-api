@@ -67,31 +67,46 @@ class Config extends Model
     }
 
     /**
-     * تعیین صفحه شروع هوشمند - اصلاح شده
+     * تعیین صفحه شروع هوشمند - اصلاح نهایی
+     * اولویت اول با ادامه هوشمند است، مگر اینکه کاربر دستی تغییر داده باشد
      */
     public function getSmartStartPage(): int
     {
-        // اولویت 1: اگر start_page مشخص شده، از آن استفاده کن
-        if ($this->start_page && $this->start_page > 0) {
-            Log::info("🎯 شروع از start_page تعیین شده", [
-                'config_id' => $this->id,
-                'start_page' => $this->start_page
-            ]);
-            return $this->start_page;
-        }
-
-        // اولویت 2: آخرین ID از book_sources برای این منبع (اصلی)
+        // اولویت 1: ادامه هوشمند از آخرین ID در book_sources
         $lastIdFromSources = $this->getLastSourceIdFromBookSources();
 
         if ($lastIdFromSources > 0) {
+            // فقط اگر start_page بزرگتر از آخرین ID باشد، از آن استفاده کن
+            // وگرنه ادامه هوشمند
+            if ($this->start_page && $this->start_page > $lastIdFromSources) {
+                Log::info("🎯 شروع از start_page مشخص شده (بزرگتر از آخرین ID)", [
+                    'config_id' => $this->id,
+                    'start_page' => $this->start_page,
+                    'last_id_from_sources' => $lastIdFromSources,
+                    'user_override' => true
+                ]);
+                return $this->start_page;
+            }
+
             $nextId = $lastIdFromSources + 1;
-            Log::info("📊 شروع از آخرین ID در book_sources", [
+            Log::info("📊 ادامه هوشمند از آخرین ID در book_sources", [
                 'config_id' => $this->id,
                 'source_name' => $this->source_name,
                 'last_id_from_sources' => $lastIdFromSources,
-                'next_start' => $nextId
+                'next_start' => $nextId,
+                'smart_mode' => true
             ]);
             return $nextId;
+        }
+
+        // اولویت 2: اگر رکوردی در book_sources نیست، از start_page استفاده کن
+        if ($this->start_page && $this->start_page > 0) {
+            Log::info("🎯 شروع از start_page (هیچ رکوردی در book_sources نیست)", [
+                'config_id' => $this->id,
+                'start_page' => $this->start_page,
+                'no_existing_records' => true
+            ]);
+            return $this->start_page;
         }
 
         // اولویت 3: اگر auto_resume فعال باشد و last_source_id موجود باشد
@@ -100,15 +115,17 @@ class Config extends Model
             Log::info("🔄 ادامه از last_source_id", [
                 'config_id' => $this->id,
                 'last_source_id' => $this->last_source_id,
-                'next_start' => $nextId
+                'next_start' => $nextId,
+                'auto_resume' => true
             ]);
             return $nextId;
         }
 
         // پیش‌فرض: از 1 شروع کن
-        Log::info("🆕 شروع جدید از ID 1", [
+        Log::info("🆕 شروع جدید از ID 1 (پیش‌فرض)", [
             'config_id' => $this->id,
-            'source_name' => $this->source_name
+            'source_name' => $this->source_name,
+            'default_start' => true
         ]);
         return 1;
     }
@@ -160,6 +177,30 @@ class Config extends Model
             }
         }
     }
+
+    /**
+     * متد جدید: بررسی اینکه آیا start_page توسط کاربر مشخص شده یا خیر
+     */
+    public function hasUserDefinedStartPage(): bool
+    {
+        return $this->start_page !== null && $this->start_page > 0;
+    }
+
+    /**
+     * متد جدید: دریافت start_page برای نمایش در فرم
+     */
+    public function getStartPageForForm(): ?int
+    {
+        // اگر start_page مشخص شده، آن را برگردان (حتی اگر 1 باشد)
+        if ($this->start_page !== null && $this->start_page > 0) {
+            return $this->start_page;
+        }
+
+        // اگر مشخص نشده، null برگردان (فیلد فرم خالی خواهد بود)
+        return null;
+    }
+
+    // بقیه متدها...
 
     /**
      * بررسی وجود فیلدهای مفقود در book_sources برای این منبع
