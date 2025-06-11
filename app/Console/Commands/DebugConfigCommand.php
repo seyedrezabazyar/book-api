@@ -23,22 +23,38 @@ class DebugConfigCommand extends Command
         $this->info("🔍 Debug کانفیگ: {$config->name} (ID: {$config->id})");
         $this->newLine();
 
-        // اطلاعات اصلی
+        $this->displayBasicInfo($config);
+        $this->displayStartPageInfo($config);
+        $this->displaySmartCalculations($config);
+        $this->displayStatistics($config);
+        $this->displayBookSourcesStats($config);
+        $this->displayStatusAnalysis($config);
+        $this->displayRecommendations($config);
+
+        return Command::SUCCESS;
+    }
+
+    private function displayBasicInfo(Config $config): void
+    {
         $this->info("📊 اطلاعات اصلی:");
         $this->line("   • نام: {$config->name}");
         $this->line("   • منبع: {$config->source_name}");
         $this->line("   • وضعیت: " . ($config->is_running ? 'در حال اجرا' : 'متوقف'));
         $this->newLine();
+    }
 
-        // اطلاعات start_page
+    private function displayStartPageInfo(Config $config): void
+    {
         $this->info("🎯 اطلاعات start_page:");
         $this->line("   • start_page در دیتابیس: " . ($config->start_page ?? 'null'));
         $this->line("   • نوع start_page: " . gettype($config->start_page));
         $this->line("   • آیا توسط کاربر مشخص شده: " . ($config->hasUserDefinedStartPage() ? 'بله' : 'خیر'));
         $this->line("   • مقدار برای فرم: " . ($config->getStartPageForForm() ?? 'null'));
         $this->newLine();
+    }
 
-        // اطلاعات هوشمند
+    private function displaySmartCalculations(Config $config): void
+    {
         $lastIdFromSources = $config->getLastSourceIdFromBookSources();
         $smartStartPage = $config->getSmartStartPage();
 
@@ -48,16 +64,21 @@ class DebugConfigCommand extends Command
         $this->line("   • last_source_id در کانفیگ: " . ($config->last_source_id ?? 'null'));
         $this->line("   • auto_resume: " . ($config->auto_resume ? 'فعال' : 'غیرفعال'));
         $this->newLine();
+    }
 
-        // آمار کانفیگ
+    private function displayStatistics(Config $config): void
+    {
         $this->info("📈 آمار کانفیگ:");
         $this->line("   • کل پردازش شده: " . number_format($config->total_processed ?? 0));
         $this->line("   • موفق: " . number_format($config->total_success ?? 0));
         $this->line("   • ناموفق: " . number_format($config->total_failed ?? 0));
         $this->newLine();
+    }
 
-        // آمار book_sources
+    private function displayBookSourcesStats(Config $config): void
+    {
         $sourceRecordsCount = \App\Models\BookSource::where('source_name', $config->source_name)->count();
+
         $this->info("📚 آمار book_sources:");
         $this->line("   • کل رکوردهای منبع: " . number_format($sourceRecordsCount));
 
@@ -71,7 +92,6 @@ class DebugConfigCommand extends Command
 
             $this->line("   • محدوده ID ها: {$minId} تا {$maxId}");
 
-            // آخرین 5 رکورد
             $latestRecords = \App\Models\BookSource::where('source_name', $config->source_name)
                 ->whereRaw('source_id REGEXP "^[0-9]+$"')
                 ->orderByRaw('CAST(source_id AS UNSIGNED) DESC')
@@ -84,8 +104,12 @@ class DebugConfigCommand extends Command
             }
         }
         $this->newLine();
+    }
 
-        // تحلیل وضعیت
+    private function displayStatusAnalysis(Config $config): void
+    {
+        $lastIdFromSources = $config->getLastSourceIdFromBookSources();
+
         $this->info("🔬 تحلیل وضعیت:");
 
         if ($config->start_page === null) {
@@ -103,8 +127,12 @@ class DebugConfigCommand extends Command
                 $this->line("   ⚠️ هشدار: این ID قبلاً پردازش شده!");
             }
         }
+    }
 
-        // پیشنهادات
+    private function displayRecommendations(Config $config): void
+    {
+        $lastIdFromSources = $config->getLastSourceIdFromBookSources();
+
         $this->newLine();
         $this->info("💡 پیشنهادات:");
 
@@ -121,7 +149,5 @@ class DebugConfigCommand extends Command
             $this->line("   • برای شروع مجدد از 1: درست تنظیم شده");
             $this->line("   • ⚠️ ID های 1 تا {$lastIdFromSources} دوباره پردازش خواهند شد");
         }
-
-        return Command::SUCCESS;
     }
 }

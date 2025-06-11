@@ -14,8 +14,6 @@ class ConfigService
     {
         $configData = $this->buildConfigData($data);
         $sourceName = $this->extractSourceName($data['base_url']);
-
-        // اصلاح منطق start_page
         $startPage = $this->processStartPage($data['start_page'] ?? null);
 
         return Config::create([
@@ -25,7 +23,7 @@ class ConfigService
             'config_data' => $configData,
             'created_by' => Auth::id(),
             'start_page' => $startPage,
-            'current_page' => $startPage ?? 1, // اگر start_page null است، current_page را 1 قرار بده
+            'current_page' => $startPage ?? 1,
             'total_processed' => 0,
             'total_success' => 0,
             'total_failed' => 0,
@@ -42,10 +40,7 @@ class ConfigService
 
         $configData = $this->buildConfigData($data);
         $sourceName = $this->extractSourceName($data['base_url']);
-
-        // اصلاح منطق start_page
         $startPage = $this->processStartPage($data['start_page'] ?? null);
-
         $oldStartPage = $config->start_page;
 
         $config->update([
@@ -67,38 +62,6 @@ class ConfigService
         return $config;
     }
 
-    /**
-     * پردازش مقدار start_page با منطق صحیح
-     */
-    private function processStartPage($startPageValue): ?int
-    {
-        // اگر مقدار وجود ندارد یا خالی است
-        if ($startPageValue === null || $startPageValue === '' || $startPageValue === false) {
-            Log::debug("📝 start_page خالی - حالت هوشمند فعال خواهد شد");
-            return null;
-        }
-
-        // تبدیل به عدد صحیح
-        $intValue = (int) $startPageValue;
-
-        // اگر عدد معتبر است (بزرگتر از 0)
-        if ($intValue > 0) {
-            Log::info("🎯 start_page تنظیم شد", [
-                'original_value' => $startPageValue,
-                'processed_value' => $intValue,
-                'mode' => 'user_defined'
-            ]);
-            return $intValue;
-        }
-
-        // اگر عدد نامعتبر است (0 یا منفی)
-        Log::warning("⚠️ start_page نامعتبر دریافت شد، حالت هوشمند فعال می‌شود", [
-            'invalid_value' => $startPageValue,
-            'converted_to' => $intValue
-        ]);
-        return null;
-    }
-
     public function delete(Config $config): void
     {
         if ($config->is_running) {
@@ -108,6 +71,31 @@ class ConfigService
         ExecutionLog::where('config_id', $config->id)->delete();
         ScrapingFailure::where('config_id', $config->id)->delete();
         $config->delete();
+    }
+
+    private function processStartPage($startPageValue): ?int
+    {
+        if ($startPageValue === null || $startPageValue === '' || $startPageValue === false) {
+            Log::debug("📝 start_page خالی - حالت هوشمند فعال خواهد شد");
+            return null;
+        }
+
+        $intValue = (int) $startPageValue;
+
+        if ($intValue > 0) {
+            Log::info("🎯 start_page تنظیم شد", [
+                'original_value' => $startPageValue,
+                'processed_value' => $intValue,
+                'mode' => 'user_defined'
+            ]);
+            return $intValue;
+        }
+
+        Log::warning("⚠️ start_page نامعتبر دریافت شد، حالت هوشمند فعال می‌شود", [
+            'invalid_value' => $startPageValue,
+            'converted_to' => $intValue
+        ]);
+        return null;
     }
 
     private function extractSourceName(string $url): string

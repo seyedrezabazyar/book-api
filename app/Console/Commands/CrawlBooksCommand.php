@@ -122,23 +122,15 @@ class CrawlBooksCommand extends Command
 
     private function determineCrawlSettings(Config $config): array
     {
-        $startPage = (int)$this->option('start-page');
-        $pagesCount = (int)$this->option('pages');
+        $startPage = (int)$this->option('start-page') ?: $config->getSmartStartPage();
+        $pagesCount = (int)$this->option('pages') ?: $config->max_pages ?: 100;
 
-        if ($startPage <= 0) {
-            $startPage = $config->getSmartStartPage();
-
-            if ($this->option('debug')) {
-                $lastId = $config->getLastSourceIdFromBookSources();
-                $this->line("🎯 تشخیص خودکار:");
-                $this->line("   • آخرین ID در book_sources: " . ($lastId ?: 'هیچ'));
-                $this->line("   • start_page کاربر: " . ($config->start_page ?: 'خودکار'));
-                $this->line("   • نقطه شروع نهایی: {$startPage}");
-            }
-        }
-
-        if ($pagesCount <= 0) {
-            $pagesCount = $config->max_pages ?: 100;
+        if ($this->option('debug') && !(int)$this->option('start-page')) {
+            $lastId = $config->getLastSourceIdFromBookSources();
+            $this->line("🎯 تشخیص خودکار:");
+            $this->line("   • آخرین ID در book_sources: " . ($lastId ?: 'هیچ'));
+            $this->line("   • start_page کاربر: " . ($config->start_page ?: 'خودکار'));
+            $this->line("   • نقطه شروع نهایی: {$startPage}");
         }
 
         return [
@@ -244,9 +236,7 @@ class CrawlBooksCommand extends Command
             case 'merged':
                 $currentStats['enhanced']++;
                 break;
-            case 'already_processed':
-            case 'source_added':
-            case 'no_changes':
+            default:
                 $currentStats['duplicate']++;
                 break;
         }
