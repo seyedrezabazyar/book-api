@@ -21,21 +21,18 @@ return new class extends Migration
             $table->foreign('book_id')->references('id')->on('books')->onDelete('cascade');
             $table->index(['source_name', 'source_id'], 'idx_source_lookup');
             $table->index(['book_id', 'source_name'], 'idx_book_sources');
-
-            try {
-                $table->index(['source_name', 'discovered_at'], 'idx_source_discovery_time');
-            } catch (\Exception $e) {
-                // Index might already exist
-            }
+            $table->index(['source_name', 'discovered_at'], 'idx_source_discovery_time');
         });
 
-        // Numeric index for source_id
+        // اضافه کردن index برای مرتب‌سازی صحیح source_id های عددی
         try {
+            // برای MySQL
             DB::statement('ALTER TABLE book_sources ADD INDEX idx_source_id_numeric ((CAST(source_id AS UNSIGNED)))');
+            DB::statement('ALTER TABLE book_sources ADD INDEX idx_source_name_numeric (source_name, (CAST(source_id AS UNSIGNED)))');
         } catch (\Exception $e) {
-            // Fallback to simple index
+            // Fallback برای دیتابیس‌های دیگر
             Schema::table('book_sources', function (Blueprint $table) {
-                $table->index('source_id', 'idx_source_id');
+                $table->index('source_id', 'idx_source_id_fallback');
             });
         }
     }
@@ -49,10 +46,14 @@ return new class extends Migration
                     $table->dropIndex('idx_source_lookup');
                     $table->dropIndex('idx_book_sources');
                     $table->dropIndex('idx_source_id_numeric');
+                    $table->dropIndex('idx_source_name_numeric');
                 } catch (\Exception $e) {
-                    // Indexes might not exist
+                    try {
+                        $table->dropIndex('idx_source_id_fallback');
+                    } catch (\Exception $e2) {
+                        // Index might not exist
+                    }
                 }
-                $table->dropTimestamps();
             });
         }
         Schema::dropIfExists('book_sources');

@@ -171,24 +171,6 @@ class ProcessSinglePageJob implements ShouldQueue
             return;
         }
 
-        // اگر این source ID موجود نبود، چند تا پشت سر هم چک کن
-        if (isset($result['action']) && in_array($result['action'], ['no_book_found', 'failed'])) {
-            $recentFailures = $this->countRecentFailures($config, $this->sourceId);
-
-            if ($recentFailures >= 5) {
-                Log::info("📄 {$recentFailures} source ID پشت سر هم ناموفق بود، اجرا تمام می‌شود", [
-                    'config_id' => $this->configId,
-                    'execution_id' => $this->executionId,
-                    'last_source_id' => $this->sourceId
-                ]);
-
-                // Job پایان اجرا را dispatch کن
-                self::dispatch($this->configId, -1, $this->executionId)
-                    ->delay(now()->addSeconds(5));
-                return;
-            }
-        }
-
         // بررسی محدودیت تعداد IDs
         $maxIds = $config->max_pages ?? 1000;
         $startId = $config->getSmartStartPage();
@@ -206,6 +188,27 @@ class ProcessSinglePageJob implements ShouldQueue
             self::dispatch($this->configId, -1, $this->executionId)
                 ->delay(now()->addSeconds(5));
             return;
+        }
+
+        // اگر این source ID ناموفق بود اما هنوز امکان retry دارد، ادامه بده
+        // منطق retry در ApiDataService انجام میشه و failed request ثبت میشه
+
+        // بررسی پیاپی ناموفق بودن زیاد - اما فقط برای max_retries_reached
+        if (isset($result['action']) && $result['action'] === 'max_retries_reached') {
+            $recentMaxRetries = $this->countRecentMaxRetries($config, $this->sourceId);
+
+            if ($recentMaxRetries >= 10) {
+                Log::info("📄 {$recentMaxRetries} source ID پشت سر هم حداکثر تلاش رسیدند، اجرا تمام می‌شود", [
+                    'config_id' => $this->configId,
+                    'execution_id' => $this->executionId,
+                    'last_source_id' => $this->sourceId
+                ]);
+
+                // Job پایان اجرا را dispatch کن
+                self::dispatch($this->configId, -1, $this->executionId)
+                    ->delay(now()->addSeconds(5));
+                return;
+            }
         }
 
         // برنامه‌ریزی source ID بعدی

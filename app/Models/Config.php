@@ -67,14 +67,6 @@ class Config extends Model
     }
 
     /**
-     * بررسی فعال بودن کانفیگ
-     */
-    public function isActive(): bool
-    {
-        return $this->is_active ?? true;
-    }
-
-    /**
      * تعیین صفحه شروع هوشمند - اصلاح شده
      */
     public function getSmartStartPage(): int
@@ -89,28 +81,17 @@ class Config extends Model
         }
 
         // اولویت 2: آخرین ID از book_sources برای این منبع (اصلی)
-        try {
-            $lastIdFromSources = BookSource::where('source_name', $this->source_name)
-                ->whereRaw('source_id REGEXP "^[0-9]+$"')
-                ->orderByRaw('CAST(source_id AS UNSIGNED) DESC')
-                ->value('source_id');
+        $lastIdFromSources = $this->getLastSourceIdFromBookSources();
 
-            if ($lastIdFromSources > 0) {
-                $nextId = (int)$lastIdFromSources + 1;
-                Log::info("📊 شروع از آخرین ID در book_sources", [
-                    'config_id' => $this->id,
-                    'source_name' => $this->source_name,
-                    'last_id_from_sources' => $lastIdFromSources,
-                    'next_start' => $nextId
-                ]);
-                return $nextId;
-            }
-        } catch (\Exception $e) {
-            Log::warning("خطا در دریافت آخرین ID از book_sources", [
+        if ($lastIdFromSources > 0) {
+            $nextId = $lastIdFromSources + 1;
+            Log::info("📊 شروع از آخرین ID در book_sources", [
                 'config_id' => $this->id,
                 'source_name' => $this->source_name,
-                'error' => $e->getMessage()
+                'last_id_from_sources' => $lastIdFromSources,
+                'next_start' => $nextId
             ]);
+            return $nextId;
         }
 
         // اولویت 3: اگر auto_resume فعال باشد و last_source_id موجود باشد
@@ -133,24 +114,93 @@ class Config extends Model
     }
 
     /**
-     * دریافت آخرین ID ثبت شده در book_sources برای این منبع
+     * دریافت آخرین ID ثبت شده در book_sources برای این منبع - اصلاح شده
      */
     public function getLastSourceIdFromBookSources(): int
     {
         try {
-            $lastId = BookSource::where('source_name', $this->source_name)
-                ->whereRaw('source_id REGEXP "^[0-9]+$"')
+            // استفاده از BookSource model با orderByRaw صحیح
+            $lastSourceRecord = \App\Models\BookSource::where('source_name', $this->source_name)
+                ->whereRaw('source_id REGEXP "^[0-9]+$"') // فقط source_id های عددی
                 ->orderByRaw('CAST(source_id AS UNSIGNED) DESC')
-                ->value('source_id');
+                ->first();
 
-            return $lastId ? (int)$lastId : 0;
+            $result = $lastSourceRecord ? (int)$lastSourceRecord->source_id : 0;
+
+            Log::info("🔍 بررسی آخرین ID در book_sources", [
+                'config_id' => $this->id,
+                'source_name' => $this->source_name,
+                'last_id' => $result,
+                'found_record' => $lastSourceRecord ? true : false,
+                'total_records' => \App\Models\BookSource::where('source_name', $this->source_name)->count()
+            ]);
+
+            return $result;
         } catch (\Exception $e) {
-            Log::error("خطا در دریافت آخرین ID از book_sources", [
+            Log::error("❌ خطا در دریافت آخرین ID از book_sources", [
+                'config_id' => $this->id,
+                'source_name' => $this->source_name,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            // Fallback: استفاده از query ساده‌تر
+            try {
+                $maxId = \App\Models\BookSource::where('source_name', $this->source_name)
+                    ->whereRaw('source_id REGEXP "^[0-9]+$"')
+                    ->max(\DB::raw('CAST(source_id AS UNSIGNED)'));
+
+                return $maxId ? (int)$maxId : 0;
+            } catch (\Exception $fallbackError) {
+                Log::error("❌ خطا در fallback query", [
+                    'config_id' => $this->id,
+                    'fallback_error' => $fallbackError->getMessage()
+                ]);
+                return 0;
+            }
+        }
+    }
+
+    /**
+     * بررسی وجود فیلدهای مفقود در book_sources برای این منبع
+     */
+    public function getMissingSourceIds(int $startId, int $endId, int $limit = 100): array
+    {
+        try {
+            // دریافت ID های موجود در این بازه
+            $existingIds = \DB::table('book_sources')
+                ->where('source_name', $this->source_name)
+                ->whereRaw('source_id REGEXP "^[0-9]+$"')
+                ->whereBetween(\DB::raw('CAST(source_id AS UNSIGNED)'), [$startId, $endId])
+                ->pluck('source_id')
+                ->map(fn($id) => (int)$id)
+                ->sort()
+                ->values()
+                ->toArray();
+
+            // محاسبه ID های مفقود
+            $allIds = range($startId, $endId);
+            $missingIds = array_diff($allIds, $existingIds);
+
+            // محدود کردن نتایج
+            $missingIds = array_slice(array_values($missingIds), 0, $limit);
+
+            Log::info("🔍 جستجوی ID های مفقود", [
+                'source_name' => $this->source_name,
+                'range' => "{$startId}-{$endId}",
+                'existing_count' => count($existingIds),
+                'missing_count' => count($missingIds),
+                'sample_missing' => array_slice($missingIds, 0, 10)
+            ]);
+
+            return $missingIds;
+        } catch (\Exception $e) {
+            Log::error("❌ خطا در یافتن ID های مفقود", [
                 'config_id' => $this->id,
                 'source_name' => $this->source_name,
                 'error' => $e->getMessage()
             ]);
-            return 0;
+            return [];
         }
     }
 
