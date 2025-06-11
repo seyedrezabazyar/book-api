@@ -4,6 +4,7 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\DB;
 
 class QueueManagerService
 {
@@ -224,8 +225,8 @@ class QueueManagerService
     {
         try {
             return [
-                'pending_jobs' => \DB::table('jobs')->count(),
-                'failed_jobs' => \DB::table('failed_jobs')->count(),
+                'pending_jobs' => DB::table('jobs')->count(),
+                'failed_jobs' => DB::table('failed_jobs')->count(),
                 'worker_status' => self::getWorkerStatus()
             ];
         } catch (\Exception $e) {

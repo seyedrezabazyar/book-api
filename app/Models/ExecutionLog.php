@@ -139,7 +139,7 @@ class ExecutionLog extends Model
     }
 
     /**
-     * بروزرسانی پیشرفت با آمار جدید - اصلاح شده
+     * بروزرسانی پیشرفت با آمار جدید - کاملاً اصلاح شده
      */
     public function updateProgress(array $pageStats): void
     {
@@ -157,19 +157,21 @@ class ExecutionLog extends Model
         ]);
 
         try {
-            DB::transaction(function () use ($pageStats) {
-                $log = ExecutionLog::lockForUpdate()->find($this->id);
+            $self = $this; // کپی کردن reference برای استفاده در closure
+
+            DB::transaction(function () use ($pageStats, $self) {
+                $log = ExecutionLog::lockForUpdate()->find($self->id);
 
                 if (!$log) {
-                    throw new \Exception("ExecutionLog {$this->id} یافت نشد");
+                    throw new \Exception("ExecutionLog {$self->id} یافت نشد");
                 }
 
-                // پردازش آمار ورودی با کلیدهای استاندارد
-                $totalToAdd = $this->extractStatValue($pageStats, ['total_processed', 'total']);
-                $successToAdd = $this->extractStatValue($pageStats, ['total_success', 'success']);
-                $failedToAdd = $this->extractStatValue($pageStats, ['total_failed', 'failed']);
-                $duplicateToAdd = $this->extractStatValue($pageStats, ['total_duplicate', 'duplicate']);
-                $enhancedToAdd = $this->extractStatValue($pageStats, ['total_enhanced', 'enhanced']);
+                // پردازش آمار ورودی با کلیدهای استاندارد - تعریف متغیرها داخل closure
+                $totalToAdd = $self->extractStatValue($pageStats, ['total_processed', 'total']);
+                $successToAdd = $self->extractStatValue($pageStats, ['total_success', 'success']);
+                $failedToAdd = $self->extractStatValue($pageStats, ['total_failed', 'failed']);
+                $duplicateToAdd = $self->extractStatValue($pageStats, ['total_duplicate', 'duplicate']);
+                $enhancedToAdd = $self->extractStatValue($pageStats, ['total_enhanced', 'enhanced']);
 
                 // بروزرسانی آمار
                 $log->increment('total_processed', $totalToAdd);
@@ -188,6 +190,19 @@ class ExecutionLog extends Model
                     'success_rate' => $newSuccessRate,
                     'last_activity_at' => now()
                 ]);
+
+                // لاگ کردن آمار داخل transaction
+                Log::debug("📊 آمار ExecutionLog بروزرسانی شد", [
+                    'log_id' => $self->id,
+                    'execution_id' => $self->execution_id,
+                    'added_stats' => [
+                        'total_processed' => $totalToAdd,
+                        'total_success' => $successToAdd,
+                        'total_enhanced' => $enhancedToAdd,
+                        'total_failed' => $failedToAdd,
+                        'total_duplicate' => $duplicateToAdd
+                    ]
+                ]);
             });
 
             $this->refresh();
@@ -201,27 +216,20 @@ class ExecutionLog extends Model
                     'total_failed' => $this->total_failed,
                     'total_duplicate' => $this->total_duplicate,
                     'success_rate' => $this->success_rate,
-                    'real_success_rate' => $this->real_success_rate
+                    'real_success_rate' => $this->getRealSuccessRateAttribute()
                 ]
             ]);
 
             Log::info("✅ ExecutionLog progress بروزرسانی شد", [
                 'log_id' => $this->id,
                 'execution_id' => $this->execution_id,
-                'added_stats' => [
-                    'total_processed' => $totalToAdd,
-                    'total_success' => $successToAdd,
-                    'total_enhanced' => $enhancedToAdd,
-                    'total_failed' => $failedToAdd,
-                    'total_duplicate' => $duplicateToAdd
-                ],
                 'final_stats' => [
                     'total_processed' => $this->total_processed,
                     'total_success' => $this->total_success,
                     'total_enhanced' => $this->total_enhanced,
                     'total_failed' => $this->total_failed,
                     'total_duplicate' => $this->total_duplicate,
-                    'real_success_rate' => $this->real_success_rate
+                    'real_success_rate' => $this->getRealSuccessRateAttribute()
                 ]
             ]);
         } catch (\Exception $e) {
@@ -290,7 +298,7 @@ class ExecutionLog extends Model
                 'final_stats' => $finalStats,
                 'execution_time_seconds' => $executionTime,
                 'final_success_rate' => $finalSuccessRate,
-                'real_success_rate' => $this->real_success_rate
+                'real_success_rate' => $this->getRealSuccessRateAttribute()
             ]);
 
             Log::info("✅ ExecutionLog مارک completed شد", [
@@ -408,6 +416,19 @@ class ExecutionLog extends Model
                 'error_message' => 'خطا در فرآیند توقف: ' . $e->getMessage()
             ]);
         }
+    }
+
+    /**
+     * محاسبه نرخ موفقیت واقعی (شامل enhanced)
+     */
+    public function getRealSuccessRateAttribute(): float
+    {
+        if ($this->total_processed <= 0) {
+            return 0;
+        }
+
+        $realSuccess = $this->total_success + $this->total_enhanced;
+        return round(($realSuccess / $this->total_processed) * 100, 2);
     }
 
     /**

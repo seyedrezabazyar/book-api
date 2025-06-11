@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 use App\Models\Config;
 use App\Models\BookSource;
 
@@ -49,9 +50,10 @@ class DebugLastIdCommand extends Command
             ->value('source_id');
         $this->info("🔍 Query مستقیم: " . ($method2 ?: 'null'));
 
+        // استفاده صحیح از DB::raw()
         $method3 = BookSource::where('source_name', $config->source_name)
             ->whereRaw('source_id REGEXP "^[0-9]+$"')
-            ->max(\DB::raw('CAST(source_id AS UNSIGNED)'));
+            ->max(DB::raw('CAST(source_id AS UNSIGNED)'));
         $this->info("📈 Max query: " . ($method3 ?: 'null'));
 
         // نمایش getSmartStartPage

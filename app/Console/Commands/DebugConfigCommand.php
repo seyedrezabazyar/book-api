@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 use App\Models\Config;
 
 class DebugConfigCommand extends Command
@@ -83,12 +84,14 @@ class DebugConfigCommand extends Command
         $this->line("   • کل رکوردهای منبع: " . number_format($sourceRecordsCount));
 
         if ($sourceRecordsCount > 0) {
+            // استفاده صحیح از DB::raw()
             $minId = \App\Models\BookSource::where('source_name', $config->source_name)
                 ->whereRaw('source_id REGEXP "^[0-9]+$"')
-                ->min(\DB::raw('CAST(source_id AS UNSIGNED)'));
+                ->min(DB::raw('CAST(source_id AS UNSIGNED)'));
+
             $maxId = \App\Models\BookSource::where('source_name', $config->source_name)
                 ->whereRaw('source_id REGEXP "^[0-9]+$"')
-                ->max(\DB::raw('CAST(source_id AS UNSIGNED)'));
+                ->max(DB::raw('CAST(source_id AS UNSIGNED)'));
 
             $this->line("   • محدوده ID ها: {$minId} تا {$maxId}");
 

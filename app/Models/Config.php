@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class Config extends Model
 {
@@ -153,7 +154,7 @@ class Config extends Model
             try {
                 $maxId = \App\Models\BookSource::where('source_name', $this->source_name)
                     ->whereRaw('source_id REGEXP "^[0-9]+$"')
-                    ->max(\DB::raw('CAST(source_id AS UNSIGNED)'));
+                    ->max(DB::raw('CAST(source_id AS UNSIGNED)')); // استفاده از DB facade
 
                 return $maxId ? (int)$maxId : 0;
             } catch (\Exception $fallbackError) {
@@ -214,52 +215,62 @@ class Config extends Model
     }
 
     /**
-     * بروزرسانی آمار با منطق بهبود یافته
+     * بروزرسانی آمار با منطق بهبود یافته - کاملاً اصلاح شده
      */
     public function updateProgress(int $sourceId, array $stats): void
     {
         try {
-            \Illuminate\Support\Facades\DB::transaction(function () use ($sourceId, $stats) {
-                // استخراج آمار با کلیدهای مختلف
-                $totalToAdd = $this->extractStatValue($stats, ['total_processed', 'total']);
-                $successToAdd = $this->extractStatValue($stats, ['total_success', 'success']);
-                $failedToAdd = $this->extractStatValue($stats, ['total_failed', 'failed']);
+            $self = $this; // کپی کردن reference برای استفاده در closure
+
+            DB::transaction(function () use ($sourceId, $stats, $self) {
+                // استخراج آمار با کلیدهای مختلف - تعریف متغیرها داخل closure
+                $totalToAdd = $self->extractStatValue($stats, ['total_processed', 'total']);
+                $successToAdd = $self->extractStatValue($stats, ['total_success', 'success']);
+                $failedToAdd = $self->extractStatValue($stats, ['total_failed', 'failed']);
 
                 // بروزرسانی آمار
                 if ($totalToAdd > 0) {
-                    $this->increment('total_processed', $totalToAdd);
+                    $self->increment('total_processed', $totalToAdd);
                 }
                 if ($successToAdd > 0) {
-                    $this->increment('total_success', $successToAdd);
+                    $self->increment('total_success', $successToAdd);
                 }
                 if ($failedToAdd > 0) {
-                    $this->increment('total_failed', $failedToAdd);
+                    $self->increment('total_failed', $failedToAdd);
                 }
 
                 // بروزرسانی آخرین ID اگر بزرگتر باشد
-                if ($sourceId > ($this->last_source_id ?? 0)) {
-                    $this->update([
+                if ($sourceId > ($self->last_source_id ?? 0)) {
+                    $self->update([
                         'last_source_id' => $sourceId,
                         'current_page' => $sourceId,
                         'last_run_at' => now()
                     ]);
                 }
+
+                // لاگ کردن آمار داخل transaction
+                Log::debug("📊 آمار کانفیگ بروزرسانی شد", [
+                    'config_id' => $self->id,
+                    'source_id' => $sourceId,
+                    'stats_added' => [
+                        'total_processed' => $totalToAdd,
+                        'total_success' => $successToAdd,
+                        'total_failed' => $failedToAdd
+                    ]
+                ]);
             });
 
-            Log::debug("📊 آمار کانفیگ بروزرسانی شد", [
+            // لاگ نهایی خارج از transaction
+            Log::debug("✅ آمار کانفیگ تکمیل شد", [
                 'config_id' => $this->id,
                 'source_id' => $sourceId,
-                'stats_added' => [
-                    'total_processed' => $totalToAdd,
-                    'total_success' => $successToAdd,
-                    'total_failed' => $failedToAdd
-                ],
                 'new_totals' => [
                     'total_processed' => $this->fresh()->total_processed,
                     'total_success' => $this->fresh()->total_success,
                     'total_failed' => $this->fresh()->total_failed
                 ]
             ]);
+
         } catch (\Exception $e) {
             Log::error("❌ خطا در بروزرسانی آمار کانفیگ", [
                 'config_id' => $this->id,

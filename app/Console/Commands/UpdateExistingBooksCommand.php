@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
+use Illuminate\Support\Str;
 use App\Models\Config;
 use App\Models\Book;
 use App\Models\BookSource;
