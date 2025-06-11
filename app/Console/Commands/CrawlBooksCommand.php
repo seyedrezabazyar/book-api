@@ -61,53 +61,45 @@ class CrawlBooksCommand extends Command
         }
     }
 
-    /**
-     * نمایش پیام خوشامدگویی با اطلاعات منطق جدید
-     */
     private function displayWelcomeMessage(): void
     {
         $this->info("🚀 شروع کرال هوشمند با الگوی بهبود یافته");
         $this->info("⏰ زمان شروع: " . now()->format('Y-m-d H:i:s'));
         $this->newLine();
 
-        if ($this->option('debug')) {
-            $this->line("🧠 ویژگی‌های منطق جدید:");
-            $this->line("   ✨ شناسایی کتاب‌ها بر اساس MD5 منحصر‌به‌فرد");
-            $this->line("   🔄 به‌روزرسانی هوشمند کتاب‌های موجود");
-            $this->line("   📚 اضافه کردن نویسندگان و ISBN های جدید بدون حذف قدیمی‌ها");
-            $this->line("   🔗 ثبت منابع متعدد برای هر کتاب");
-            $this->line("   💎 بهبود توضیحات و تکمیل فیلدهای خالی");
-            $this->line("   📊 آمارگیری دقیق شامل نرخ بهبود (Enhancement Rate)");
-            $this->newLine();
-        }
+        if (!$this->option('debug')) return;
+
+        $this->line("🧠 ویژگی‌های منطق جدید:");
+        $this->line("   ✨ شناسایی کتاب‌ها بر اساس MD5 منحصر‌به‌فرد");
+        $this->line("   🔄 به‌روزرسانی هوشمند کتاب‌های موجود");
+        $this->line("   📚 اضافه کردن نویسندگان و ISBN های جدید بدون حذف قدیمی‌ها");
+        $this->line("   🔗 ثبت منابع متعدد برای هر کتاب");
+        $this->line("   💎 بهبود توضیحات و تکمیل فیلدهای خالی");
+        $this->line("   📊 آمارگیری دقیق شامل نرخ بهبود (Enhancement Rate)");
+        $this->newLine();
     }
 
-    /**
-     * نمایش اطلاعات کانفیگ‌ها
-     */
     private function displayConfigsInfo($configs): void
     {
         $this->info("📋 تعداد کانفیگ‌های قابل اجرا: " . $configs->count());
 
-        if ($this->option('debug')) {
-            $this->newLine();
-            $this->line("🔧 جزئیات کانفیگ‌ها:");
-            foreach ($configs as $config) {
-                $lastId = $config->getLastSourceIdFromBookSources();
-                $smartStart = $config->getSmartStartPage();
+        if (!$this->option('debug')) return;
 
-                $this->line("   • {$config->source_name} (ID: {$config->id})");
-                $this->line("     - آخرین ID در منابع: " . ($lastId ?: 'هیچ'));
-                $this->line("     - شروع هوشمند: {$smartStart}");
-                $this->line("     - start_page کاربر: " . ($config->start_page ?: 'خودکار'));
-            }
-            $this->newLine();
+        $this->newLine();
+        $this->line("🔧 جزئیات کانفیگ‌ها:");
+
+        foreach ($configs as $config) {
+            $lastId = $config->getLastSourceIdFromBookSources();
+            $smartStart = $config->getSmartStartPage();
+
+            $this->line("   • {$config->source_name} (ID: {$config->id})");
+            $this->line("     - آخرین ID در منابع: " . ($lastId ?: 'هیچ'));
+            $this->line("     - شروع هوشمند: {$smartStart}");
+            $this->line("     - start_page کاربر: " . ($config->start_page ?: 'خودکار'));
         }
+        $this->newLine();
     }
 
-    /**
-     * پردازش کانفیگ با منطق جدید
-     */
     private function processConfigWithNewLogic(Config $config): void
     {
         $this->info("🔄 شروع پردازش کانفیگ: {$config->source_name} (ID: {$config->id})");
@@ -128,15 +120,11 @@ class CrawlBooksCommand extends Command
         }
     }
 
-    /**
-     * تعیین تنظیمات کرال با منطق بهبود یافته
-     */
     private function determineCrawlSettings(Config $config): array
     {
         $startPage = (int)$this->option('start-page');
         $pagesCount = (int)$this->option('pages');
 
-        // تشخیص هوشمند نقطه شروع
         if ($startPage <= 0) {
             $startPage = $config->getSmartStartPage();
 
@@ -149,7 +137,6 @@ class CrawlBooksCommand extends Command
             }
         }
 
-        // تنظیمات پیش‌فرض تعداد صفحات
         if ($pagesCount <= 0) {
             $pagesCount = $config->max_pages ?: 100;
         }
@@ -158,16 +145,13 @@ class CrawlBooksCommand extends Command
             'start_page' => $startPage,
             'pages_count' => $pagesCount,
             'enhanced_only' => $this->option('enhanced-only'),
-            'intelligent_update_enabled' => true, // همیشه فعال در منطق جدید
+            'intelligent_update_enabled' => true,
             'md5_based_processing' => true,
             'batch_size' => 50,
             'debug_mode' => $this->option('debug')
         ];
     }
 
-    /**
-     * نمایش تنظیمات کرال بهبود یافته
-     */
     private function displayCrawlSettings(array $settings, Config $config): void
     {
         $this->info("⚙️ تنظیمات اجرا:");
@@ -186,9 +170,6 @@ class CrawlBooksCommand extends Command
         $this->newLine();
     }
 
-    /**
-     * اجرای کرال هوشمند
-     */
     private function performIntelligentCrawl(Config $config, array $settings, $executionLog): void
     {
         $apiService = new ApiDataService($config);
@@ -209,7 +190,6 @@ class CrawlBooksCommand extends Command
         $progressBar = $this->output->createProgressBar($settings['pages_count']);
         $progressBar->setFormat('%current%/%max% [%bar%] %percent:3s%% | ID: %message% | 🆕:%created% 🔧:%enhanced% 📋:%duplicate%');
 
-        // شروع آمار برای progress bar
         $currentStats = ['created' => 0, 'enhanced' => 0, 'duplicate' => 0];
 
         for ($page = $currentPage; $page <= $endPage; $page++) {
@@ -220,39 +200,19 @@ class CrawlBooksCommand extends Command
 
                 if ($pageResult) {
                     $this->statsTracker->updateStats($pageResult);
-
-                    // بروزرسانی آمار برای progress bar
-                    $action = $pageResult['action'] ?? 'unknown';
-                    switch ($action) {
-                        case 'created':
-                            $currentStats['created']++;
-                            break;
-                        case 'enhanced':
-                        case 'enriched':
-                        case 'merged':
-                            $currentStats['enhanced']++;
-                            break;
-                        case 'already_processed':
-                        case 'source_added':
-                        case 'no_changes':
-                            $currentStats['duplicate']++;
-                            break;
-                    }
-
-                    // بروزرسانی progress bar با آمار جدید
-                    $progressBar->setFormat('%current%/%max% [%bar%] %percent:3s%% | ID: %message% | 🆕:' . $currentStats['created'] . ' 🔧:' . $currentStats['enhanced'] . ' 📋:' . $currentStats['duplicate']);
+                    $this->updateProgressStats($currentStats, $pageResult, $progressBar);
 
                     if ($page % 10 === 0) {
                         $this->displayDetailedProgress($page, $settings);
                     }
 
-                    if ($settings['debug_mode'] && in_array($action, ['created', 'enhanced', 'enriched', 'merged'])) {
+                    if ($settings['debug_mode'] && in_array($pageResult['action'] ?? '', ['created', 'enhanced', 'enriched', 'merged'])) {
                         $this->displayDebugInfo($page, $pageResult);
                     }
                 }
 
                 $progressBar->advance();
-                usleep(500000); // 0.5 ثانیه تاخیر
+                usleep(500000);
 
             } catch (\Exception $e) {
                 $this->error("❌ خطا در پردازش صفحه {$page}: " . $e->getMessage());
@@ -271,9 +231,29 @@ class CrawlBooksCommand extends Command
         $this->statsTracker->completeConfigExecution($config, $executionLog);
     }
 
-    /**
-     * نمایش پیشرفت تفصیلی
-     */
+    private function updateProgressStats(array &$currentStats, array $pageResult, $progressBar): void
+    {
+        $action = $pageResult['action'] ?? 'unknown';
+
+        switch ($action) {
+            case 'created':
+                $currentStats['created']++;
+                break;
+            case 'enhanced':
+            case 'enriched':
+            case 'merged':
+                $currentStats['enhanced']++;
+                break;
+            case 'already_processed':
+            case 'source_added':
+            case 'no_changes':
+                $currentStats['duplicate']++;
+                break;
+        }
+
+        $progressBar->setFormat('%current%/%max% [%bar%] %percent:3s%% | ID: %message% | 🆕:' . $currentStats['created'] . ' 🔧:' . $currentStats['enhanced'] . ' 📋:' . $currentStats['duplicate']);
+    }
+
     private function displayDetailedProgress(int $page, array $settings): void
     {
         $stats = $this->statsTracker->getCurrentStats();
@@ -290,13 +270,10 @@ class CrawlBooksCommand extends Command
         $this->info("📈 صفحه {$page} | کل: {$stats['total_processed']} | تأثیرگذار: {$totalImpactful} ({$impactRate}%) | جدید: {$stats['total_success']} | بهبود: {$stats['total_enhanced']} ({$enhancementRate}%)");
     }
 
-    /**
-     * نمایش اطلاعات debug
-     */
     private function displayDebugInfo(int $page, array $pageResult): void
     {
         $action = $pageResult['action'] ?? 'unknown';
-        $title = isset($pageResult['title']) ? Str::limit($pageResult['title'], 40) : 'N/A';
+        $title = isset($pageResult['title']) ? \Illuminate\Support\Str::limit($pageResult['title'], 40) : 'N/A';
 
         $actionEmojis = [
             'created' => '🆕',
@@ -306,13 +283,9 @@ class CrawlBooksCommand extends Command
         ];
 
         $emoji = $actionEmojis[$action] ?? '❓';
-
         $this->line("\n{$emoji} ID {$page}: {$action} - {$title}");
     }
 
-    /**
-     * سایر متدهای کمکی که قبلاً وجود داشتند
-     */
     private function determineConfigs()
     {
         $configId = $this->argument('config');
@@ -331,13 +304,6 @@ class CrawlBooksCommand extends Command
 
     private function shouldSkipConfig(Config $config): bool
     {
-        if (!$this->option('force')) {
-            if ($config->is_running) {
-                $this->warn("⚠️ کانفیگ {$config->id} در حال اجرا است.");
-                return true;
-            }
-        }
-
-        return false;
+        return !$this->option('force') && $config->is_running;
     }
 }

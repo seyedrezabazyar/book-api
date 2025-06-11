@@ -82,13 +82,9 @@ class Book extends Model
         return BookHash::where('md5', $md5)->first()?->book;
     }
 
-    /**
-     * ایجاد کتاب جدید با جزئیات کامل
-     */
     public static function createWithDetails(array $bookData, array $hashData = [], ?string $sourceName = null, ?string $sourceId = null): self
     {
         return DB::transaction(function () use ($bookData, $hashData, $sourceName, $sourceId) {
-
             Log::info('🚀 شروع ایجاد کتاب جدید', [
                 'title' => $bookData['title'] ?? 'نامشخص',
                 'author' => $bookData['author'] ?? 'نامشخص',
@@ -97,7 +93,6 @@ class Book extends Model
                 'source_id' => $sourceId
             ]);
 
-            // ایجاد یا پیدا کردن دسته‌بندی
             $category = Category::firstOrCreate(
                 ['name' => $bookData['category'] ?? 'عمومی'],
                 [
@@ -107,7 +102,6 @@ class Book extends Model
                 ]
             );
 
-            // ایجاد یا پیدا کردن ناشر
             $publisher = null;
             if (!empty($bookData['publisher'])) {
                 $publisher = Publisher::firstOrCreate(
@@ -120,7 +114,6 @@ class Book extends Model
                 );
             }
 
-            // ایجاد کتاب
             $book = self::create([
                 'title' => $bookData['title'],
                 'description' => $bookData['description'] ?? null,
@@ -143,7 +136,6 @@ class Book extends Model
                 'title' => $book->title
             ]);
 
-            // ایجاد هش‌ها
             if (!empty($hashData['md5'])) {
                 try {
                     BookHash::create([
@@ -169,7 +161,6 @@ class Book extends Model
                 }
             }
 
-            // اضافه کردن نویسندگان
             if (!empty($bookData['author'])) {
                 Log::info('👤 شروع اضافه کردن نویسندگان', [
                     'book_id' => $book->id,
@@ -185,7 +176,6 @@ class Book extends Model
                         'added_count' => count($addedAuthors)
                     ]);
 
-                    // بروزرسانی تعداد کتاب‌های دسته‌بندی و ناشر
                     $category->increment('books_count');
                     if ($publisher) {
                         $publisher->increment('books_count');
@@ -201,7 +191,6 @@ class Book extends Model
                 }
             }
 
-            // اضافه کردن تصویر
             if (!empty($bookData['image_url'])) {
                 try {
                     BookImage::create([
@@ -221,7 +210,6 @@ class Book extends Model
                 }
             }
 
-            // ثبت منبع
             if ($sourceName && $sourceId) {
                 try {
                     BookSource::recordBookSource($book->id, $sourceName, $sourceId);
@@ -241,7 +229,6 @@ class Book extends Model
                 }
             }
 
-            // بررسی نهایی نویسندگان
             $finalAuthorsCount = $book->authors()->count();
             Log::info('🎯 کتاب با موفقیت ایجاد شد', [
                 'book_id' => $book->id,
@@ -257,9 +244,6 @@ class Book extends Model
         });
     }
 
-    /**
-     * اضافه کردن نویسندگان از رشته متنی
-     */
     public function addAuthorsFromString(string $authorsString): array
     {
         if (empty(trim($authorsString))) {
@@ -267,11 +251,9 @@ class Book extends Model
             return [];
         }
 
-        // تمیز کردن و تفکیک نام‌های نویسندگان
         $authorsString = trim($authorsString);
         $separators = [',', '،', ';', '؛', '&', 'and', 'و'];
 
-        // جایگزینی جداکننده‌های مختلف با کاما
         foreach ($separators as $separator) {
             $authorsString = str_ireplace($separator, ',', $authorsString);
         }
@@ -289,14 +271,10 @@ class Book extends Model
         return $this->addAuthorsArray($authorNames);
     }
 
-    /**
-     * اضافه کردن آرایه نویسندگان
-     */
     public function addAuthorsArray(array $authorNames): array
     {
         $addedAuthors = [];
 
-        // دریافت نویسندگان موجود این کتاب
         $existingAuthorNames = $this->authors()->pluck('name')->map(function($name) {
             return strtolower(trim($name));
         })->toArray();
@@ -318,7 +296,6 @@ class Book extends Model
 
             $normalizedName = strtolower(trim($name));
 
-            // بررسی تکراری نبودن
             if (in_array($normalizedName, $existingAuthorNames)) {
                 Log::debug('نویسنده تکراری رد شد', [
                     'book_id' => $this->id,
@@ -328,7 +305,6 @@ class Book extends Model
             }
 
             try {
-                // ایجاد یا پیدا کردن نویسنده
                 $author = Author::firstOrCreate(
                     ['name' => $name],
                     [
@@ -338,20 +314,17 @@ class Book extends Model
                     ]
                 );
 
-                // بررسی وجود رابطه
                 $relationExists = $this->authors()->where('author_id', $author->id)->exists();
 
                 if (!$relationExists) {
-                    // اضافه کردن رابطه
                     $this->authors()->attach($author->id, [
                         'created_at' => now(),
                         'updated_at' => now()
                     ]);
 
                     $addedAuthors[] = $name;
-                    $existingAuthorNames[] = $normalizedName; // به لیست محلی اضافه کن
+                    $existingAuthorNames[] = $normalizedName;
 
-                    // بروزرسانی تعداد کتاب‌های نویسنده
                     $author->increment('books_count');
 
                     Log::debug('✅ نویسنده اضافه شد', [
@@ -382,9 +355,6 @@ class Book extends Model
         return $addedAuthors;
     }
 
-    /**
-     * به‌روزرسانی هوشمند کتاب بر اساس داده‌های جدید - نسخه بهبود یافته
-     */
     public function intelligentUpdate(array $newData, array $options = []): array
     {
         $changes = [];
@@ -397,14 +367,12 @@ class Book extends Model
             'options' => $options,
         ]);
 
-        // 1. تحلیل و آپدیت فیلدهای اصلی
         $fieldUpdates = $this->updateBookFieldsIntelligently($newData, $options);
         if ($fieldUpdates['updated']) {
             $changes = array_merge($changes, $fieldUpdates['changes']);
             $needsUpdate = true;
         }
 
-        // 2. آپدیت یا اضافه کردن نویسندگان جدید
         if (!empty($newData['author'])) {
             $authorUpdates = $this->updateAuthorsIntelligently($newData['author']);
             if (!empty($authorUpdates)) {
@@ -412,7 +380,6 @@ class Book extends Model
             }
         }
 
-        // 3. آپدیت یا اضافه کردن ISBN های جدید
         if (!empty($newData['isbn'])) {
             $isbnUpdates = $this->updateIsbnsIntelligently($newData['isbn']);
             if (!empty($isbnUpdates)) {
@@ -421,13 +388,11 @@ class Book extends Model
             }
         }
 
-        // 4. آپدیت هش‌ها
         $hashResult = $this->updateHashesIntelligently($newData);
         if ($hashResult['updated']) {
             $changes['updated_hashes'] = $hashResult;
         }
 
-        // 5. آپدیت تصاویر
         if (!empty($newData['image_url'])) {
             $imageResult = $this->updateImagesIntelligently($newData['image_url']);
             if ($imageResult['updated']) {
@@ -435,14 +400,12 @@ class Book extends Model
             }
         }
 
-        // 6. آپدیت دسته‌بندی و ناشر در صورت لزوم
         $metadataUpdates = $this->updateMetadataIntelligently($newData);
         if ($metadataUpdates['updated']) {
             $changes['updated_metadata'] = $metadataUpdates;
             $needsUpdate = true;
         }
 
-        // ذخیره تغییرات
         if ($needsUpdate) {
             $this->save();
             Log::info('💾 تغییرات ذخیره شد', [
@@ -468,9 +431,6 @@ class Book extends Model
         ];
     }
 
-    /**
-     * آپدیت هوشمند فیلدهای اصلی کتاب
-     */
     private function updateBookFieldsIntelligently(array $newData, array $options): array
     {
         $changes = [];
@@ -519,9 +479,6 @@ class Book extends Model
         return ['updated' => $updated, 'changes' => $changes];
     }
 
-    /**
-     * ارزیابی لزوم آپدیت فیلد خاص
-     */
     private function evaluateFieldUpdate(string $field, $currentValue, $newValue): array
     {
         $result = [
@@ -531,12 +488,10 @@ class Book extends Model
             'type' => 'no_change'
         ];
 
-        // اگر مقدار جدید خالی است، آپدیت نکن
         if ($this->isValueEmpty($newValue)) {
             return $result;
         }
 
-        // اگر مقدار فعلی خالی است، حتماً آپدیت کن
         if ($this->isValueEmpty($currentValue)) {
             $result['should_update'] = true;
             $result['reason'] = 'فیلد خالی بود و مقدار جدید دارد';
@@ -544,34 +499,24 @@ class Book extends Model
             return $result;
         }
 
-        // بررسی‌های خاص هر فیلد
         switch ($field) {
             case 'description':
                 return $this->evaluateDescriptionUpdate($currentValue, $newValue);
-
             case 'pages_count':
                 return $this->evaluatePagesCountUpdate($currentValue, $newValue);
-
             case 'file_size':
                 return $this->evaluateFileSizeUpdate($currentValue, $newValue);
-
             case 'publication_year':
                 return $this->evaluatePublicationYearUpdate($currentValue, $newValue);
-
             case 'language':
                 return $this->evaluateLanguageUpdate($currentValue, $newValue);
-
             case 'format':
                 return $this->evaluateFormatUpdate($currentValue, $newValue);
-
             default:
                 return $result;
         }
     }
 
-    /**
-     * ارزیابی آپدیت توضیحات
-     */
     private function evaluateDescriptionUpdate($current, $new): array
     {
         $result = ['should_update' => false, 'new_value' => $new, 'reason' => '', 'type' => 'no_change'];
@@ -579,14 +524,11 @@ class Book extends Model
         $currentLength = strlen(trim($current ?? ''));
         $newLength = strlen(trim($new ?? ''));
 
-        // اگر توضیحات جدید حداقل 50% طولانی‌تر است
         if ($newLength > ($currentLength * 1.5)) {
             $result['should_update'] = true;
             $result['reason'] = "توضیحات جدید {$newLength} کاراکتر در مقابل {$currentLength} کاراکتر فعلی";
             $result['type'] = 'better_content';
-        }
-        // یا اگر توضیحات جدید حداقل 200 کاراکتر بیشتر دارد
-        elseif (($newLength - $currentLength) >= 200) {
+        } elseif (($newLength - $currentLength) >= 200) {
             $result['should_update'] = true;
             $result['reason'] = "توضیحات جدید " . ($newLength - $currentLength) . " کاراکتر بیشتر دارد";
             $result['type'] = 'longer_content';
@@ -595,9 +537,6 @@ class Book extends Model
         return $result;
     }
 
-    /**
-     * ارزیابی آپدیت تعداد صفحات
-     */
     private function evaluatePagesCountUpdate($current, $new): array
     {
         $result = ['should_update' => false, 'new_value' => $new, 'reason' => '', 'type' => 'no_change'];
@@ -609,7 +548,6 @@ class Book extends Model
         $newPages = (int)$new;
         $currentPages = (int)$current;
 
-        // اگر تعداد صفحات جدید بیشتر و معقول است
         if ($newPages > $currentPages && $newPages <= ($currentPages * 3)) {
             $result['should_update'] = true;
             $result['new_value'] = $newPages;
@@ -620,9 +558,6 @@ class Book extends Model
         return $result;
     }
 
-    /**
-     * ارزیابی آپدیت اندازه فایل
-     */
     private function evaluateFileSizeUpdate($current, $new): array
     {
         $result = ['should_update' => false, 'new_value' => $new, 'reason' => '', 'type' => 'no_change'];
@@ -634,7 +569,6 @@ class Book extends Model
         $newSize = (int)$new;
         $currentSize = (int)$current;
 
-        // اگر اندازه فایل جدید بیشتر است (اما نه بیش از 10 برابر)
         if ($newSize > $currentSize && $newSize <= ($currentSize * 10)) {
             $result['should_update'] = true;
             $result['new_value'] = $newSize;
@@ -645,9 +579,6 @@ class Book extends Model
         return $result;
     }
 
-    /**
-     * ارزیابی آپدیت سال انتشار
-     */
     private function evaluatePublicationYearUpdate($current, $new): array
     {
         $result = ['should_update' => false, 'new_value' => $new, 'reason' => '', 'type' => 'no_change'];
@@ -660,7 +591,6 @@ class Book extends Model
         $currentYear = date('Y');
         $currentYearValue = (int)$current;
 
-        // اگر سال جدید به سال فعلی نزدیک‌تر است
         if (abs($newYear - $currentYear) < abs($currentYearValue - $currentYear)) {
             $result['should_update'] = true;
             $result['new_value'] = $newYear;
@@ -671,14 +601,10 @@ class Book extends Model
         return $result;
     }
 
-    /**
-     * ارزیابی آپدیت زبان
-     */
     private function evaluateLanguageUpdate($current, $new): array
     {
         $result = ['should_update' => false, 'new_value' => $new, 'reason' => '', 'type' => 'no_change'];
 
-        // فقط اگر زبان فعلی نامشخص یا عمومی باشد
         if (in_array($current, ['unknown', 'general', '']) && !empty($new) && strlen($new) >= 2) {
             $result['should_update'] = true;
             $result['reason'] = "زبان مشخص شد: {$new}";
@@ -688,9 +614,6 @@ class Book extends Model
         return $result;
     }
 
-    /**
-     * ارزیابی آپدیت فرمت
-     */
     private function evaluateFormatUpdate($current, $new): array
     {
         $result = ['should_update' => false, 'new_value' => $new, 'reason' => '', 'type' => 'no_change'];
@@ -700,7 +623,6 @@ class Book extends Model
         $currentScore = $betterFormats[$current] ?? 0;
         $newScore = $betterFormats[$new] ?? 0;
 
-        // اگر فرمت جدید بهتر است
         if ($newScore > $currentScore) {
             $result['should_update'] = true;
             $result['reason'] = "فرمت بهتر: {$new} در مقابل {$current}";
@@ -710,21 +632,16 @@ class Book extends Model
         return $result;
     }
 
-    /**
-     * آپدیت هوشمند نویسندگان
-     */
     private function updateAuthorsIntelligently(string $newAuthorsString): array
     {
         if (empty(trim($newAuthorsString))) {
             return [];
         }
 
-        // دریافت نویسندگان موجود
         $existingAuthorNames = $this->authors()->pluck('name')->map(function($name) {
             return strtolower(trim($name));
         })->toArray();
 
-        // پارس نویسندگان جدید
         $newAuthorNames = $this->parseAuthorsString($newAuthorsString);
         $uniqueNewAuthors = [];
 
@@ -750,22 +667,17 @@ class Book extends Model
         return [];
     }
 
-    /**
-     * آپدیت هوشمند ISBN ها
-     */
     private function updateIsbnsIntelligently(string $newIsbnString): array
     {
         if (empty(trim($newIsbnString))) {
             return [];
         }
 
-        // دریافت ISBN های موجود
         $existingIsbns = $this->isbn ? array_map('trim', explode(',', $this->isbn)) : [];
         $existingIsbnsCleaned = array_map(function($isbn) {
             return preg_replace('/[^0-9X]/i', '', $isbn);
         }, $existingIsbns);
 
-        // پارس ISBN های جدید
         $newIsbns = array_map('trim', explode(',', $newIsbnString));
         $uniqueNewIsbns = [];
 
@@ -777,7 +689,6 @@ class Book extends Model
         }
 
         if (!empty($uniqueNewIsbns)) {
-            // اضافه کردن ISBN های جدید
             $allIsbns = array_merge($existingIsbns, $uniqueNewIsbns);
             $this->isbn = implode(', ', $allIsbns);
 
@@ -793,19 +704,15 @@ class Book extends Model
         return [];
     }
 
-    /**
-     * آپدیت هوشمند متادیتا (دسته‌بندی و ناشر)
-     */
     private function updateMetadataIntelligently(array $data): array
     {
         $updates = ['updated' => false, 'changes' => []];
 
-        // آپدیت دسته‌بندی
         if (!empty($data['category']) && (empty($this->category) || $this->category->name === 'عمومی')) {
-            $category = \App\Models\Category::firstOrCreate(
+            $category = Category::firstOrCreate(
                 ['name' => $data['category']],
                 [
-                    'slug' => \Illuminate\Support\Str::slug($data['category'] . '_' . time()),
+                    'slug' => Str::slug($data['category'] . '_' . time()),
                     'is_active' => true,
                     'books_count' => 0,
                 ]
@@ -826,12 +733,11 @@ class Book extends Model
             ]);
         }
 
-        // آپدیت ناشر
         if (!empty($data['publisher']) && empty($this->publisher)) {
-            $publisher = \App\Models\Publisher::firstOrCreate(
+            $publisher = Publisher::firstOrCreate(
                 ['name' => $data['publisher']],
                 [
-                    'slug' => \Illuminate\Support\Str::slug($data['publisher'] . '_' . time()),
+                    'slug' => Str::slug($data['publisher'] . '_' . time()),
                     'is_active' => true,
                     'books_count' => 0,
                 ]
@@ -853,9 +759,6 @@ class Book extends Model
         return $updates;
     }
 
-    /**
-     * تولید خلاصه تغییرات
-     */
     private function generateChangeSummary(array $changes): string
     {
         $summary = [];
@@ -892,9 +795,6 @@ class Book extends Model
         return !empty($summary) ? implode(', ', $summary) : 'بدون تغییر قابل توجه';
     }
 
-    /**
-     * فرمت کردن اندازه فایل
-     */
     private function formatFileSize(int $bytes): string
     {
         $units = ['B', 'KB', 'MB', 'GB'];
@@ -908,9 +808,6 @@ class Book extends Model
         return round($bytes, 2) . ' ' . $units[$i];
     }
 
-    /**
-     * پارس رشته نویسندگان
-     */
     private function parseAuthorsString(string $authorsString): array
     {
         $separators = [',', '،', ';', '؛', '&', 'and', 'و'];
@@ -922,116 +819,6 @@ class Book extends Model
         return array_filter(array_map('trim', explode(',', $authorsString)));
     }
 
-    /**
-     * بروزرسانی فیلدهای کتاب
-     */
-    private function updateBookFields(array $newData, array $options): array
-    {
-        $changes = [];
-        $updated = false;
-
-        $fieldsToCheck = [
-            'description', 'publication_year', 'pages_count', 'file_size',
-            'language', 'format', 'excerpt'
-        ];
-
-        foreach ($fieldsToCheck as $field) {
-            if (!isset($newData[$field])) {
-                continue;
-            }
-
-            $currentValue = $this->$field;
-            $newValue = $newData[$field];
-
-            if ($this->shouldUpdateField($field, $currentValue, $newValue)) {
-                $oldValue = $currentValue;
-                $this->$field = $newValue;
-                $changes['updated_fields'][] = [
-                    'field' => $field,
-                    'old_value' => $oldValue,
-                    'new_value' => $newValue,
-                ];
-                $updated = true;
-
-                Log::debug("✅ فیلد {$field} بروزرسانی شد", [
-                    'book_id' => $this->id,
-                    'old' => $oldValue,
-                    'new' => $newValue,
-                ]);
-            }
-        }
-
-        return ['updated' => $updated, 'changes' => $changes];
-    }
-
-    /**
-     * بررسی لزوم بروزرسانی فیلد
-     */
-    private function shouldUpdateField(string $field, $currentValue, $newValue): bool
-    {
-        // اگر مقدار جدید خالی است، بروزرسانی نکن
-        if ($this->isValueEmpty($newValue)) {
-            return false;
-        }
-
-        // اگر مقدار فعلی خالی است، حتماً بروزرسان
-        if ($this->isValueEmpty($currentValue)) {
-            return true;
-        }
-
-        // منطق خاص هر فیلد
-        switch ($field) {
-            case 'description':
-                return $this->isDescriptionBetter($currentValue, $newValue);
-
-            case 'pages_count':
-                return is_numeric($newValue) && $newValue > 0 &&
-                    (is_numeric($currentValue) ? $newValue > $currentValue : true);
-
-            case 'file_size':
-                return is_numeric($newValue) && $newValue > 0 &&
-                    (is_numeric($currentValue) ? $newValue > $currentValue : true);
-
-            case 'publication_year':
-                return $this->isYearBetter($currentValue, $newValue);
-
-            default:
-                return false;
-        }
-    }
-
-    /**
-     * بررسی بهتر بودن توضیحات
-     */
-    private function isDescriptionBetter($current, $new): bool
-    {
-        $currentLength = strlen(trim($current ?? ''));
-        $newLength = strlen(trim($new ?? ''));
-
-        // اگر توضیحات جدید حداقل 30% طولانی‌تر است
-        return $newLength > ($currentLength * 1.3);
-    }
-
-    /**
-     * بررسی بهتر بودن سال انتشار
-     */
-    private function isYearBetter($current, $new): bool
-    {
-        if (!is_numeric($new) || $new < 1000 || $new > date('Y') + 2) {
-            return false;
-        }
-
-        if (!is_numeric($current)) {
-            return true;
-        }
-
-        $currentYear = date('Y');
-        return abs($new - $currentYear) < abs($current - $currentYear);
-    }
-
-    /**
-     * بروزرسانی هش‌ها
-     */
     private function updateHashesIntelligently(array $data): array
     {
         if (!$this->hashes) {
@@ -1069,9 +856,6 @@ class Book extends Model
         return ['updated' => false, 'reason' => 'no_new_hashes'];
     }
 
-    /**
-     * بروزرسانی تصاویر
-     */
     private function updateImagesIntelligently(string $imageUrl): array
     {
         if (empty($imageUrl) || !filter_var($imageUrl, FILTER_VALIDATE_URL)) {
@@ -1096,9 +880,6 @@ class Book extends Model
         return ['updated' => false, 'reason' => 'image_exists'];
     }
 
-    /**
-     * تشخیص نوع عملیات
-     */
     private function determineUpdateAction(bool $needsUpdate, array $changes): string
     {
         if (empty($changes)) {
@@ -1120,29 +901,14 @@ class Book extends Model
         return $needsUpdate ? 'updated' : 'unchanged';
     }
 
-    /**
-     * متدهای کمکی
-     */
     private function isValueEmpty($value): bool
     {
-        if ($value === null || $value === '') {
-            return true;
-        }
-
-        if (is_string($value) && trim($value) === '') {
-            return true;
-        }
-
-        if (is_numeric($value) && $value <= 0) {
-            return true;
-        }
-
-        return false;
+        return $value === null ||
+            $value === '' ||
+            (is_string($value) && trim($value) === '') ||
+            (is_numeric($value) && $value <= 0);
     }
 
-    /**
-     * محاسبه MD5 محتوا
-     */
     public static function calculateContentMd5(array $data): string
     {
         $content = implode('|', [
