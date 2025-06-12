@@ -13,7 +13,7 @@ class Config extends Model
     protected $fillable = [
         'name',
         'base_url',
-        'source_type',
+        'source_type', // api یا crawler
         'source_name',
         'timeout',
         'delay_seconds',
@@ -26,6 +26,14 @@ class Config extends Model
         'auto_resume',
         'fill_missing_fields',
         'update_descriptions',
+
+        // فیلدهای crawler جدید
+        'page_pattern',
+        'user_agent',
+        'follow_redirects',
+        'verify_ssl',
+        'headers',
+
         'config_data',
         'created_by',
         'total_processed',
@@ -55,6 +63,8 @@ class Config extends Model
         'auto_resume' => 'boolean',
         'fill_missing_fields' => 'boolean',
         'update_descriptions' => 'boolean',
+        'follow_redirects' => 'boolean',
+        'verify_ssl' => 'boolean',
     ];
 
     public function createdBy(): BelongsTo
@@ -70,6 +80,19 @@ class Config extends Model
     public function missingSources(): HasMany
     {
         return $this->hasMany(MissingSource::class);
+    }
+
+    /**
+     * بررسی نوع منبع
+     */
+    public function isApiSource(): bool
+    {
+        return $this->source_type === 'api';
+    }
+
+    public function isCrawlerSource(): bool
+    {
+        return $this->source_type === 'crawler';
     }
 
     /**
@@ -136,6 +159,55 @@ class Config extends Model
     }
 
     /**
+     * ساخت URL برای API یا Crawler
+     */
+    public function buildUrl(int $sourceId): string
+    {
+        if ($this->isApiSource()) {
+            return $this->buildApiUrl($sourceId);
+        } else {
+            return $this->buildCrawlerUrl($sourceId);
+        }
+    }
+
+    /**
+     * ساخت URL API برای ID خاص
+     */
+    public function buildApiUrl(int $sourceId): string
+    {
+        $apiSettings = $this->getApiSettings();
+        $baseUrl = rtrim($this->base_url, '/');
+        $endpoint = $apiSettings['endpoint'] ?? '';
+
+        $fullUrl = $baseUrl . ($endpoint ? '/' . ltrim($endpoint, '/') : '');
+
+        if (strpos($fullUrl, '{id}') !== false) {
+            $fullUrl = str_replace('{id}', $sourceId, $fullUrl);
+        } else {
+            $params = ['id' => $sourceId];
+            if (!empty($apiSettings['params'])) {
+                $params = array_merge($params, $apiSettings['params']);
+            }
+            $fullUrl .= '?' . http_build_query($params);
+        }
+
+        return $fullUrl;
+    }
+
+    /**
+     * ساخت URL Crawler برای ID خاص
+     */
+    public function buildCrawlerUrl(int $sourceId): string
+    {
+        $baseUrl = rtrim($this->base_url, '/');
+        $pattern = $this->page_pattern ?: '/book/{id}';
+
+        // جایگزینی {id} با sourceId
+        $path = str_replace('{id}', $sourceId, $pattern);
+        return $baseUrl . $path;
+    }
+
+    /**
      * دریافت آمار کامل شامل missing sources
      */
     public function getCompleteStats(): array
@@ -189,6 +261,99 @@ class Config extends Model
             'enhancement_rate' => $this->total_processed > 0 ?
                 round(($totalEnhanced / $this->total_processed) * 100, 2) : 0
         ];
+    }
+
+    /**
+     * بروزرسانی آمار بهینه‌شده
+     */
+    public function updateProgress(int $sourceId, array $stats): void
+    {
+        try {
+            DB::transaction(function () use ($sourceId, $stats) {
+                $totalToAdd = $this->extractStatValue($stats, ['total_processed', 'total']);
+                $successToAdd = $this->extractStatValue($stats, ['total_success', 'success']);
+                $failedToAdd = $this->extractStatValue($stats, ['total_failed', 'failed']);
+
+                if ($totalToAdd > 0) $this->increment('total_processed', $totalToAdd);
+                if ($successToAdd > 0) $this->increment('total_success', $successToAdd);
+                if ($failedToAdd > 0) $this->increment('total_failed', $failedToAdd);
+
+                if ($sourceId > ($this->last_source_id ?? 0)) {
+                    $this->update([
+                        'last_source_id' => $sourceId,
+                        'current_page' => $sourceId,
+                        'last_run_at' => now()
+                    ]);
+                }
+            });
+
+        } catch (\Exception $e) {
+            Log::error("❌ خطا در بروزرسانی آمار", [
+                'config_id' => $this->id,
+                'error' => $e->getMessage()
+            ]);
+        }
+    }
+
+    private function extractStatValue(array $stats, array $possibleKeys): int
+    {
+        foreach ($possibleKeys as $key) {
+            if (isset($stats[$key]) && is_numeric($stats[$key])) {
+                return (int)$stats[$key];
+            }
+        }
+        return 0;
+    }
+
+    public function getApiSettings(): array
+    {
+        return $this->config_data['api'] ?? [];
+    }
+
+    public function getCrawlerSettings(): array
+    {
+        return $this->config_data['crawler'] ?? [];
+    }
+
+    public function getGeneralSettings(): array
+    {
+        return $this->config_data['general'] ?? [];
+    }
+
+    public static function getBookFields(): array
+    {
+        return [
+            'title' => 'عنوان کتاب',
+            'description' => 'توضیحات',
+            'author' => 'نویسنده',
+            'publisher' => 'ناشر',
+            'category' => 'دسته‌بندی',
+            'isbn' => 'شابک',
+            'publication_year' => 'سال انتشار',
+            'pages_count' => 'تعداد صفحات',
+            'language' => 'زبان',
+            'format' => 'فرمت فایل',
+            'file_size' => 'حجم فایل',
+            'image_url' => 'تصویر کتاب',
+            'sha1' => 'SHA1 Hash',
+            'sha256' => 'SHA256 Hash',
+            'crc32' => 'CRC32 Hash',
+            'ed2k' => 'ED2K Hash',
+            'btih' => 'BitTorrent Info Hash',
+            'magnet' => 'Magnet Link'
+        ];
+    }
+
+    /**
+     * دریافت فیلدهای مخصوص crawler
+     */
+    public static function getCrawlerFields(): array
+    {
+        return array_merge(self::getBookFields(), [
+            'download_link' => 'لینک دانلود',
+            'torrent_link' => 'لینک تورنت',
+            'file_type' => 'نوع فایل'
+        ]);
     }
 
     /**
@@ -259,105 +424,5 @@ class Config extends Model
                 'gap_count' => 0
             ];
         }
-    }
-
-    /**
-     * ساخت URL API برای ID خاص
-     */
-    public function buildApiUrl(int $sourceId): string
-    {
-        $apiSettings = $this->getApiSettings();
-        $baseUrl = rtrim($this->base_url, '/');
-        $endpoint = $apiSettings['endpoint'] ?? '';
-
-        $fullUrl = $baseUrl . ($endpoint ? '/' . ltrim($endpoint, '/') : '');
-
-        if (strpos($fullUrl, '{id}') !== false) {
-            $fullUrl = str_replace('{id}', $sourceId, $fullUrl);
-        } else {
-            $params = ['id' => $sourceId];
-            if (!empty($apiSettings['params'])) {
-                $params = array_merge($params, $apiSettings['params']);
-            }
-            $fullUrl .= '?' . http_build_query($params);
-        }
-
-        return $fullUrl;
-    }
-
-    /**
-     * بروزرسانی آمار بهینه‌شده
-     */
-    public function updateProgress(int $sourceId, array $stats): void
-    {
-        try {
-            DB::transaction(function () use ($sourceId, $stats) {
-                $totalToAdd = $this->extractStatValue($stats, ['total_processed', 'total']);
-                $successToAdd = $this->extractStatValue($stats, ['total_success', 'success']);
-                $failedToAdd = $this->extractStatValue($stats, ['total_failed', 'failed']);
-
-                if ($totalToAdd > 0) $this->increment('total_processed', $totalToAdd);
-                if ($successToAdd > 0) $this->increment('total_success', $successToAdd);
-                if ($failedToAdd > 0) $this->increment('total_failed', $failedToAdd);
-
-                if ($sourceId > ($this->last_source_id ?? 0)) {
-                    $this->update([
-                        'last_source_id' => $sourceId,
-                        'current_page' => $sourceId,
-                        'last_run_at' => now()
-                    ]);
-                }
-            });
-
-        } catch (\Exception $e) {
-            Log::error("❌ خطا در بروزرسانی آمار", [
-                'config_id' => $this->id,
-                'error' => $e->getMessage()
-            ]);
-        }
-    }
-
-    private function extractStatValue(array $stats, array $possibleKeys): int
-    {
-        foreach ($possibleKeys as $key) {
-            if (isset($stats[$key]) && is_numeric($stats[$key])) {
-                return (int)$stats[$key];
-            }
-        }
-        return 0;
-    }
-
-    public function getApiSettings(): array
-    {
-        return $this->config_data['api'] ?? [];
-    }
-
-    public function getGeneralSettings(): array
-    {
-        return $this->config_data['general'] ?? [];
-    }
-
-    public static function getBookFields(): array
-    {
-        return [
-            'title' => 'عنوان کتاب',
-            'description' => 'توضیحات',
-            'author' => 'نویسنده',
-            'publisher' => 'ناشر',
-            'category' => 'دسته‌بندی',
-            'isbn' => 'شابک',
-            'publication_year' => 'سال انتشار',
-            'pages_count' => 'تعداد صفحات',
-            'language' => 'زبان',
-            'format' => 'فرمت فایل',
-            'file_size' => 'حجم فایل',
-            'image_url' => 'تصویر کتاب',
-            'sha1' => 'SHA1 Hash',
-            'sha256' => 'SHA256 Hash',
-            'crc32' => 'CRC32 Hash',
-            'ed2k' => 'ED2K Hash',
-            'btih' => 'BitTorrent Info Hash',
-            'magnet' => 'Magnet Link'
-        ];
     }
 }

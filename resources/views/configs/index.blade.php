@@ -45,7 +45,7 @@
         <div class="flex flex-col sm:flex-row items-center justify-between mb-6">
             <div>
                 <h1 class="text-2xl font-bold text-gray-900">مدیریت کانفیگ‌های هوشمند</h1>
-                <p class="text-gray-600 text-sm mt-1">سیستم کرال هوشمند با تشخیص خودکار و مدیریت پیشرفته</p>
+                <p class="text-gray-600 text-sm mt-1">سیستم کرال هوشمند با API و Crawler</p>
             </div>
             <a href="{{ route('configs.create') }}" class="mt-4 sm:mt-0 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
                 ✨ کانفیگ جدید
@@ -53,16 +53,17 @@
         </div>
 
         <!-- Stats Cards -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mb-6">
             @foreach ([
-                ['value' => $systemStats['total_configs'] ?? $systemStats['configs']['total'] ?? 0, 'label' => 'کانفیگ‌های هوشمند', 'icon' => '🧠', 'color' => 'blue'],
+                ['value' => $systemStats['total_configs'] ?? $systemStats['configs']['total'] ?? 0, 'label' => 'کانفیگ‌ها', 'icon' => '🧠', 'color' => 'blue'],
                 ['value' => $systemStats['running_configs'] ?? $systemStats['configs']['running'] ?? 0, 'label' => 'در حال اجرا', 'icon' => '🔄', 'color' => 'green'],
-                ['value' => $systemStats['total_books'] ?? $systemStats['books']['actual_in_db'] ?? 0, 'label' => 'کل کتاب‌ها', 'icon' => '📚', 'color' => 'purple'],
-                ['value' => $systemStats['total_sources'] ?? 0, 'label' => 'منابع مختلف', 'icon' => '🌐', 'color' => 'orange']
+                ['value' => $configs->where('source_type', 'api')->count(), 'label' => 'API', 'icon' => '🌐', 'color' => 'purple'],
+                ['value' => $configs->where('source_type', 'crawler')->count(), 'label' => 'Crawler', 'icon' => '🕷️', 'color' => 'orange'],
+                ['value' => $systemStats['total_books'] ?? $systemStats['books']['actual_in_db'] ?? 0, 'label' => 'کل کتاب‌ها', 'icon' => '📚', 'color' => 'indigo']
             ] as $stat)
                 <div class="bg-white p-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-xl">
                     <div class="flex items-center">
-                        <span class="text-3xl font-bold text-{{ $stat['color'] }}-600">{{ $stat['value'] }}</span>
+                        <span class="text-3xl font-bold text-{{ $stat['color'] }}-600">{{ number_format($stat['value']) }}</span>
                         <span class="ml-auto text-2xl">{{ $stat['icon'] }}</span>
                     </div>
                     <div class="text-sm text-gray-600 mt-2">{{ $stat['label'] }}</div>
@@ -92,9 +93,21 @@
                     <tr class="hover:bg-gray-50 transition-colors">
                         <td class="p-4">
                             <div class="font-semibold text-gray-800">{{ $config->name }}</div>
-                            <div class="text-sm text-gray-600 mt-1">📊 منبع: <span class="text-blue-600">{{ $config->source_name }}</span></div>
+                            <div class="text-sm text-gray-600 mt-1">
+                                📊 منبع: <span class="text-blue-600">{{ $config->source_name }}</span>
+                                @if ($config->source_type === 'api')
+                                    <span class="ml-2 px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded">🌐 API</span>
+                                @else
+                                    <span class="ml-2 px-2 py-1 text-xs bg-orange-100 text-orange-700 rounded">🕷️ Crawler</span>
+                                @endif
+                            </div>
                             <div class="text-xs text-gray-500 mt-1">🌐 {{ parse_url($config->base_url, PHP_URL_HOST) }}</div>
-                            <div class="text-xs text-gray-400 mt-1">⏱️ {{ $config->delay_seconds }}s تاخیر | 📄 حداکثر {{ number_format($config->max_pages) }} ID</div>
+                            <div class="text-xs text-gray-400 mt-1">
+                                ⏱️ {{ $config->delay_seconds }}s تاخیر | 📄 حداکثر {{ number_format($config->max_pages) }} ID
+                                @if ($config->source_type === 'crawler')
+                                    | 🔍 {{ $config->page_pattern ?: '/book/{id}' }}
+                                @endif
+                            </div>
                             <div class="flex flex-wrap gap-2 mt-2">
                                 @if ($config->auto_resume)
                                     <span class="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded">⚡ ادامه خودکار</span>
@@ -173,6 +186,9 @@
                             @else
                                 <span class="text-gray-400 text-sm">🆕 آماده اولین اجرا</span>
                                 <div class="text-xs text-blue-600 mt-1">شروع از ID {{ $config->getSmartStartPage() }}</div>
+                                <div class="text-xs text-gray-500 mt-1">
+                                    {{ $config->source_type === 'api' ? '🌐 API' : '🕷️ Crawler' }}
+                                </div>
                             @endif
                             @if (!$config->is_running)
                                 <div class="text-xs text-gray-400 mt-1">⏱️ تخمین اجرای بعدی: {{ $estimateText }}</div>
@@ -215,7 +231,7 @@
                 @foreach ([
                     ['title' => '⚡ تشخیص خودکار نقطه شروع', 'items' => ['از ID 1 برای منابع جدید', 'از آخرین ID + 1 برای منابع قبلی', 'رعایت start_page مشخص شده']],
                     ['title' => '🔧 مدیریت هوشمند تکراری‌ها', 'items' => ['تشخیص با MD5 محتوا', 'تکمیل فیلدهای خالی', 'بهبود توضیحات ناقص', 'ادغام ISBN و نویسندگان']],
-                    ['title' => '📊 ردیابی دقیق منابع', 'items' => ['ثبت source_id', 'مدیریت IDهای مفقود', 'گزارش‌گیری تفصیلی', 'بازیابی IDهای ناموفق']]
+                    ['title' => '🌐 پشتیبانی از API و Crawler', 'items' => ['API: دریافت JSON ساختارمند', 'Crawler: استخراج از HTML', 'سلکتورهای CSS قدرتمند', 'مدیریت headers و تنظیمات']]
                 ] as $feature)
                     <div class="space-y-2">
                         <div class="font-semibold">{{ $feature['title'] }}</div>
@@ -234,6 +250,8 @@
                 $totalBooksProcessed = \App\Models\ExecutionLog::sum('total_processed') ?? 0;
                 $totalImpactfulBooks = $totalBooksCreated + $totalBooksEnhanced;
                 $overallImpactRate = $totalBooksProcessed > 0 ? round(($totalImpactfulBooks / $totalBooksProcessed) * 100, 1) : 0;
+                $apiConfigs = $configs->where('source_type', 'api')->count();
+                $crawlerConfigs = $configs->where('source_type', 'crawler')->count();
             @endphp
             @if ($totalImpactfulBooks > 0 || $totalBooksCreated > 0 || $totalSuccessfulRuns > 0)
                 <div class="mt-4 pt-4 border-t border-blue-200 text-center text-xs text-blue-600 space-x-4 space-x-reverse">
@@ -248,6 +266,12 @@
                     @endif
                     @if ($totalSuccessfulRuns > 0)
                         <span>✅ <strong>{{ number_format($totalSuccessfulRuns) }}</strong> اجرای موفق</span>
+                    @endif
+                    @if ($apiConfigs > 0)
+                        <span>🌐 <strong>{{ $apiConfigs }}</strong> API</span>
+                    @endif
+                    @if ($crawlerConfigs > 0)
+                        <span>🕷️ <strong>{{ $crawlerConfigs }}</strong> Crawler</span>
                     @endif
                 </div>
             @endif

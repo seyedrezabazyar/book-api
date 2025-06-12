@@ -9,6 +9,7 @@
         "php": "^8.2",
         "laravel/framework": "^12.0",
         "laravel/tinker": "^2.10.1",
+        "symfony/css-selector": "^7.3",
         "symfony/dom-crawler": "^7.3"
     },
     "require-dev": {
