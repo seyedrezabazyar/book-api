@@ -10,12 +10,28 @@
                 @php
                     // اصلاح محاسبه آخرین ID - فراخوانی مجدد برای refresh
                     $config->refresh(); // refresh کردن مدل
-                    $lastIdFromSources = $config->getLastSourceIdFromBookSources();
-                    $nextSmartId = $config->getSmartStartPage();
-                    $hasUserDefined = $config->hasUserDefinedStartPage();
-                    $formStartPage = $config->getStartPageForForm();
 
-                    // مقدار نمایشی در فرم
+                    // دریافت آخرین ID از BookSource
+                    try {
+                        $lastIdFromSources = \App\Models\BookSource::where('source_name', $config->source_name)
+                            ->whereRaw('source_id REGEXP "^[0-9]+$"')
+                            ->orderByRaw('CAST(source_id AS UNSIGNED) DESC')
+                            ->value('source_id');
+                        $lastIdFromSources = $lastIdFromSources ? (int)$lastIdFromSources : 0;
+                    } catch (\Exception $e) {
+                        $lastIdFromSources = 0;
+                    }
+
+                    // محاسبه nextSmartId
+                    if ($config->start_page && $config->start_page > 0) {
+                        $nextSmartId = $config->start_page;
+                        $hasUserDefined = true;
+                    } else {
+                        $nextSmartId = $lastIdFromSources > 0 ? $lastIdFromSources + 1 : 1;
+                        $hasUserDefined = false;
+                    }
+
+                    $formStartPage = $config->start_page;
                     $actualFormValue = $formStartPage ?: '';
                 @endphp
                 <p class="text-gray-600">{{ $config->name }} - آخرین ID در book_sources: {{ $lastIdFromSources > 0 ? number_format($lastIdFromSources) : 'هیچ' }}</p>
@@ -41,6 +57,14 @@
                 <div>
                     <span class="text-gray-600">منبع:</span>
                     <span class="font-medium">{{ $config->source_name }}</span>
+                </div>
+                <div>
+                    <span class="text-gray-600">نوع:</span>
+                    @if ($config->source_type === 'api')
+                        <span class="font-medium text-blue-600">🌐 API</span>
+                    @else
+                        <span class="font-medium text-orange-600">🕷️ Crawler</span>
+                    @endif
                 </div>
                 <div>
                     <span class="text-gray-600">آخرین ID در کانفیگ:</span>
@@ -101,6 +125,41 @@
             <form method="POST" action="{{ route('configs.update', $config) }}" class="space-y-6">
                 @csrf @method('PUT')
 
+                <!-- Source Type Selection -->
+                <div class="border-b border-gray-200 pb-6">
+                    <h2 class="text-lg font-medium text-gray-900 mb-4">نوع منبع داده</h2>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="relative">
+                            <input type="radio" id="source_type_api" name="source_type" value="api"
+                                   {{ old('source_type', $config->source_type) === 'api' ? 'checked' : '' }}
+                                   class="peer sr-only" onchange="toggleSourceType()">
+                            <label for="source_type_api" class="flex items-center p-4 border-2 border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50 peer-checked:border-blue-500 peer-checked:bg-blue-50">
+                                <div class="text-center w-full">
+                                    <div class="text-3xl mb-2">🌐</div>
+                                    <div class="font-medium text-gray-900">API</div>
+                                    <div class="text-sm text-gray-600">دریافت داده از API</div>
+                                    <div class="text-xs text-gray-500 mt-1">JSON، REST API</div>
+                                </div>
+                            </label>
+                        </div>
+
+                        <div class="relative">
+                            <input type="radio" id="source_type_crawler" name="source_type" value="crawler"
+                                   {{ old('source_type', $config->source_type) === 'crawler' ? 'checked' : '' }}
+                                   class="peer sr-only" onchange="toggleSourceType()">
+                            <label for="source_type_crawler" class="flex items-center p-4 border-2 border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50 peer-checked:border-orange-500 peer-checked:bg-orange-50">
+                                <div class="text-center w-full">
+                                    <div class="text-3xl mb-2">🕷️</div>
+                                    <div class="font-medium text-gray-900">Crawler</div>
+                                    <div class="text-sm text-gray-600">استخراج از HTML</div>
+                                    <div class="text-xs text-gray-500 mt-1">CSS Selectors، XPath</div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Basic Info -->
                 <div class="border-b border-gray-200 pb-6">
                     <h2 class="text-lg font-medium text-gray-900 mb-4">اطلاعات کلی</h2>
@@ -120,7 +179,7 @@
 
                         <div class="md:col-span-2">
                             <label for="base_url" class="block text-sm font-medium text-gray-700 mb-2">
-                                آدرس پایه API <span class="text-red-500">*</span>
+                                آدرس پایه <span class="text-red-500">*</span>
                             </label>
                             <input type="url" id="base_url" name="base_url"
                                    value="{{ old('base_url', $config->base_url) }}" required
@@ -255,19 +314,15 @@
                     <div class="space-y-2">
                         <div>
                             <span class="text-gray-400"># تست وضعیت فعلی:</span><br>
-                            <span class="text-green-300">php artisan config:test-start-page {{ $config->id }}</span>
+                            <span class="text-green-300">php artisan config:debug {{ $config->id }}</span>
                         </div>
                         <div>
                             <span class="text-gray-400"># تنظیم start_page روی 1:</span><br>
-                            <span class="text-green-300">php artisan config:test-start-page {{ $config->id }} --set-start=1</span>
+                            <span class="text-green-300">php artisan config:set-start-page {{ $config->id }} 1</span>
                         </div>
                         <div>
                             <span class="text-gray-400"># فعال‌سازی حالت هوشمند:</span><br>
-                            <span class="text-green-300">php artisan config:test-start-page {{ $config->id }} --clear</span>
-                        </div>
-                        <div>
-                            <span class="text-gray-400"># Debug کامل:</span><br>
-                            <span class="text-green-300">php artisan config:debug {{ $config->id }}</span>
+                            <span class="text-green-300">php artisan config:set-start-page {{ $config->id }} --clear</span>
                         </div>
                     </div>
                 </div>
@@ -350,8 +405,8 @@
                 </div>
 
                 <!-- API Settings -->
-                <div class="border-b border-gray-200 pb-6">
-                    <h2 class="text-lg font-medium text-gray-900 mb-4">تنظیمات API</h2>
+                <div id="api-settings" class="border-b border-gray-200 pb-6" style="display: {{ $config->source_type === 'api' ? 'block' : 'none' }}">
+                    <h2 class="text-lg font-medium text-gray-900 mb-4">🌐 تنظیمات API</h2>
                     @php $apiSettings = $config->getApiSettings(); @endphp
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -360,7 +415,7 @@
                                 Endpoint <span class="text-red-500">*</span>
                             </label>
                             <input type="text" id="api_endpoint" name="api_endpoint"
-                                   value="{{ old('api_endpoint', $apiSettings['endpoint'] ?? '') }}" required
+                                   value="{{ old('api_endpoint', $apiSettings['endpoint'] ?? '') }}"
                                    class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 @error('api_endpoint') border-red-500 @enderror"
                                    placeholder="/api/book/{id} یا /api/books?id={id}">
                             <p class="text-xs text-gray-500 mt-1">از {id} برای جایگزینی ID استفاده کنید</p>
@@ -414,11 +469,145 @@
                     </div>
                 </div>
 
+                <!-- Crawler Settings -->
+                <div id="crawler-settings" class="border-b border-gray-200 pb-6" style="display: {{ $config->source_type === 'crawler' ? 'block' : 'none' }}">
+                    <h2 class="text-lg font-medium text-gray-900 mb-4">🕷️ تنظیمات Crawler</h2>
+                    @php $crawlerSettings = $config->getCrawlerSettings(); @endphp
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="md:col-span-2">
+                            <label for="page_pattern" class="block text-sm font-medium text-gray-700 mb-2">
+                                الگوی URL صفحه <span class="text-red-500">*</span>
+                            </label>
+                            <input type="text" id="page_pattern" name="page_pattern"
+                                   value="{{ old('page_pattern', $config->page_pattern ?? '/book/{id}') }}"
+                                   class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-orange-500 @error('page_pattern') border-red-500 @enderror"
+                                   placeholder="/book/{id} یا /library/item/{id}.html">
+                            <p class="text-xs text-gray-500 mt-1">از {id} برای جایگزینی شماره ID استفاده کنید</p>
+                            @error('page_pattern')
+                            <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div>
+                            <label for="user_agent" class="block text-sm font-medium text-gray-700 mb-2">User Agent</label>
+                            <input type="text" id="user_agent" name="user_agent"
+                                   value="{{ old('user_agent', $config->user_agent ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36') }}"
+                                   class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-orange-500"
+                                   placeholder="User Agent Browser">
+                            <p class="text-xs text-gray-500 mt-1">User Agent برای درخواست‌های HTTP</p>
+                        </div>
+
+                        <div>
+                            <label for="headers" class="block text-sm font-medium text-gray-700 mb-2">Headers اضافی (JSON)</label>
+                            <textarea id="headers" name="headers" rows="3"
+                                      class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-orange-500"
+                                      placeholder='{"Accept-Language": "fa,en", "Custom-Header": "value"}'>{{ old('headers', $config->headers) }}</textarea>
+                            <p class="text-xs text-gray-500 mt-1">فرمت JSON برای headers اضافی</p>
+                        </div>
+                    </div>
+
+                    <!-- CSS Selectors Mapping -->
+                    <div class="mt-6">
+                        <h3 class="text-md font-medium text-gray-900 mb-4">نقشه‌برداری CSS Selectors</h3>
+                        <div class="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-4">
+                            <h4 class="text-orange-800 font-medium mb-2">🎯 راهنمای CSS Selectors:</h4>
+                            <div class="text-orange-700 text-sm space-y-1">
+                                <div>• <code>.title</code> - انتخاب کلاس title</div>
+                                <div>• <code>#book-title</code> - انتخاب ID مشخص</div>
+                                <div>• <code>h1.main-title</code> - عنصر h1 با کلاس main-title</div>
+                                <div>• <code>.author a</code> - لینک داخل کلاس author</div>
+                                <div>• <code>[data-isbn]</code> - عنصر با attribute مشخص</div>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            @foreach ($bookFields as $field => $label)
+                                <div>
+                                    <label for="selector_{{ $field }}"
+                                           class="block text-sm font-medium text-gray-700 mb-1">
+                                        {{ $label }}
+                                    </label>
+                                    <input type="text" id="selector_{{ $field }}"
+                                           name="selector_{{ $field }}"
+                                           value="{{ old('selector_' . $field, $crawlerSettings['selector_mapping'][$field] ?? '') }}"
+                                           class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-orange-500 text-sm font-mono"
+                                           placeholder="CSS Selector برای {{ $label }}">
+                                </div>
+                            @endforeach
+                        </div>
+
+                        <!-- Image Selectors -->
+                        <div class="mt-6">
+                            <h4 class="text-md font-medium text-gray-900 mb-3">سلکتورهای تصاویر</h4>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label for="image_selector_1" class="block text-sm font-medium text-gray-700 mb-1">
+                                        سلکتور تصویر اصلی
+                                    </label>
+                                    <input type="text" id="image_selector_1" name="image_selector_1"
+                                           value="{{ old('image_selector_1', $crawlerSettings['image_selectors'][0] ?? '') }}"
+                                           class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-orange-500 text-sm font-mono"
+                                           placeholder=".book-cover img, .main-image">
+                                </div>
+                                <div>
+                                    <label for="image_selector_2" class="block text-sm font-medium text-gray-700 mb-1">
+                                        سلکتور تصویر جایگزین
+                                    </label>
+                                    <input type="text" id="image_selector_2" name="image_selector_2"
+                                           value="{{ old('image_selector_2', $crawlerSettings['image_selectors'][1] ?? '') }}"
+                                           class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-orange-500 text-sm font-mono"
+                                           placeholder=".thumbnail img, .cover-image">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Download Link Selectors -->
+                        <div class="mt-6">
+                            <h4 class="text-md font-medium text-gray-900 mb-3">سلکتورهای لینک‌های دانلود</h4>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label for="download_selector" class="block text-sm font-medium text-gray-700 mb-1">
+                                        لینک دانلود مستقیم
+                                    </label>
+                                    <input type="text" id="download_selector" name="download_selector"
+                                           value="{{ old('download_selector', $crawlerSettings['download_selectors']['direct'] ?? '') }}"
+                                           class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-orange-500 text-sm font-mono"
+                                           placeholder=".download-btn, a[href*='download']">
+                                </div>
+                                <div>
+                                    <label for="magnet_selector" class="block text-sm font-medium text-gray-700 mb-1">
+                                        لینک مگنت
+                                    </label>
+                                    <input type="text" id="magnet_selector" name="magnet_selector"
+                                           value="{{ old('magnet_selector', $crawlerSettings['download_selectors']['magnet'] ?? '') }}"
+                                           class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-orange-500 text-sm font-mono"
+                                           placeholder="a[href^='magnet:'], .magnet-link">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mt-4 p-3 bg-orange-50 rounded">
+                            <p class="text-sm text-orange-800">
+                                <strong>نکته:</strong> Crawler از CSS Selectors استفاده می‌کند. می‌توانید چندین سلکتور را با کاما جدا کنید.
+                                <br>برای تست سلکتورها، از Developer Tools مرورگر استفاده کنید.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Preview Section -->
                 <div class="bg-gray-50 rounded-lg p-4">
                     <h3 class="text-md font-medium text-gray-900 mb-2">🔍 پیش‌نمایش تنظیمات:</h3>
                     <div class="text-sm text-gray-700 space-y-1" id="config-preview">
                         <div>📊 <strong>منبع:</strong> <span id="preview-source">{{ $config->source_name }}</span></div>
+                        <div>🔧 <strong>نوع:</strong> <span id="preview-type">
+                            @if ($config->source_type === 'api')
+                                    🌐 API
+                                @else
+                                    🕷️ Crawler
+                                @endif
+                        </span></div>
                         <div>🔢 <strong>شروع از ID:</strong> <span id="preview-start">
                             @if($hasUserDefined)
                                     {{ number_format($formStartPage) }} (مشخص شده)
@@ -428,6 +617,7 @@
                         </span></div>
                         <div>📄 <strong>تعداد کل:</strong> <span id="preview-total">{{ number_format($config->max_pages) }}</span> ID</div>
                         <div>⏱️ <strong>تخمین زمان:</strong> <span id="preview-time">-</span></div>
+                        <div id="preview-url-pattern" class="text-xs text-gray-500"></div>
                         @if($lastIdFromSources > 0)
                             <div class="text-xs text-gray-500">💡 آخرین ID پردازش شده: {{ number_format($lastIdFromSources) }}</div>
                         @endif
@@ -457,6 +647,31 @@
         // تابع helper برای format کردن اعداد
         function number_format(number) {
             return new Intl.NumberFormat('fa-IR').format(number);
+        }
+
+        // تابع تغییر نوع منبع
+        function toggleSourceType() {
+            const apiType = document.getElementById('source_type_api').checked;
+            const crawlerType = document.getElementById('source_type_crawler').checked;
+
+            const apiSettings = document.getElementById('api-settings');
+            const crawlerSettings = document.getElementById('crawler-settings');
+
+            if (apiType) {
+                apiSettings.style.display = 'block';
+                crawlerSettings.style.display = 'none';
+                // اجباری کردن endpoint برای API
+                document.getElementById('api_endpoint').required = true;
+                document.getElementById('page_pattern').required = false;
+            } else if (crawlerType) {
+                apiSettings.style.display = 'none';
+                crawlerSettings.style.display = 'block';
+                // اجباری کردن page_pattern برای Crawler
+                document.getElementById('api_endpoint').required = false;
+                document.getElementById('page_pattern').required = true;
+            }
+
+            updatePreview();
         }
 
         // عملیات سریع
@@ -516,6 +731,7 @@
             const startPageInput = document.getElementById('start_page').value.trim();
             const maxPages = document.getElementById('max_pages').value || {{ $config->max_pages }};
             const delaySeconds = document.getElementById('delay_seconds').value || {{ $config->delay_seconds }};
+            const apiType = document.getElementById('source_type_api').checked;
 
             // نام منبع
             if (baseUrl) {
@@ -527,6 +743,9 @@
                     document.getElementById('preview-source').textContent = '{{ $config->source_name }}';
                 }
             }
+
+            // نوع منبع
+            document.getElementById('preview-type').textContent = apiType ? '🌐 API' : '🕷️ Crawler';
 
             // شروع
             let startText;
@@ -555,6 +774,20 @@
             if (!timeText) timeText = 'کمتر از یک دقیقه';
 
             document.getElementById('preview-time').textContent = timeText;
+
+            // نمایش الگوی URL
+            const urlPatternDiv = document.getElementById('preview-url-pattern');
+            if (apiType) {
+                const endpoint = document.getElementById('api_endpoint').value;
+                if (baseUrl && endpoint) {
+                    urlPatternDiv.textContent = `🌐 نمونه URL: ${baseUrl}${endpoint}`.replace('{id}', '123');
+                }
+            } else {
+                const pattern = document.getElementById('page_pattern').value || '/book/{id}';
+                if (baseUrl) {
+                    urlPatternDiv.textContent = `🕷️ نمونه URL: ${baseUrl}${pattern}`.replace('{id}', '123');
+                }
+            }
         }
 
         // نمایش نوتیفیکیشن
@@ -586,9 +819,14 @@
         document.getElementById('base_url').addEventListener('input', updatePreview);
         document.getElementById('max_pages').addEventListener('input', updatePreview);
         document.getElementById('delay_seconds').addEventListener('input', updatePreview);
+        document.getElementById('api_endpoint').addEventListener('input', updatePreview);
+        document.getElementById('page_pattern').addEventListener('input', updatePreview);
 
-        // اولین بار
-        updateStartPageStatus();
-        updatePreview();
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            toggleSourceType();
+            updateStartPageStatus();
+            updatePreview();
+        });
     </script>
 @endsection

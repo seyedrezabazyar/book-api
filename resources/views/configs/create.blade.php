@@ -7,7 +7,7 @@
             <a href="{{ route('configs.index') }}" class="text-gray-600 hover:text-gray-800">←</a>
             <div>
                 <h1 class="text-2xl font-semibold">ایجاد کانفیگ جدید</h1>
-                <p class="text-gray-600">کانفیگ جدید برای دریافت اطلاعات از API با سیستم هوشمند</p>
+                <p class="text-gray-600">کانفیگ جدید برای دریافت اطلاعات از API یا Crawler با سیستم هوشمند</p>
             </div>
         </div>
 
@@ -46,7 +46,7 @@
 
                         <div class="md:col-span-2">
                             <label for="base_url" class="block text-sm font-medium text-gray-700 mb-2">
-                                آدرس پایه API <span class="text-red-500">*</span>
+                                آدرس پایه سایت <span class="text-red-500">*</span>
                             </label>
                             <input type="url" id="base_url" name="base_url" value="{{ old('base_url') }}" required
                                    class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 @error('base_url') border-red-500 @enderror"
@@ -55,6 +55,26 @@
                             @error('base_url')
                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                             @enderror
+                        </div>
+
+                        <!-- نوع منبع -->
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-2">
+                                نوع منبع <span class="text-red-500">*</span>
+                            </label>
+                            <div class="flex gap-6">
+                                <label class="flex items-center">
+                                    <input type="radio" name="source_type" value="api" {{ old('source_type', 'api') === 'api' ? 'checked' : '' }}
+                                    class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300" onchange="toggleSourceType()">
+                                    <span class="mr-2 text-sm text-gray-900">🌐 API (REST/JSON)</span>
+                                </label>
+                                <label class="flex items-center">
+                                    <input type="radio" name="source_type" value="crawler" {{ old('source_type') === 'crawler' ? 'checked' : '' }}
+                                    class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300" onchange="toggleSourceType()">
+                                    <span class="mr-2 text-sm text-gray-900">🕷️ Crawler (HTML)</span>
+                                </label>
+                            </div>
+                            <p class="text-xs text-gray-500 mt-1">API برای دریافت JSON ساختارمند، Crawler برای استخراج از HTML</p>
                         </div>
                     </div>
                 </div>
@@ -206,8 +226,8 @@
                 </div>
 
                 <!-- API Settings -->
-                <div class="border-b border-gray-200 pb-6">
-                    <h2 class="text-lg font-medium text-gray-900 mb-4">تنظیمات API</h2>
+                <div id="api-settings" class="border-b border-gray-200 pb-6">
+                    <h2 class="text-lg font-medium text-gray-900 mb-4">🌐 تنظیمات API</h2>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div class="md:col-span-2">
@@ -215,7 +235,7 @@
                                 Endpoint <span class="text-red-500">*</span>
                             </label>
                             <input type="text" id="api_endpoint" name="api_endpoint"
-                                   value="{{ old('api_endpoint') }}" required
+                                   value="{{ old('api_endpoint') }}"
                                    class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 @error('api_endpoint') border-red-500 @enderror"
                                    placeholder="/api/book/{id} یا /api/books?id={id}">
                             <p class="text-xs text-gray-500 mt-1">از {id} برای جایگزینی ID استفاده کنید</p>
@@ -264,11 +284,86 @@
                     </div>
                 </div>
 
+                <!-- Crawler Settings -->
+                <div id="crawler-settings" class="border-b border-gray-200 pb-6" style="display: none;">
+                    <h2 class="text-lg font-medium text-gray-900 mb-4">🕷️ تنظیمات Crawler</h2>
+
+                    <div class="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-6">
+                        <h3 class="text-orange-800 font-medium mb-2">📋 راهنمای Crawler:</h3>
+                        <ul class="text-orange-700 text-sm space-y-1">
+                            <li>• از CSS Selectors برای انتخاب عناصر HTML استفاده می‌شود</li>
+                            <li>• الگوی صفحه: /book/{id} یا /library/book-{id}.html</li>
+                            <li>• برای استخراج عنوان: h1.title یا .book-title</li>
+                            <li>• برای توضیحات: .description یا .book-content p</li>
+                            <li>• برای تصاویر: img.cover یا .book-image img</li>
+                        </ul>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="md:col-span-2">
+                            <label for="page_pattern" class="block text-sm font-medium text-gray-700 mb-2">
+                                الگوی صفحه <span class="text-red-500">*</span>
+                            </label>
+                            <input type="text" id="page_pattern" name="page_pattern"
+                                   value="{{ old('page_pattern', '/book/{id}') }}"
+                                   class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 @error('page_pattern') border-red-500 @enderror"
+                                   placeholder="/book/{id} یا /library/book-{id}.html">
+                            <p class="text-xs text-gray-500 mt-1">از {id} برای جایگزینی ID استفاده کنید</p>
+                            @error('page_pattern')
+                            <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div class="md:col-span-2">
+                            <label for="user_agent" class="block text-sm font-medium text-gray-700 mb-2">
+                                User Agent (اختیاری)
+                            </label>
+                            <input type="text" id="user_agent" name="user_agent"
+                                   value="{{ old('user_agent') }}"
+                                   class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 @error('user_agent') border-red-500 @enderror"
+                                   placeholder="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36">
+                            <p class="text-xs text-gray-500 mt-1">برای شبیه‌سازی مرورگر واقعی</p>
+                            @error('user_agent')
+                            <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
+                            @enderror
+                        </div>
+                    </div>
+
+                    <!-- CSS Selectors Mapping -->
+                    <div class="mt-6">
+                        <h3 class="text-md font-medium text-gray-900 mb-4">نقشه‌برداری CSS Selectors</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            @foreach ($bookFields as $field => $label)
+                                <div>
+                                    <label for="css_{{ $field }}"
+                                           class="block text-sm font-medium text-gray-700 mb-1">{{ $label }}</label>
+                                    <input type="text" id="css_{{ $field }}"
+                                           name="css_{{ $field }}" value="{{ old('css_' . $field) }}"
+                                           class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 text-sm"
+                                           placeholder="CSS Selector مثل .title یا h1.book-title">
+                                </div>
+                            @endforeach
+                        </div>
+
+                        <div class="mt-4 p-3 bg-orange-50 rounded">
+                            <p class="text-sm text-orange-800">
+                                <strong>راهنما CSS Selectors:</strong>
+                                <br>• .class-name → انتخاب بر اساس کلاس
+                                <br>• #id-name → انتخاب بر اساس ID
+                                <br>• tag.class → انتخاب tag با کلاس خاص
+                                <br>• .parent .child → انتخاب فرزند درون والد
+                                <br>• img[src*="cover"] → انتخاب تصویر که src شامل "cover" باشد
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Preview Section -->
                 <div class="bg-gray-50 rounded-lg p-4">
                     <h3 class="text-md font-medium text-gray-900 mb-2">🔍 پیش‌نمایش تنظیمات:</h3>
                     <div class="text-sm text-gray-700 space-y-1" id="config-preview">
                         <div>📊 <strong>منبع:</strong> <span id="preview-source">-</span></div>
+                        <div>🔧 <strong>نوع:</strong> <span id="preview-type">API</span></div>
                         <div>🔢 <strong>شروع از ID:</strong> <span id="preview-start">1</span></div>
                         <div>📄 <strong>تعداد کل:</strong> <span id="preview-total">1000</span> ID</div>
                         <div>⏱️ <strong>تخمین زمان:</strong> <span id="preview-time">-</span></div>
@@ -291,6 +386,30 @@
     </div>
 
     <script>
+        // تغییر نمایش تنظیمات بر اساس نوع منبع
+        function toggleSourceType() {
+            const sourceType = document.querySelector('input[name="source_type"]:checked').value;
+            const apiSettings = document.getElementById('api-settings');
+            const crawlerSettings = document.getElementById('crawler-settings');
+            const apiEndpoint = document.getElementById('api_endpoint');
+            const pagePattern = document.getElementById('page_pattern');
+
+            if (sourceType === 'api') {
+                apiSettings.style.display = 'block';
+                crawlerSettings.style.display = 'none';
+                apiEndpoint.required = true;
+                pagePattern.required = false;
+                document.getElementById('preview-type').textContent = '🌐 API';
+            } else {
+                apiSettings.style.display = 'none';
+                crawlerSettings.style.display = 'block';
+                apiEndpoint.required = false;
+                pagePattern.required = true;
+                document.getElementById('preview-type').textContent = '🕷️ Crawler';
+            }
+            updatePreview();
+        }
+
         // به‌روزرسانی پیش‌نمایش
         function updatePreview() {
             const baseUrl = document.getElementById('base_url').value;
@@ -335,7 +454,8 @@
         document.getElementById('max_pages').addEventListener('input', updatePreview);
         document.getElementById('delay_seconds').addEventListener('input', updatePreview);
 
-        // اولین بار
+        // Initialize
+        toggleSourceType();
         updatePreview();
     </script>
 @endsection
