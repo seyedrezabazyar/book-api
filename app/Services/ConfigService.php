@@ -4,7 +4,7 @@ namespace App\Services;
 
 use App\Models\Config;
 use App\Models\ExecutionLog;
-use App\Models\ScrapingFailure;
+use App\Models\FailedRequest;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 
@@ -68,8 +68,10 @@ class ConfigService
             throw new \Exception('امکان حذف کانفیگ در حال اجرا وجود ندارد.');
         }
 
+        // حذف تمام داده‌های مرتبط
         ExecutionLog::where('config_id', $config->id)->delete();
-        ScrapingFailure::where('config_id', $config->id)->delete();
+        FailedRequest::where('config_id', $config->id)->delete();
+
         $config->delete();
     }
 

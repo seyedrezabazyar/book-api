@@ -67,126 +67,198 @@ class Config extends Model
         return $this->hasMany(ExecutionLog::class);
     }
 
+    public function missingSources(): HasMany
+    {
+        return $this->hasMany(MissingSource::class);
+    }
+
     /**
-     * تعیین صفحه شروع هوشمند - اصلاح شده
-     * اولویت اول با start_page مشخص شده توسط کاربر است
+     * تعیین صفحه شروع هوشمند بهینه‌شده
      */
     public function getSmartStartPage(): int
     {
-        // اولویت 1: اگر start_page توسط کاربر مشخص شده (هر عدد مثبت)، از آن استفاده کن
+        // اولویت 1: start_page تعیین شده توسط کاربر
         if ($this->start_page && $this->start_page > 0) {
-            Log::info("🎯 شروع از start_page تعیین شده توسط کاربر", [
+            Log::info("🎯 شروع از start_page کاربر", [
                 'config_id' => $this->id,
-                'start_page' => $this->start_page,
-                'user_override' => true
+                'start_page' => $this->start_page
             ]);
             return $this->start_page;
         }
 
-        // اولویت 2: آخرین ID از book_sources برای این منبع (حالت هوشمند)
-        $lastIdFromSources = $this->getLastSourceIdFromBookSources();
-
-        if ($lastIdFromSources > 0) {
-            $nextId = $lastIdFromSources + 1;
-            Log::info("📊 شروع هوشمند از آخرین ID در book_sources", [
+        // اولویت 2: آخرین ID موفق از book_sources
+        $lastSuccessfulId = $this->getLastSuccessfulSourceId();
+        if ($lastSuccessfulId > 0) {
+            $nextId = $lastSuccessfulId + 1;
+            Log::info("📊 شروع هوشمند از آخرین ID موفق", [
                 'config_id' => $this->id,
-                'source_name' => $this->source_name,
-                'last_id_from_sources' => $lastIdFromSources,
-                'next_start' => $nextId,
-                'smart_mode' => true
+                'last_successful_id' => $lastSuccessfulId,
+                'next_start' => $nextId
             ]);
             return $nextId;
         }
 
-        // اولویت 3: اگر auto_resume فعال باشد و last_source_id موجود باشد
+        // اولویت 3: auto_resume
         if ($this->auto_resume && $this->last_source_id > 0) {
             $nextId = $this->last_source_id + 1;
             Log::info("🔄 ادامه از last_source_id", [
                 'config_id' => $this->id,
                 'last_source_id' => $this->last_source_id,
-                'next_start' => $nextId,
-                'auto_resume' => true
+                'next_start' => $nextId
             ]);
             return $nextId;
         }
 
-        // پیش‌فرض: از 1 شروع کن
-        Log::info("🆕 شروع جدید از ID 1 (پیش‌فرض)", [
-            'config_id' => $this->id,
-            'source_name' => $this->source_name,
-            'default_start' => true
-        ]);
+        // پیش‌فرض
+        Log::info("🆕 شروع از ابتدا", ['config_id' => $this->id]);
         return 1;
     }
 
     /**
-     * دریافت آخرین ID ثبت شده در book_sources برای این منبع - اصلاح شده
+     * دریافت آخرین source_id موفق
      */
-    public function getLastSourceIdFromBookSources(): int
+    public function getLastSuccessfulSourceId(): int
     {
         try {
-            // استفاده از BookSource model با orderByRaw صحیح
             $lastSourceRecord = \App\Models\BookSource::where('source_name', $this->source_name)
-                ->whereRaw('source_id REGEXP "^[0-9]+$"') // فقط source_id های عددی
+                ->whereRaw('source_id REGEXP "^[0-9]+$"')
                 ->orderByRaw('CAST(source_id AS UNSIGNED) DESC')
                 ->first();
 
-            $result = $lastSourceRecord ? (int)$lastSourceRecord->source_id : 0;
-
-            Log::info("🔍 بررسی آخرین ID در book_sources", [
-                'config_id' => $this->id,
-                'source_name' => $this->source_name,
-                'last_id' => $result,
-                'found_record' => $lastSourceRecord ? true : false,
-                'total_records' => \App\Models\BookSource::where('source_name', $this->source_name)->count()
-            ]);
-
-            return $result;
+            return $lastSourceRecord ? (int)$lastSourceRecord->source_id : 0;
         } catch (\Exception $e) {
-            Log::error("❌ خطا در دریافت آخرین ID از book_sources", [
+            Log::error("❌ خطا در دریافت آخرین ID موفق", [
                 'config_id' => $this->id,
-                'source_name' => $this->source_name,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'error' => $e->getMessage()
+            ]);
+            return 0;
+        }
+    }
+
+    /**
+     * دریافت آمار کامل شامل missing sources
+     */
+    public function getCompleteStats(): array
+    {
+        try {
+            $basicStats = $this->getBasicStats();
+            $missingStats = MissingSource::getStatsForConfig($this->id);
+
+            return array_merge($basicStats, [
+                'missing_sources' => $missingStats['total_missing'],
+                'permanently_missing' => $missingStats['permanently_missing'],
+                'missing_not_found' => $missingStats['not_found'],
+                'missing_api_errors' => $missingStats['api_errors']
+            ]);
+        } catch (\Exception $e) {
+            Log::error("❌ خطا در دریافت آمار کامل", [
+                'config_id' => $this->id,
+                'error' => $e->getMessage()
             ]);
 
-            // Fallback: استفاده از query ساده‌تر
-            try {
-                $maxId = \App\Models\BookSource::where('source_name', $this->source_name)
-                    ->whereRaw('source_id REGEXP "^[0-9]+$"')
-                    ->max(DB::raw('CAST(source_id AS UNSIGNED)')); // استفاده از DB facade
-
-                return $maxId ? (int)$maxId : 0;
-            } catch (\Exception $fallbackError) {
-                Log::error("❌ خطا در fallback query", [
-                    'config_id' => $this->id,
-                    'fallback_error' => $fallbackError->getMessage()
-                ]);
-                return 0;
-            }
+            return $this->getBasicStats();
         }
     }
 
-    /**
-     * متد جدید: بررسی اینکه آیا start_page توسط کاربر مشخص شده یا خیر
-     */
-    public function hasUserDefinedStartPage(): bool
+    private function getBasicStats(): array
     {
-        return $this->start_page !== null && $this->start_page > 0;
+        $stats = $this->executionLogs()
+            ->whereIn('status', ['completed', 'stopped'])
+            ->selectRaw('
+                SUM(total_processed) as total_processed,
+                SUM(total_success) as total_success,
+                SUM(total_failed) as total_failed,
+                SUM(total_enhanced) as total_enhanced,
+                SUM(total_duplicate) as total_duplicate
+            ')
+            ->first();
+
+        $totalEnhanced = $stats ? ($stats->total_enhanced ?? 0) : 0;
+        $totalDuplicate = $stats ? ($stats->total_duplicate ?? 0) : 0;
+        $realSuccessCount = $this->total_success + $totalEnhanced;
+
+        return [
+            'total_processed' => $this->total_processed,
+            'total_success' => $this->total_success,
+            'total_failed' => $this->total_failed,
+            'total_enhanced' => $totalEnhanced,
+            'total_duplicate' => $totalDuplicate,
+            'real_success_count' => $realSuccessCount,
+            'real_success_rate' => $this->total_processed > 0 ?
+                round(($realSuccessCount / $this->total_processed) * 100, 2) : 0,
+            'enhancement_rate' => $this->total_processed > 0 ?
+                round(($totalEnhanced / $this->total_processed) * 100, 2) : 0
+        ];
     }
 
     /**
-     * متد جدید: دریافت start_page برای نمایش در فرم
+     * بررسی وجود source در missing list
      */
-    public function getStartPageForForm(): ?int
+    public function isSourceMissing(string $sourceId): bool
     {
-        // اگر start_page مشخص شده، آن را برگردان (حتی اگر 1 باشد)
-        if ($this->start_page !== null && $this->start_page > 0) {
-            return $this->start_page;
-        }
+        return $this->missingSources()
+            ->where('source_id', $sourceId)
+            ->exists();
+    }
 
-        // اگر مشخص نشده، null برگردان (فیلد فرم خالی خواهد بود)
-        return null;
+    /**
+     * دریافت تعداد source های ناموجود
+     */
+    public function getMissingSourcesCount(): int
+    {
+        return $this->missingSources()->count();
+    }
+
+    /**
+     * بررسی gaps در source_id ها
+     */
+    public function findSourceGaps(int $maxId = 100): array
+    {
+        try {
+            // دریافت تمام source_id های موجود
+            $existingIds = \App\Models\BookSource::where('source_name', $this->source_name)
+                ->whereRaw('source_id REGEXP "^[0-9]+$"')
+                ->whereRaw('CAST(source_id AS UNSIGNED) <= ?', [$maxId])
+                ->pluck('source_id')
+                ->map(function($id) { return (int)$id; })
+                ->sort()
+                ->values()
+                ->toArray();
+
+            // دریافت source_id های ناموجود
+            $missingIds = $this->missingSources()
+                ->whereRaw('source_id REGEXP "^[0-9]+$"')
+                ->whereRaw('CAST(source_id AS UNSIGNED) <= ?', [$maxId])
+                ->pluck('source_id')
+                ->map(function($id) { return (int)$id; })
+                ->sort()
+                ->values()
+                ->toArray();
+
+            // پیدا کردن gaps
+            $allExpectedIds = range(1, $maxId);
+            $gaps = array_diff($allExpectedIds, $existingIds, $missingIds);
+
+            return [
+                'gaps' => array_values($gaps),
+                'existing_ids' => $existingIds,
+                'missing_ids' => $missingIds,
+                'gap_count' => count($gaps)
+            ];
+
+        } catch (\Exception $e) {
+            Log::error("❌ خطا در یافتن gaps", [
+                'config_id' => $this->id,
+                'error' => $e->getMessage()
+            ]);
+
+            return [
+                'gaps' => [],
+                'existing_ids' => [],
+                'missing_ids' => [],
+                'gap_count' => 0
+            ];
+        }
     }
 
     /**
@@ -200,7 +272,6 @@ class Config extends Model
 
         $fullUrl = $baseUrl . ($endpoint ? '/' . ltrim($endpoint, '/') : '');
 
-        // اضافه کردن ID به URL
         if (strpos($fullUrl, '{id}') !== false) {
             $fullUrl = str_replace('{id}', $sourceId, $fullUrl);
         } else {
@@ -215,75 +286,37 @@ class Config extends Model
     }
 
     /**
-     * بروزرسانی آمار با منطق بهبود یافته - کاملاً اصلاح شده
+     * بروزرسانی آمار بهینه‌شده
      */
     public function updateProgress(int $sourceId, array $stats): void
     {
         try {
-            $self = $this; // کپی کردن reference برای استفاده در closure
+            DB::transaction(function () use ($sourceId, $stats) {
+                $totalToAdd = $this->extractStatValue($stats, ['total_processed', 'total']);
+                $successToAdd = $this->extractStatValue($stats, ['total_success', 'success']);
+                $failedToAdd = $this->extractStatValue($stats, ['total_failed', 'failed']);
 
-            DB::transaction(function () use ($sourceId, $stats, $self) {
-                // استخراج آمار با کلیدهای مختلف - تعریف متغیرها داخل closure
-                $totalToAdd = $self->extractStatValue($stats, ['total_processed', 'total']);
-                $successToAdd = $self->extractStatValue($stats, ['total_success', 'success']);
-                $failedToAdd = $self->extractStatValue($stats, ['total_failed', 'failed']);
+                if ($totalToAdd > 0) $this->increment('total_processed', $totalToAdd);
+                if ($successToAdd > 0) $this->increment('total_success', $successToAdd);
+                if ($failedToAdd > 0) $this->increment('total_failed', $failedToAdd);
 
-                // بروزرسانی آمار
-                if ($totalToAdd > 0) {
-                    $self->increment('total_processed', $totalToAdd);
-                }
-                if ($successToAdd > 0) {
-                    $self->increment('total_success', $successToAdd);
-                }
-                if ($failedToAdd > 0) {
-                    $self->increment('total_failed', $failedToAdd);
-                }
-
-                // بروزرسانی آخرین ID اگر بزرگتر باشد
-                if ($sourceId > ($self->last_source_id ?? 0)) {
-                    $self->update([
+                if ($sourceId > ($this->last_source_id ?? 0)) {
+                    $this->update([
                         'last_source_id' => $sourceId,
                         'current_page' => $sourceId,
                         'last_run_at' => now()
                     ]);
                 }
-
-                // لاگ کردن آمار داخل transaction
-                Log::debug("📊 آمار کانفیگ بروزرسانی شد", [
-                    'config_id' => $self->id,
-                    'source_id' => $sourceId,
-                    'stats_added' => [
-                        'total_processed' => $totalToAdd,
-                        'total_success' => $successToAdd,
-                        'total_failed' => $failedToAdd
-                    ]
-                ]);
             });
 
-            // لاگ نهایی خارج از transaction
-            Log::debug("✅ آمار کانفیگ تکمیل شد", [
-                'config_id' => $this->id,
-                'source_id' => $sourceId,
-                'new_totals' => [
-                    'total_processed' => $this->fresh()->total_processed,
-                    'total_success' => $this->fresh()->total_success,
-                    'total_failed' => $this->fresh()->total_failed
-                ]
-            ]);
-
         } catch (\Exception $e) {
-            Log::error("❌ خطا در بروزرسانی آمار کانفیگ", [
+            Log::error("❌ خطا در بروزرسانی آمار", [
                 'config_id' => $this->id,
-                'source_id' => $sourceId,
-                'stats' => $stats,
                 'error' => $e->getMessage()
             ]);
         }
     }
 
-    /**
-     * استخراج مقدار آمار با کلیدهای مختلف
-     */
     private function extractStatValue(array $stats, array $possibleKeys): int
     {
         foreach ($possibleKeys as $key) {
@@ -294,104 +327,6 @@ class Config extends Model
         return 0;
     }
 
-    /**
-     * همگام‌سازی آمار از لاگ‌ها - بهبود یافته
-     */
-    public function syncStatsFromLogs(): void
-    {
-        try {
-            $stats = $this->executionLogs()
-                ->whereIn('status', ['completed', 'stopped'])
-                ->selectRaw('
-                    SUM(total_processed) as total_processed,
-                    SUM(total_success) as total_success,
-                    SUM(total_failed) as total_failed,
-                    SUM(total_enhanced) as total_enhanced,
-                    SUM(total_duplicate) as total_duplicate
-                ')
-                ->first();
-
-            if ($stats && $stats->total_processed > 0) {
-                $updateData = [
-                    'total_processed' => $stats->total_processed,
-                    'total_success' => $stats->total_success,
-                    'total_failed' => $stats->total_failed,
-                ];
-
-                $this->update($updateData);
-
-                Log::info("🔄 آمار کانفیگ از لاگ‌ها همگام‌سازی شد", [
-                    'config_id' => $this->id,
-                    'synced_stats' => $updateData,
-                    'total_enhanced' => $stats->total_enhanced,
-                    'total_duplicate' => $stats->total_duplicate
-                ]);
-            }
-        } catch (\Exception $e) {
-            Log::error("❌ خطا در همگام‌سازی آمار از لاگ‌ها", [
-                'config_id' => $this->id,
-                'error' => $e->getMessage()
-            ]);
-        }
-    }
-
-    /**
-     * دریافت آمار کامل شامل enhanced
-     */
-    public function getCompleteStats(): array
-    {
-        try {
-            $stats = $this->executionLogs()
-                ->whereIn('status', ['completed', 'stopped'])
-                ->selectRaw('
-                    SUM(total_processed) as total_processed,
-                    SUM(total_success) as total_success,
-                    SUM(total_failed) as total_failed,
-                    SUM(total_enhanced) as total_enhanced,
-                    SUM(total_duplicate) as total_duplicate
-                ')
-                ->first();
-
-            $totalEnhanced = $stats ? ($stats->total_enhanced ?? 0) : 0;
-            $totalDuplicate = $stats ? ($stats->total_duplicate ?? 0) : 0;
-
-            $realSuccessCount = $this->total_success + $totalEnhanced;
-            $realSuccessRate = $this->total_processed > 0 ?
-                round(($realSuccessCount / $this->total_processed) * 100, 2) : 0;
-
-            return [
-                'total_processed' => $this->total_processed,
-                'total_success' => $this->total_success,
-                'total_failed' => $this->total_failed,
-                'total_enhanced' => $totalEnhanced,
-                'total_duplicate' => $totalDuplicate,
-                'real_success_count' => $realSuccessCount,
-                'real_success_rate' => $realSuccessRate,
-                'enhancement_rate' => $this->total_processed > 0 ?
-                    round(($totalEnhanced / $this->total_processed) * 100, 2) : 0
-            ];
-        } catch (\Exception $e) {
-            Log::error("❌ خطا در دریافت آمار کامل", [
-                'config_id' => $this->id,
-                'error' => $e->getMessage()
-            ]);
-
-            return [
-                'total_processed' => $this->total_processed ?? 0,
-                'total_success' => $this->total_success ?? 0,
-                'total_failed' => $this->total_failed ?? 0,
-                'total_enhanced' => 0,
-                'total_duplicate' => 0,
-                'real_success_count' => $this->total_success ?? 0,
-                'real_success_rate' => 0,
-                'enhancement_rate' => 0
-            ];
-        }
-    }
-
-    /**
-     * تنظیمات API
-     */
     public function getApiSettings(): array
     {
         return $this->config_data['api'] ?? [];
@@ -402,9 +337,6 @@ class Config extends Model
         return $this->config_data['general'] ?? [];
     }
 
-    /**
-     * فیلدهای قابل نقشه‌برداری
-     */
     public static function getBookFields(): array
     {
         return [
