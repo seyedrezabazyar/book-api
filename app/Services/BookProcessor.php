@@ -17,8 +17,244 @@ class BookProcessor
         private DataValidator $dataValidator
     ) {}
 
-    public function processBook(array $bookData, int $sourceId, Config $config, ExecutionLog $executionLog): array
+    /**
+     * بررسی وضعیت پردازش source - نسخه بهبود یافته
+     */
+    public function checkSourceProcessingStatus(string $sourceName, int $sourceId, Config $config = null): array
     {
+        // پیدا کردن BookSource موجود
+        $existingSource = BookSource::where('source_name', $sourceName)
+            ->where('source_id', (string)$sourceId)
+            ->with('book.hashes', 'book.authors', 'book.category', 'book.publisher')
+            ->first();
+
+        if (!$existingSource) {
+            // Source جدید است، پردازش کامل انجام شود
+            return [
+                'should_skip' => false,
+                'needs_reprocessing' => false,
+                'reason' => 'new_source',
+                'action' => 'process_new'
+            ];
+        }
+
+        $book = $existingSource->book;
+        if (!$book) {
+            // Source وجود دارد ولی کتاب حذف شده، پردازش مجدد
+            return [
+                'should_skip' => false,
+                'needs_reprocessing' => true,
+                'reason' => 'book_not_found',
+                'action' => 'reprocess'
+            ];
+        }
+
+        // بررسی نیاز به آپدیت
+        $updateAnalysis = $this->analyzeBookUpdateNeeds($book, $config);
+
+        Log::debug("📊 تحلیل نیاز به آپدیت کتاب", [
+            'book_id' => $book->id,
+            'source_id' => $sourceId,
+            'needs_update' => $updateAnalysis['needs_update'],
+            'empty_fields_count' => count($updateAnalysis['empty_fields']),
+            'update_potential_score' => $updateAnalysis['update_potential_score']
+        ]);
+
+        // اگر تنظیمات force update فعال باشد
+        if ($config && $this->shouldForceUpdate($config)) {
+            return [
+                'should_skip' => false,
+                'needs_reprocessing' => true,
+                'reason' => 'force_update_enabled',
+                'action' => 'force_reprocess',
+                'book_id' => $book->id,
+                'empty_fields' => $updateAnalysis['empty_fields'],
+                'update_potential' => $updateAnalysis['update_potential']
+            ];
+        }
+
+        // اگر کتاب نیاز جدی به آپدیت دارد
+        if ($updateAnalysis['needs_update'] && $updateAnalysis['update_potential_score'] >= 3) {
+            return [
+                'should_skip' => false,
+                'needs_reprocessing' => true,
+                'reason' => 'significant_update_potential',
+                'action' => 'reprocess_for_update',
+                'book_id' => $book->id,
+                'empty_fields' => $updateAnalysis['empty_fields'],
+                'update_potential' => $updateAnalysis['update_potential'],
+                'update_score' => $updateAnalysis['update_potential_score']
+            ];
+        }
+
+        // اگر فقط فیلدهای جزئی خالی هستند
+        if ($updateAnalysis['needs_update'] && $updateAnalysis['update_potential_score'] >= 1) {
+            return [
+                'should_skip' => false,
+                'needs_reprocessing' => true,
+                'reason' => 'minor_update_potential',
+                'action' => 'reprocess_for_minor_update',
+                'book_id' => $book->id,
+                'empty_fields' => $updateAnalysis['empty_fields'],
+                'update_potential' => $updateAnalysis['update_potential'],
+                'update_score' => $updateAnalysis['update_potential_score']
+            ];
+        }
+
+        // کتاب کامل است، نیازی به پردازش مجدد نیست
+        return [
+            'should_skip' => true,
+            'needs_reprocessing' => false,
+            'reason' => 'book_already_complete',
+            'action' => 'already_processed',
+            'book_id' => $book->id
+        ];
+    }
+
+    /**
+     * تحلیل نیاز کتاب به آپدیت
+     */
+    private function analyzeBookUpdateNeeds(Book $book, Config $config = null): array
+    {
+        $analysis = [
+            'needs_update' => false,
+            'empty_fields' => [],
+            'update_potential' => [],
+            'update_potential_score' => 0
+        ];
+
+        // فیلدهای مهم که اگر خالی باشند امتیاز بالا دارند
+        $importantFields = [
+            'description' => ['score' => 2, 'check' => fn($book) => empty($book->description)],
+            'publication_year' => ['score' => 1, 'check' => fn($book) => empty($book->publication_year)],
+            'pages_count' => ['score' => 1, 'check' => fn($book) => empty($book->pages_count)],
+            'isbn' => ['score' => 1, 'check' => fn($book) => empty($book->isbn)],
+            'publisher' => ['score' => 1, 'check' => fn($book) => empty($book->publisher_id)],
+            'file_size' => ['score' => 1, 'check' => fn($book) => empty($book->file_size)]
+        ];
+
+        // بررسی فیلدهای خالی
+        foreach ($importantFields as $field => $config_data) {
+            if ($config_data['check']($book)) {
+                $analysis['empty_fields'][] = $field;
+                $analysis['update_potential'][] = [
+                    'field' => $field,
+                    'reason' => 'empty_field',
+                    'score' => $config_data['score']
+                ];
+                $analysis['update_potential_score'] += $config_data['score'];
+                $analysis['needs_update'] = true;
+            }
+        }
+
+        // بررسی هش‌های مفقود
+        if (!$book->hashes || empty($book->hashes->md5)) {
+            $analysis['empty_fields'][] = 'md5_hash';
+            $analysis['update_potential'][] = [
+                'field' => 'md5_hash',
+                'reason' => 'missing_primary_hash',
+                'score' => 2
+            ];
+            $analysis['update_potential_score'] += 2;
+            $analysis['needs_update'] = true;
+        }
+
+        // بررسی هش‌های ثانویه
+        if ($book->hashes) {
+            $secondaryHashes = ['sha1', 'sha256', 'btih'];
+            foreach ($secondaryHashes as $hashType) {
+                if (empty($book->hashes->$hashType)) {
+                    $analysis['update_potential'][] = [
+                        'field' => $hashType,
+                        'reason' => 'missing_secondary_hash',
+                        'score' => 0.5
+                    ];
+                    $analysis['update_potential_score'] += 0.5;
+                    $analysis['needs_update'] = true;
+                }
+            }
+        }
+
+        // بررسی تعداد نویسندگان
+        if ($book->authors()->count() === 0) {
+            $analysis['empty_fields'][] = 'authors';
+            $analysis['update_potential'][] = [
+                'field' => 'authors',
+                'reason' => 'no_authors',
+                'score' => 2
+            ];
+            $analysis['update_potential_score'] += 2;
+            $analysis['needs_update'] = true;
+        }
+
+        // بررسی دسته‌بندی عمومی
+        if ($book->category && $book->category->name === 'عمومی') {
+            $analysis['update_potential'][] = [
+                'field' => 'category',
+                'reason' => 'generic_category',
+                'score' => 1
+            ];
+            $analysis['update_potential_score'] += 1;
+            $analysis['needs_update'] = true;
+        }
+
+        // بررسی توضیحات کوتاه
+        if (!empty($book->description) && strlen($book->description) < 100) {
+            $analysis['update_potential'][] = [
+                'field' => 'description',
+                'reason' => 'short_description',
+                'score' => 1
+            ];
+            $analysis['update_potential_score'] += 1;
+            $analysis['needs_update'] = true;
+        }
+
+        Log::debug("📊 تحلیل آپدیت کتاب", [
+            'book_id' => $book->id,
+            'empty_fields' => $analysis['empty_fields'],
+            'update_score' => $analysis['update_potential_score'],
+            'needs_update' => $analysis['needs_update']
+        ]);
+
+        return $analysis;
+    }
+
+    /**
+     * بررسی اینکه آیا force update فعال است
+     */
+    private function shouldForceUpdate(Config $config): bool
+    {
+        // بررسی تنظیمات کانفیگ
+        $generalSettings = $config->getGeneralSettings();
+
+        // اگر تنظیم force_reprocess فعال باشد
+        if (!empty($generalSettings['force_reprocess'])) {
+            return true;
+        }
+
+        // اگر fill_missing_fields فعال باشد
+        if ($config->fill_missing_fields) {
+            return true;
+        }
+
+        // اگر update_descriptions فعال باشد
+        if ($config->update_descriptions) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * پردازش کتاب - نسخه بهبود یافته
+     */
+    public function processBook(
+        array $bookData,
+        int $sourceId,
+        Config $config,
+        ExecutionLog $executionLog,
+        array $sourceStatus = null
+    ): array {
         try {
             // استخراج فیلدها
             $extractedData = $this->fieldExtractor->extractFields($bookData, $config);
@@ -38,7 +274,8 @@ class BookProcessor
                 'source_id' => $sourceId,
                 'md5' => $md5,
                 'title' => $cleanedData['title'],
-                'extracted_hashes' => $this->extractHashesFromData($cleanedData)
+                'extracted_hashes' => $this->extractHashesFromData($cleanedData),
+                'is_reprocessing' => $sourceStatus['needs_reprocessing'] ?? false
             ]);
 
             // بررسی وجود کتاب با MD5
@@ -46,7 +283,14 @@ class BookProcessor
 
             if ($existingBook) {
                 // کتاب موجود - اجرای منطق به‌روزرسانی هوشمند
-                return $this->handleExistingBook($existingBook, $cleanedData, $sourceId, $config, $executionLog);
+                return $this->handleExistingBook(
+                    $existingBook,
+                    $cleanedData,
+                    $sourceId,
+                    $config,
+                    $executionLog,
+                    $sourceStatus
+                );
             } else {
                 // کتاب جدید - ثبت کامل
                 return $this->handleNewBook($cleanedData, $md5, $sourceId, $config, $executionLog);
@@ -64,24 +308,46 @@ class BookProcessor
     }
 
     /**
-     * پردازش کتاب موجود - منطق هوشمند به‌روزرسانی
+     * پردازش کتاب موجود - نسخه بهبود یافته با پشتیبانی از re-processing
      */
-    private function handleExistingBook(Book $existingBook, array $newData, int $sourceId, Config $config, ExecutionLog $executionLog): array
-    {
+    private function handleExistingBook(
+        Book $existingBook,
+        array $newData,
+        int $sourceId,
+        Config $config,
+        ExecutionLog $executionLog,
+        array $sourceStatus = null
+    ): array {
         Log::info("📚 پردازش کتاب موجود", [
             'book_id' => $existingBook->id,
             'title' => $existingBook->title,
             'source_id' => $sourceId,
-            'new_data_fields' => array_keys($newData)
+            'new_data_fields' => array_keys($newData),
+            'is_reprocessing' => $sourceStatus['needs_reprocessing'] ?? false
         ]);
 
-        // 1. بررسی وجود منبع قبلی
+        // 1. بررسی وجود منبع قبلی (فقط اگر re-processing نباشد)
         $sourceExists = BookSource::where('book_id', $existingBook->id)
             ->where('source_name', $config->source_name)
             ->where('source_id', (string)$sourceId)
             ->exists();
 
-        if ($sourceExists) {
+        // اگر در حال re-processing هستیم، منبع را حذف و دوباره اضافه می‌کنیم
+        if ($sourceExists && ($sourceStatus['needs_reprocessing'] ?? false)) {
+            $executionLog->addLogEntry("🔄 حذف منبع قدیمی برای re-processing", [
+                'book_id' => $existingBook->id,
+                'source_id' => $sourceId,
+                'reason' => $sourceStatus['reason'] ?? 'reprocessing'
+            ]);
+
+            // منبع قدیمی را حذف نمی‌کنیم، فقط آپدیت می‌کنیم
+            BookSource::where('book_id', $existingBook->id)
+                ->where('source_name', $config->source_name)
+                ->where('source_id', (string)$sourceId)
+                ->update(['discovered_at' => now()]);
+        }
+
+        if ($sourceExists && !($sourceStatus['needs_reprocessing'] ?? false)) {
             $executionLog->addLogEntry("⏭️ Source قبلاً ثبت شده", [
                 'book_id' => $existingBook->id,
                 'source_id' => $sourceId,
@@ -103,12 +369,15 @@ class BookProcessor
         $executionLog->addLogEntry("🔍 آنالیز نیاز به آپدیت", [
             'book_id' => $existingBook->id,
             'source_id' => $sourceId,
-            'analysis' => $updateAnalysis
+            'analysis' => $updateAnalysis,
+            'forced_reprocessing' => $sourceStatus['needs_reprocessing'] ?? false
         ]);
 
-        // 3. اگر هیچ آپدیتی لازم نیست، فقط منبع را اضافه کن
-        if (!$updateAnalysis['needs_update']) {
-            $this->recordBookSource($existingBook->id, $config->source_name, $sourceId);
+        // 3. اگر هیچ آپدیتی لازم نیست و re-processing اجباری نیست، فقط منبع را اضافه کن
+        if (!$updateAnalysis['needs_update'] && !($sourceStatus['needs_reprocessing'] ?? false)) {
+            if (!$sourceExists) {
+                $this->recordBookSource($existingBook->id, $config->source_name, $sourceId);
+            }
 
             $executionLog->addLogEntry("📌 فقط منبع جدید اضافه شد", [
                 'book_id' => $existingBook->id,
@@ -128,8 +397,10 @@ class BookProcessor
         // 4. انجام آپدیت هوشمند
         $updateResult = $this->performIntelligentUpdate($existingBook, $newData, $updateAnalysis);
 
-        // 5. ثبت منبع جدید
-        $this->recordBookSource($existingBook->id, $config->source_name, $sourceId);
+        // 5. ثبت منبع جدید (یا آپدیت زمان کشف)
+        if (!$sourceExists) {
+            $this->recordBookSource($existingBook->id, $config->source_name, $sourceId);
+        }
 
         $executionLog->addLogEntry("✨ کتاب موجود بهبود یافت", [
             'book_id' => $existingBook->id,
@@ -137,7 +408,8 @@ class BookProcessor
             'title' => $existingBook->title,
             'update_summary' => $updateResult['summary'],
             'fields_updated' => $updateResult['updated_fields'],
-            'database_changed' => $updateResult['database_updated']
+            'database_changed' => $updateResult['database_updated'],
+            'was_reprocessing' => $sourceStatus['needs_reprocessing'] ?? false
         ]);
 
         return $this->buildResult($sourceId, $updateResult['action'], [
@@ -147,6 +419,17 @@ class BookProcessor
             'total_duplicate' => 0,
             'total_enhanced' => 1
         ], $existingBook);
+    }
+
+    // باقی متدها همان‌طور که قبلاً بودند...
+
+    /**
+     * متد قدیمی برای backward compatibility
+     */
+    public function isSourceAlreadyProcessed(string $sourceName, int $sourceId): bool
+    {
+        $status = $this->checkSourceProcessingStatus($sourceName, $sourceId);
+        return $status['should_skip'] && !$status['needs_reprocessing'];
     }
 
     /**
@@ -719,13 +1002,6 @@ class BookProcessor
             'total_duplicate' => 0,
             'total_enhanced' => 0
         ], $book);
-    }
-
-    public function isSourceAlreadyProcessed(string $sourceName, int $sourceId): bool
-    {
-        return BookSource::where('source_name', $sourceName)
-            ->where('source_id', (string)$sourceId)
-            ->exists();
     }
 
     private function extractAllHashes(array $data, string $md5): array

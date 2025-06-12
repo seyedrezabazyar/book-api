@@ -16,6 +16,9 @@ class CrawlBooksCommand extends Command
                           {--pages=0 : تعداد صفحات (0 = بدون محدودیت)}
                           {--force : اجرای اجباری حتی در صورت وجود اجرای فعال}
                           {--enhanced-only : فقط بروزرسانی کتاب‌های موجود}
+                          {--force-update : آپدیت اجباری کتاب‌های موجود حتی اگر source قبلاً ثبت شده}
+                          {--fill-missing : فقط کتاب‌هایی که فیلدهای خالی دارند آپدیت شوند}
+                          {--reprocess-threshold=3 : حداقل امتیاز برای آپدیت مجدد (1-10)}
                           {--debug : نمایش اطلاعات تشخیصی بیشتر}';
 
     protected $description = 'اجرای کرال هوشمند با الگوی بهبود یافته درج و به‌روزرسانی کتاب‌ها بر اساس MD5';
@@ -36,6 +39,9 @@ class CrawlBooksCommand extends Command
                 $this->error("❌ هیچ کانفیگ فعالی برای اجرا یافت نشد!");
                 return Command::FAILURE;
             }
+
+            // تنظیم force update بر اساس options
+            $this->configureForceUpdateSettings($configs);
 
             $this->displayConfigsInfo($configs);
 
@@ -67,6 +73,20 @@ class CrawlBooksCommand extends Command
         $this->info("⏰ زمان شروع: " . now()->format('Y-m-d H:i:s'));
         $this->newLine();
 
+        // نمایش تنظیمات فعال
+        $activeSettings = [];
+        if ($this->option('force-update')) $activeSettings[] = "Force Update";
+        if ($this->option('fill-missing')) $activeSettings[] = "Fill Missing Fields";
+        if ($this->option('enhanced-only')) $activeSettings[] = "Enhanced Only";
+
+        if (!empty($activeSettings)) {
+            $this->info("🔧 تنظیمات فعال: " . implode(', ', $activeSettings));
+        }
+
+        if ($this->option('reprocess-threshold') != 3) {
+            $this->info("🎯 حداقل امتیاز آپدیت: " . $this->option('reprocess-threshold'));
+        }
+
         if (!$this->option('debug')) return;
 
         $this->line("🧠 ویژگی‌های منطق جدید:");
@@ -75,8 +95,49 @@ class CrawlBooksCommand extends Command
         $this->line("   📚 اضافه کردن نویسندگان و ISBN های جدید بدون حذف قدیمی‌ها");
         $this->line("   🔗 ثبت منابع متعدد برای هر کتاب");
         $this->line("   💎 بهبود توضیحات و تکمیل فیلدهای خالی");
+        $this->line("   🔄 پردازش مجدد source های موجود در صورت نیاز");
         $this->line("   📊 آمارگیری دقیق شامل نرخ بهبود (Enhancement Rate)");
         $this->newLine();
+    }
+
+    /**
+     * پیکربندی تنظیمات force update
+     */
+    private function configureForceUpdateSettings($configs): void
+    {
+        foreach ($configs as $config) {
+            $generalSettings = $config->getGeneralSettings();
+
+            // تنظیم force_reprocess
+            if ($this->option('force-update')) {
+                $generalSettings['force_reprocess'] = true;
+                $this->info("✅ Force Update فعال شد برای کانفیگ {$config->id}");
+            }
+
+            // تنظیم fill_missing_fields
+            if ($this->option('fill-missing')) {
+                $config->fill_missing_fields = true;
+                $this->info("✅ Fill Missing Fields فعال شد برای کانفیگ {$config->id}");
+            }
+
+            // تنظیم enhanced_only
+            if ($this->option('enhanced-only')) {
+                $generalSettings['enhanced_only'] = true;
+                $this->info("✅ Enhanced Only فعال شد برای کانفیگ {$config->id}");
+            }
+
+            // تنظیم reprocess threshold
+            $threshold = (int)$this->option('reprocess-threshold');
+            if ($threshold >= 1 && $threshold <= 10) {
+                $generalSettings['reprocess_threshold'] = $threshold;
+            }
+
+            // ذخیره تنظیمات
+            $configData = $config->config_data ?? [];
+            $configData['general'] = $generalSettings;
+            $config->config_data = $configData;
+            $config->save();
+        }
     }
 
     private function displayConfigsInfo($configs): void
@@ -91,11 +152,27 @@ class CrawlBooksCommand extends Command
         foreach ($configs as $config) {
             $lastId = $config->getLastSourceIdFromBookSources();
             $smartStart = $config->getSmartStartPage();
+            $generalSettings = $config->getGeneralSettings();
 
             $this->line("   • {$config->source_name} (ID: {$config->id})");
             $this->line("     - آخرین ID در منابع: " . ($lastId ?: 'هیچ'));
             $this->line("     - شروع هوشمند: {$smartStart}");
             $this->line("     - start_page کاربر: " . ($config->start_page ?: 'خودکار'));
+
+            // نمایش تنظیمات force update
+            $forceSettings = [];
+            if (!empty($generalSettings['force_reprocess'])) $forceSettings[] = "Force Reprocess";
+            if ($config->fill_missing_fields) $forceSettings[] = "Fill Missing";
+            if ($config->update_descriptions) $forceSettings[] = "Update Descriptions";
+            if (!empty($generalSettings['enhanced_only'])) $forceSettings[] = "Enhanced Only";
+
+            if (!empty($forceSettings)) {
+                $this->line("     - تنظیمات فعال: " . implode(', ', $forceSettings));
+            }
+
+            if (!empty($generalSettings['reprocess_threshold'])) {
+                $this->line("     - حداقل امتیاز آپدیت: " . $generalSettings['reprocess_threshold']);
+            }
         }
         $this->newLine();
     }
@@ -124,6 +201,7 @@ class CrawlBooksCommand extends Command
     {
         $startPage = (int)$this->option('start-page') ?: $config->getSmartStartPage();
         $pagesCount = (int)$this->option('pages') ?: $config->max_pages ?: 100;
+        $generalSettings = $config->getGeneralSettings();
 
         if ($this->option('debug') && !(int)$this->option('start-page')) {
             $lastId = $config->getLastSourceIdFromBookSources();
@@ -136,7 +214,10 @@ class CrawlBooksCommand extends Command
         return [
             'start_page' => $startPage,
             'pages_count' => $pagesCount,
-            'enhanced_only' => $this->option('enhanced-only'),
+            'enhanced_only' => $this->option('enhanced-only') || !empty($generalSettings['enhanced_only']),
+            'force_update' => $this->option('force-update') || !empty($generalSettings['force_reprocess']),
+            'fill_missing_only' => $this->option('fill-missing'),
+            'reprocess_threshold' => $generalSettings['reprocess_threshold'] ?? 3,
             'intelligent_update_enabled' => true,
             'md5_based_processing' => true,
             'batch_size' => 50,
@@ -150,6 +231,9 @@ class CrawlBooksCommand extends Command
         $this->line("   • صفحه شروع: {$settings['start_page']}");
         $this->line("   • تعداد صفحات: {$settings['pages_count']}");
         $this->line("   • حالت فقط بهبود: " . ($settings['enhanced_only'] ? 'بله' : 'خیر'));
+        $this->line("   • آپدیت اجباری: " . ($settings['force_update'] ? 'بله' : 'خیر'));
+        $this->line("   • فقط فیلدهای خالی: " . ($settings['fill_missing_only'] ? 'بله' : 'خیر'));
+        $this->line("   • حداقل امتیاز آپدیت: {$settings['reprocess_threshold']}");
         $this->line("   • بروزرسانی هوشمند: فعال");
         $this->line("   • پردازش مبتنی بر MD5: فعال");
 
@@ -157,6 +241,11 @@ class CrawlBooksCommand extends Command
             $this->line("   • حالت debug: فعال");
             $this->line("   • منبع: {$config->source_name}");
             $this->line("   • URL پایه: {$config->base_url}");
+        }
+
+        // هشدار برای force update
+        if ($settings['force_update']) {
+            $this->warn("⚠️ حالت Force Update فعال است - تمام source های موجود مجدداً پردازش خواهند شد");
         }
 
         $this->newLine();
@@ -177,12 +266,16 @@ class CrawlBooksCommand extends Command
             $this->line("   3️⃣ اگر وجود نداشت: ثبت کامل");
             $this->line("   4️⃣ اگر وجود داشت: مقایسه هوشمند و بهبود");
             $this->line("   5️⃣ ثبت منبع جدید در هر حالت");
+
+            if ($settings['force_update']) {
+                $this->line("   🔄 حالت Force Update: حتی source های موجود نیز پردازش می‌شوند");
+            }
         }
 
         $progressBar = $this->output->createProgressBar($settings['pages_count']);
-        $progressBar->setFormat('%current%/%max% [%bar%] %percent:3s%% | ID: %message% | 🆕:%created% 🔧:%enhanced% 📋:%duplicate%');
+        $progressBar->setFormat('%current%/%max% [%bar%] %percent:3s%% | ID: %message% | 🆕:%created% 🔧:%enhanced% 📋:%duplicate% 🔄:%reprocessed%');
 
-        $currentStats = ['created' => 0, 'enhanced' => 0, 'duplicate' => 0];
+        $currentStats = ['created' => 0, 'enhanced' => 0, 'duplicate' => 0, 'reprocessed' => 0];
 
         for ($page = $currentPage; $page <= $endPage; $page++) {
             try {
@@ -198,7 +291,9 @@ class CrawlBooksCommand extends Command
                         $this->displayDetailedProgress($page, $settings);
                     }
 
-                    if ($settings['debug_mode'] && in_array($pageResult['action'] ?? '', ['created', 'enhanced', 'enriched', 'merged'])) {
+                    if ($settings['debug_mode'] && in_array($pageResult['action'] ?? '', [
+                            'created', 'enhanced', 'enriched', 'merged', 'reprocess_for_update', 'force_reprocess'
+                        ])) {
                         $this->displayDebugInfo($page, $pageResult);
                     }
                 }
@@ -236,12 +331,19 @@ class CrawlBooksCommand extends Command
             case 'merged':
                 $currentStats['enhanced']++;
                 break;
+            case 'reprocess_for_update':
+            case 'reprocess_for_minor_update':
+            case 'force_reprocess':
+                $currentStats['reprocessed']++;
+                break;
             default:
                 $currentStats['duplicate']++;
                 break;
         }
 
-        $progressBar->setFormat('%current%/%max% [%bar%] %percent:3s%% | ID: %message% | 🆕:' . $currentStats['created'] . ' 🔧:' . $currentStats['enhanced'] . ' 📋:' . $currentStats['duplicate']);
+        $progressBar->setFormat('%current%/%max% [%bar%] %percent:3s%% | ID: %message% | 🆕:' .
+            $currentStats['created'] . ' 🔧:' . $currentStats['enhanced'] .
+            ' 📋:' . $currentStats['duplicate'] . ' 🔄:' . $currentStats['reprocessed']);
     }
 
     private function displayDetailedProgress(int $page, array $settings): void
@@ -257,7 +359,13 @@ class CrawlBooksCommand extends Command
             ? round(($stats['total_enhanced'] / $stats['total_processed']) * 100, 1)
             : 0;
 
-        $this->info("📈 صفحه {$page} | کل: {$stats['total_processed']} | تأثیرگذار: {$totalImpactful} ({$impactRate}%) | جدید: {$stats['total_success']} | بهبود: {$stats['total_enhanced']} ({$enhancementRate}%)");
+        $reprocessRate = isset($stats['total_reprocessed']) && $stats['total_processed'] > 0
+            ? round(($stats['total_reprocessed'] / $stats['total_processed']) * 100, 1)
+            : 0;
+
+        $this->info("📈 صفحه {$page} | کل: {$stats['total_processed']} | تأثیرگذار: {$totalImpactful} ({$impactRate}%) | " .
+            "جدید: {$stats['total_success']} | بهبود: {$stats['total_enhanced']} ({$enhancementRate}%) | " .
+            "پردازش مجدد: " . ($stats['total_reprocessed'] ?? 0) . " ({$reprocessRate}%)");
     }
 
     private function displayDebugInfo(int $page, array $pageResult): void
@@ -269,7 +377,10 @@ class CrawlBooksCommand extends Command
             'created' => '🆕',
             'enhanced' => '🔧',
             'enriched' => '💎',
-            'merged' => '🔗'
+            'merged' => '🔗',
+            'reprocess_for_update' => '🔄',
+            'reprocess_for_minor_update' => '🔄',
+            'force_reprocess' => '💪'
         ];
 
         $emoji = $actionEmojis[$action] ?? '❓';

@@ -38,16 +38,33 @@ class ApiDataService
 
         try {
             // 1. بررسی اولیه - آیا این source قبلاً پردازش شده؟
-            if ($this->bookProcessor->isSourceAlreadyProcessed($this->config->source_name, $sourceId)) {
-                $executionLog->addLogEntry("⏭️ Source ID {$sourceId} قبلاً پردازش شده", [
-                    'reason' => 'source_already_in_book_sources',
+            $sourceProcessingResult = $this->bookProcessor->checkSourceProcessingStatus(
+                $this->config->source_name,
+                $sourceId,
+                $this->config // اضافه کردن config برای دسترسی به تنظیمات
+            );
+
+            if ($sourceProcessingResult['should_skip']) {
+                $executionLog->addLogEntry("⏭️ Source ID {$sourceId} رد شد", [
+                    'reason' => $sourceProcessingResult['reason'],
                     'source_name' => $this->config->source_name,
-                    'source_id' => $sourceId
+                    'source_id' => $sourceId,
+                    'book_id' => $sourceProcessingResult['book_id'] ?? null
                 ]);
 
                 $stats = $this->buildStats(1, 0, 0, 1, 0);
                 $this->updateStats($executionLog, $stats);
-                return $this->buildResult($sourceId, 'already_processed', $stats);
+                return $this->buildResult($sourceId, $sourceProcessingResult['action'], $stats);
+            }
+
+            // اگر نیاز به re-processing داره
+            if ($sourceProcessingResult['needs_reprocessing']) {
+                $executionLog->addLogEntry("🔄 Source ID {$sourceId} نیاز به پردازش مجدد دارد", [
+                    'reason' => $sourceProcessingResult['reason'],
+                    'book_id' => $sourceProcessingResult['book_id'],
+                    'empty_fields' => $sourceProcessingResult['empty_fields'] ?? [],
+                    'update_potential' => $sourceProcessingResult['update_potential'] ?? []
+                ]);
             }
 
             // 2. بررسی FailedRequest - آیا این source قبلاً ناموفق بوده؟
@@ -123,8 +140,14 @@ class ApiDataService
                 return $this->buildResult($sourceId, 'no_book_found', $stats);
             }
 
-            // 5. پردازش کتاب با منطق بهبود یافته
-            $result = $this->bookProcessor->processBook($bookData, $sourceId, $this->config, $executionLog);
+            // 5. پردازش کتاب با منطق بهبود یافته (حالا شامل re-processing)
+            $result = $this->bookProcessor->processBook(
+                $bookData,
+                $sourceId,
+                $this->config,
+                $executionLog,
+                $sourceProcessingResult // ارسال اطلاعات وضعیت قبلی
+            );
 
             // 6. اگر پردازش موفق بود، failure موجود را حل شده علامت‌گذاری کن
             if ($this->isProcessingSuccessful($result)) {
