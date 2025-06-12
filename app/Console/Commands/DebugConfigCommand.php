@@ -5,11 +5,25 @@ namespace App\Console\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use App\Models\Config;
+use App\Models\BookSource;
+use App\Console\Helpers\CommandDisplayHelper;
 
 class DebugConfigCommand extends Command
 {
-    protected $signature = 'config:debug {config_id}';
-    protected $description = 'Debug کانفیگ و نمایش وضعیت start_page';
+    protected $signature = 'config:debug
+                          {config_id : ID کانفیگ}
+                          {--last-id : نمایش جزئیات آخرین ID}
+                          {--recommendations : نمایش پیشنهادات}';
+
+    protected $description = 'Debug کامل کانفیگ شامل start_page و آخرین ID';
+
+    private CommandDisplayHelper $displayHelper;
+
+    public function __construct()
+    {
+        parent::__construct();
+        $this->displayHelper = new CommandDisplayHelper($this);
+    }
 
     public function handle(): int
     {
@@ -21,37 +35,46 @@ class DebugConfigCommand extends Command
             return Command::FAILURE;
         }
 
-        $this->info("🔍 Debug کانفیگ: {$config->name} (ID: {$config->id})");
-        $this->newLine();
+        $this->displayHelper->displayWelcomeMessage("Debug کانفیگ: {$config->name}");
 
         $this->displayBasicInfo($config);
         $this->displayStartPageInfo($config);
         $this->displaySmartCalculations($config);
         $this->displayStatistics($config);
         $this->displayBookSourcesStats($config);
+
+        if ($this->option('last-id')) {
+            $this->displayLastIdDetails($config);
+        }
+
         $this->displayStatusAnalysis($config);
-        $this->displayRecommendations($config);
+
+        if ($this->option('recommendations')) {
+            $this->displayRecommendations($config);
+        }
 
         return Command::SUCCESS;
     }
 
     private function displayBasicInfo(Config $config): void
     {
-        $this->info("📊 اطلاعات اصلی:");
-        $this->line("   • نام: {$config->name}");
-        $this->line("   • منبع: {$config->source_name}");
-        $this->line("   • وضعیت: " . ($config->is_running ? 'در حال اجرا' : 'متوقف'));
-        $this->newLine();
+        $this->displayHelper->displayStats([
+            'نام' => $config->name,
+            'منبع' => $config->source_name,
+            'وضعیت' => $config->is_running ? 'در حال اجرا' : 'متوقف',
+            'URL پایه' => $config->base_url ?? 'تعریف نشده',
+            'فعال' => $config->is_active ? 'بله' : 'خیر'
+        ], 'اطلاعات اصلی');
     }
 
     private function displayStartPageInfo(Config $config): void
     {
-        $this->info("🎯 اطلاعات start_page:");
-        $this->line("   • start_page در دیتابیس: " . ($config->start_page ?? 'null'));
-        $this->line("   • نوع start_page: " . gettype($config->start_page));
-        $this->line("   • آیا توسط کاربر مشخص شده: " . ($config->hasUserDefinedStartPage() ? 'بله' : 'خیر'));
-        $this->line("   • مقدار برای فرم: " . ($config->getStartPageForForm() ?? 'null'));
-        $this->newLine();
+        $this->displayHelper->displayStats([
+            'start_page در دیتابیس' => $config->start_page ?? 'null',
+            'نوع start_page' => gettype($config->start_page),
+            'توسط کاربر مشخص شده' => $config->hasUserDefinedStartPage() ? 'بله' : 'خیر',
+            'مقدار برای فرم' => $config->getStartPageForForm() ?? 'null'
+        ], 'اطلاعات start_page');
     }
 
     private function displaySmartCalculations(Config $config): void
@@ -59,43 +82,44 @@ class DebugConfigCommand extends Command
         $lastIdFromSources = $config->getLastSourceIdFromBookSources();
         $smartStartPage = $config->getSmartStartPage();
 
-        $this->info("🧠 محاسبات هوشمند:");
-        $this->line("   • آخرین ID در book_sources: " . ($lastIdFromSources ?: 'هیچ'));
-        $this->line("   • Smart Start Page: {$smartStartPage}");
-        $this->line("   • last_source_id در کانفیگ: " . ($config->last_source_id ?? 'null'));
-        $this->line("   • auto_resume: " . ($config->auto_resume ? 'فعال' : 'غیرفعال'));
-        $this->newLine();
+        $this->displayHelper->displayStats([
+            'آخرین ID در book_sources' => $lastIdFromSources ?: 'هیچ',
+            'Smart Start Page' => $smartStartPage,
+            'last_source_id در کانفیگ' => $config->last_source_id ?? 'null',
+            'auto_resume' => $config->auto_resume ? 'فعال' : 'غیرفعال'
+        ], 'محاسبات هوشمند');
     }
 
     private function displayStatistics(Config $config): void
     {
-        $this->info("📈 آمار کانفیگ:");
-        $this->line("   • کل پردازش شده: " . number_format($config->total_processed ?? 0));
-        $this->line("   • موفق: " . number_format($config->total_success ?? 0));
-        $this->line("   • ناموفق: " . number_format($config->total_failed ?? 0));
-        $this->newLine();
+        $this->displayHelper->displayStats([
+            'کل پردازش شده' => number_format($config->total_processed ?? 0),
+            'موفق' => number_format($config->total_success ?? 0),
+            'ناموفق' => number_format($config->total_failed ?? 0),
+            'آخرین اجرا' => $config->last_run_at ? $config->last_run_at->diffForHumans() : 'هرگز'
+        ], 'آمار کانفیگ');
     }
 
     private function displayBookSourcesStats(Config $config): void
     {
-        $sourceRecordsCount = \App\Models\BookSource::where('source_name', $config->source_name)->count();
+        $sourceRecordsCount = BookSource::where('source_name', $config->source_name)->count();
 
-        $this->info("📚 آمار book_sources:");
-        $this->line("   • کل رکوردهای منبع: " . number_format($sourceRecordsCount));
+        $stats = [
+            'کل رکوردهای منبع' => number_format($sourceRecordsCount)
+        ];
 
         if ($sourceRecordsCount > 0) {
-            // استفاده صحیح از DB::raw()
-            $minId = \App\Models\BookSource::where('source_name', $config->source_name)
+            $minId = BookSource::where('source_name', $config->source_name)
                 ->whereRaw('source_id REGEXP "^[0-9]+$"')
                 ->min(DB::raw('CAST(source_id AS UNSIGNED)'));
 
-            $maxId = \App\Models\BookSource::where('source_name', $config->source_name)
+            $maxId = BookSource::where('source_name', $config->source_name)
                 ->whereRaw('source_id REGEXP "^[0-9]+$"')
                 ->max(DB::raw('CAST(source_id AS UNSIGNED)'));
 
-            $this->line("   • محدوده ID ها: {$minId} تا {$maxId}");
+            $stats['محدوده ID ها'] = "{$minId} تا {$maxId}";
 
-            $latestRecords = \App\Models\BookSource::where('source_name', $config->source_name)
+            $latestRecords = BookSource::where('source_name', $config->source_name)
                 ->whereRaw('source_id REGEXP "^[0-9]+$"')
                 ->orderByRaw('CAST(source_id AS UNSIGNED) DESC')
                 ->limit(5)
@@ -103,10 +127,48 @@ class DebugConfigCommand extends Command
                 ->toArray();
 
             if (!empty($latestRecords)) {
-                $this->line("   • آخرین 5 ID: " . implode(', ', $latestRecords));
+                $stats['آخرین 5 ID'] = implode(', ', $latestRecords);
             }
         }
+
+        $this->displayHelper->displayStats($stats, 'آمار book_sources');
+    }
+
+    private function displayLastIdDetails(Config $config): void
+    {
+        $this->info("🔍 جزئیات آخرین ID:");
+
+        // نمایش آخرین 10 source_id
+        $allSourceIds = BookSource::where('source_name', $config->source_name)
+            ->whereRaw('source_id REGEXP "^[0-9]+$"')
+            ->orderByRaw('CAST(source_id AS UNSIGNED) DESC')
+            ->limit(10)
+            ->pluck('source_id')
+            ->toArray();
+
+        $this->line("🔢 آخرین 10 source_id (مرتب‌سازی صحیح):");
+        foreach ($allSourceIds as $sourceId) {
+            $this->line("   • {$sourceId}");
+        }
         $this->newLine();
+
+        // مقایسه روش‌های مختلف
+        $method1 = $config->getLastSourceIdFromBookSources();
+        $method2 = BookSource::where('source_name', $config->source_name)
+            ->whereRaw('source_id REGEXP "^[0-9]+$"')
+            ->orderByRaw('CAST(source_id AS UNSIGNED) DESC')
+            ->value('source_id');
+        $method3 = BookSource::where('source_name', $config->source_name)
+            ->whereRaw('source_id REGEXP "^[0-9]+$"')
+            ->max(DB::raw('CAST(source_id AS UNSIGNED)'));
+
+        $this->displayHelper->displayStats([
+            'متد کانفیگ' => $method1,
+            'Query مستقیم' => $method2 ?: 'null',
+            'Max query' => $method3 ?: 'null',
+            'Smart start page' => $config->getSmartStartPage(),
+            'ID بعدی پیشنهادی' => $method1 + 1
+        ], 'مقایسه روش‌های محاسبه');
     }
 
     private function displayStatusAnalysis(Config $config): void
@@ -130,13 +192,13 @@ class DebugConfigCommand extends Command
                 $this->line("   ⚠️ هشدار: این ID قبلاً پردازش شده!");
             }
         }
+        $this->newLine();
     }
 
     private function displayRecommendations(Config $config): void
     {
         $lastIdFromSources = $config->getLastSourceIdFromBookSources();
 
-        $this->newLine();
         $this->info("💡 پیشنهادات:");
 
         if ($config->start_page && $config->start_page <= $lastIdFromSources) {
@@ -152,5 +214,7 @@ class DebugConfigCommand extends Command
             $this->line("   • برای شروع مجدد از 1: درست تنظیم شده");
             $this->line("   • ⚠️ ID های 1 تا {$lastIdFromSources} دوباره پردازش خواهند شد");
         }
+
+        $this->newLine();
     }
 }

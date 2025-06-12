@@ -7,6 +7,7 @@ use App\Models\Config;
 use App\Models\MissingSource;
 use App\Services\ApiDataService;
 use App\Models\ExecutionLog;
+use App\Console\Helpers\CommandDisplayHelper;
 
 class ManageMissingSourcesCommand extends Command
 {
@@ -20,115 +21,128 @@ class ManageMissingSourcesCommand extends Command
 
     protected $description = 'مدیریت source های ناموجود';
 
+    private CommandDisplayHelper $displayHelper;
+
+    public function __construct()
+    {
+        parent::__construct();
+        $this->displayHelper = new CommandDisplayHelper($this);
+    }
+
     public function handle(): int
     {
         $action = $this->argument('action');
+        $this->displayHelper->displayWelcomeMessage("مدیریت source های ناموجود - عملیات: {$action}");
 
-        $this->info("🔧 مدیریت source های ناموجود - عملیات: {$action}");
+        return match($action) {
+            'stats' => $this->showStats(),
+            'list' => $this->listMissingSources(),
+            'retry' => $this->retryMissingSources(),
+            'cleanup' => $this->cleanupOldSources(),
+            default => $this->handleInvalidAction($action)
+        };
+    }
 
-        switch ($action) {
-            case 'stats':
-                return $this->showStats();
-
-            case 'list':
-                return $this->listMissingSources();
-
-            case 'retry':
-                return $this->retryMissingSources();
-
-            case 'cleanup':
-                return $this->cleanupOldSources();
-
-            default:
-                $this->error("❌ عملیات نامعتبر: {$action}");
-                $this->line("عملیات‌های معتبر: stats, list, retry, cleanup");
-                return Command::FAILURE;
-        }
+    private function handleInvalidAction(string $action): int
+    {
+        $this->error("❌ عملیات نامعتبر: {$action}");
+        $this->line("عملیات‌های معتبر: stats, list, retry, cleanup");
+        return Command::FAILURE;
     }
 
     private function showStats(): int
     {
-        $this->info("📊 آمار source های ناموجود:");
-
         $configId = $this->option('config');
         $sourceName = $this->option('source');
 
         if ($configId) {
-            $config = Config::find($configId);
-            if (!$config) {
-                $this->error("❌ کانفیگ با ID {$configId} یافت نشد!");
-                return Command::FAILURE;
-            }
-
-            $this->displayConfigStats($config);
+            return $this->displayConfigStats($configId);
         } elseif ($sourceName) {
-            $this->displaySourceStats($sourceName);
+            return $this->displaySourceStats($sourceName);
         } else {
-            $this->displayGlobalStats();
+            return $this->displayGlobalStats();
+        }
+    }
+
+    private function displayConfigStats(string $configId): int
+    {
+        $config = Config::find($configId);
+        if (!$config) {
+            $this->error("❌ کانفیگ با ID {$configId} یافت نشد!");
+            return Command::FAILURE;
+        }
+
+        $stats = MissingSource::getStatsForConfig($config->id);
+
+        $this->displayHelper->displayStats([
+            'منبع' => $config->source_name,
+            'کل ناموجود' => $stats['total_missing'],
+            'دائماً ناموجود' => $stats['permanently_missing'],
+            'یافت نشد (404)' => $stats['not_found'],
+            'خطای API' => $stats['api_errors'],
+            'اولین ID ناموجود' => $stats['first_missing_id'] ?? 'هیچ',
+            'آخرین ID ناموجود' => $stats['last_missing_id'] ?? 'هیچ'
+        ], "آمار کانفیگ {$configId}");
+
+        if ($stats['total_missing'] > 0) {
+            $this->displayMissingSampleList($config->id);
         }
 
         return Command::SUCCESS;
     }
 
-    private function displayConfigStats(Config $config): void
+    private function displayMissingSampleList(int $configId): void
     {
-        $stats = MissingSource::getStatsForConfig($config->id);
+        $missingList = MissingSource::getMissingList($configId, 10);
 
-        $this->table(['آمار', 'مقدار'], [
-            ['منبع', $config->source_name],
-            ['کل ناموجود', number_format($stats['total_missing'])],
-            ['دائماً ناموجود', number_format($stats['permanently_missing'])],
-            ['یافت نشد (404)', number_format($stats['not_found'])],
-            ['خطای API', number_format($stats['api_errors'])],
-            ['اولین ID ناموجود', $stats['first_missing_id'] ?? 'هیچ'],
-            ['آخرین ID ناموجود', $stats['last_missing_id'] ?? 'هیچ']
-        ]);
-
-        if ($stats['total_missing'] > 0) {
+        if (!empty($missingList)) {
             $this->newLine();
             $this->info("📋 نمونه source های ناموجود:");
-            $missingList = MissingSource::getMissingList($config->id, 10);
-
-            if (!empty($missingList)) {
-                $tableData = [];
-                foreach ($missingList as $item) {
-                    $tableData[] = [
-                        $item['source_id'],
-                        $item['reason'],
-                        $item['check_count'],
-                        $item['is_permanently_missing'] ? 'بله' : 'خیر',
-                        $item['last_checked_at']
-                    ];
-                }
-
-                $this->table([
-                    'Source ID', 'دلیل', 'تعداد چک', 'دائمی؟', 'آخرین چک'
-                ], $tableData);
+            $tableData = [];
+            foreach ($missingList as $item) {
+                $tableData[] = [
+                    $item['source_id'],
+                    $item['reason'],
+                    $item['check_count'],
+                    $item['is_permanently_missing'] ? 'بله' : 'خیر',
+                    $item['last_checked_at']
+                ];
             }
+
+            $this->table([
+                'Source ID', 'دلیل', 'تعداد چک', 'دائمی؟', 'آخرین چک'
+            ], $tableData);
         }
     }
 
-    private function displaySourceStats(string $sourceName): void
+    private function displaySourceStats(string $sourceName): int
     {
         $configs = Config::where('source_name', $sourceName)->get();
 
         if ($configs->isEmpty()) {
             $this->warn("⚠️ هیچ کانفیگی با منبع {$sourceName} یافت نشد!");
-            return;
+            return Command::SUCCESS;
         }
 
         $this->info("📈 آمار منبع: {$sourceName}");
+
+        $totalStats = ['total_missing' => 0, 'permanently_missing' => 0];
 
         foreach ($configs as $config) {
             $stats = MissingSource::getStatsForConfig($config->id);
 
             if ($stats['total_missing'] > 0) {
                 $this->line("  • کانفیگ {$config->id}: {$stats['total_missing']} ناموجود");
+                $totalStats['total_missing'] += $stats['total_missing'];
+                $totalStats['permanently_missing'] += $stats['permanently_missing'];
             }
         }
+
+        $this->displayHelper->displayStats($totalStats, "جمع کل منبع {$sourceName}");
+        return Command::SUCCESS;
     }
 
-    private function displayGlobalStats(): void
+    private function displayGlobalStats(): int
     {
         $globalStats = MissingSource::selectRaw('
             source_name,
@@ -143,7 +157,7 @@ class ManageMissingSourcesCommand extends Command
 
         if ($globalStats->isEmpty()) {
             $this->info("✅ هیچ source ناموجودی ثبت نشده!");
-            return;
+            return Command::SUCCESS;
         }
 
         $this->info("🌍 آمار کلی source های ناموجود:");
@@ -162,6 +176,8 @@ class ManageMissingSourcesCommand extends Command
         $this->table([
             'منبع', 'کل ناموجود', 'دائمی', '404', 'خطای API'
         ], $tableData);
+
+        return Command::SUCCESS;
     }
 
     private function listMissingSources(): int
@@ -215,7 +231,6 @@ class ManageMissingSourcesCommand extends Command
     {
         $configId = $this->option('config');
         $limit = (int)$this->option('limit');
-        $force = $this->option('force');
 
         if (!$configId) {
             $this->error("❌ برای retry باید --config مشخص کنید");
@@ -228,7 +243,6 @@ class ManageMissingSourcesCommand extends Command
             return Command::FAILURE;
         }
 
-        // فقط source هایی که دائمی نیستند
         $missingSources = MissingSource::where('config_id', $configId)
             ->where('is_permanently_missing', false)
             ->orderBy('source_id')
@@ -242,12 +256,18 @@ class ManageMissingSourcesCommand extends Command
 
         $this->info("🔄 یافت شد: {$missingSources->count()} source برای تلاش مجدد");
 
-        if (!$force && !$this->confirm("آیا می‌خواهید تلاش مجدد را شروع کنید؟")) {
+        if (!$this->displayHelper->confirmOperation($config, [
+            'تعداد source ها' => $missingSources->count()
+        ], $this->option('force'))) {
             $this->info("عملیات لغو شد.");
             return Command::SUCCESS;
         }
 
-        // ایجاد execution log موقت
+        return $this->performSourceRetry($config, $missingSources);
+    }
+
+    private function performSourceRetry(Config $config, $missingSources): int
+    {
         $executionLog = ExecutionLog::create([
             'config_id' => $config->id,
             'execution_id' => 'retry_missing_' . time(),
@@ -270,12 +290,9 @@ class ManageMissingSourcesCommand extends Command
             try {
                 $result = $apiService->processSourceId($sourceId, $executionLog);
 
-                if (isset($result['stats']['total_success']) && $result['stats']['total_success'] > 0) {
+                if ($this->isSuccessResult($result)) {
                     $successCount++;
                     $this->line("\n✅ Source ID {$sourceId} موفق شد!");
-                } elseif (isset($result['action']) && in_array($result['action'], ['enhanced', 'enriched', 'merged'])) {
-                    $successCount++;
-                    $this->line("\n🔧 Source ID {$sourceId} بهبود یافت!");
                 } else {
                     $stillMissingCount++;
                 }
@@ -292,7 +309,6 @@ class ManageMissingSourcesCommand extends Command
         $progressBar->finish();
         $this->newLine(2);
 
-        // تکمیل execution log
         $executionLog->update([
             'status' => 'completed',
             'finished_at' => now(),
@@ -301,17 +317,30 @@ class ManageMissingSourcesCommand extends Command
             'total_failed' => $stillMissingCount
         ]);
 
-        $this->info("🎉 تلاش مجدد تمام شد:");
-        $this->line("   ✅ موفق: {$successCount}");
-        $this->line("   ❌ هنوز ناموجود: {$stillMissingCount}");
+        $this->displayHelper->displayFinalResults($missingSources->count(), [
+            'موفق' => $successCount,
+            'هنوز ناموجود' => $stillMissingCount
+        ], 'تلاش مجدد source های ناموجود');
 
         return Command::SUCCESS;
+    }
+
+    private function isSuccessResult($result): bool
+    {
+        if (isset($result['stats']['total_success']) && $result['stats']['total_success'] > 0) {
+            return true;
+        }
+
+        if (isset($result['action']) && in_array($result['action'], ['enhanced', 'enriched', 'merged'])) {
+            return true;
+        }
+
+        return false;
     }
 
     private function cleanupOldSources(): int
     {
         $days = (int)$this->option('days');
-        $force = $this->option('force');
 
         $this->info("🧹 پاکسازی source های ناموجود قدیمی‌تر از {$days} روز");
 
@@ -326,7 +355,7 @@ class ManageMissingSourcesCommand extends Command
 
         $this->line("یافت شد: {$oldCount} source قدیمی");
 
-        if (!$force && !$this->confirm("آیا می‌خواهید آنها را حذف کنید؟")) {
+        if (!$this->option('force') && !$this->confirm("آیا می‌خواهید آنها را حذف کنید؟")) {
             $this->info("عملیات لغو شد.");
             return Command::SUCCESS;
         }

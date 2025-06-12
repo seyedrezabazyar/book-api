@@ -8,6 +8,7 @@ use App\Models\FailedRequest;
 use App\Models\Config;
 use App\Services\ApiDataService;
 use App\Models\ExecutionLog;
+use App\Console\Helpers\CommandDisplayHelper;
 
 class ManageFailedRequestsCommand extends Command
 {
@@ -21,65 +22,62 @@ class ManageFailedRequestsCommand extends Command
 
     protected $description = 'مدیریت و بازیابی درخواست‌های ناموفق';
 
+    private CommandDisplayHelper $displayHelper;
+
+    public function __construct()
+    {
+        parent::__construct();
+        $this->displayHelper = new CommandDisplayHelper($this);
+    }
+
     public function handle(): int
     {
         $action = $this->argument('action');
+        $this->displayHelper->displayWelcomeMessage("مدیریت درخواست‌های ناموفق - عملیات: {$action}");
 
-        $this->info("🔧 مدیریت درخواست‌های ناموفق - عملیات: {$action}");
+        return match($action) {
+            'stats' => $this->showStats(),
+            'list' => $this->listFailedRequests(),
+            'retry' => $this->retryFailedRequests(),
+            'cleanup' => $this->cleanupOldRequests(),
+            default => $this->handleInvalidAction($action)
+        };
+    }
 
-        switch ($action) {
-            case 'stats':
-                return $this->showStats();
-
-            case 'list':
-                return $this->listFailedRequests();
-
-            case 'retry':
-                return $this->retryFailedRequests();
-
-            case 'cleanup':
-                return $this->cleanupOldRequests();
-
-            default:
-                $this->error("❌ عملیات نامعتبر: {$action}");
-                $this->line("عملیات‌های معتبر: stats, list, retry, cleanup");
-                return Command::FAILURE;
-        }
+    private function handleInvalidAction(string $action): int
+    {
+        $this->error("❌ عملیات نامعتبر: {$action}");
+        $this->line("عملیات‌های معتبر: stats, list, retry, cleanup");
+        return Command::FAILURE;
     }
 
     private function showStats(): int
     {
-        $this->info("📊 آمار درخواست‌های ناموفق:");
+        $sourceName = $this->option('source');
 
         // آمار کلی
-        $totalFailed = FailedRequest::count();
-        $unresolvedCount = FailedRequest::unresolved()->count();
-        $needsRetryCount = FailedRequest::needsRetry()->count();
-        $maxRetriesReached = FailedRequest::where('retry_count', '>=', FailedRequest::MAX_RETRY_COUNT)
-            ->where('is_resolved', false)
-            ->count();
+        $globalStats = [
+            'کل درخواست‌های ناموفق' => FailedRequest::count(),
+            'حل نشده' => FailedRequest::unresolved()->count(),
+            'نیاز به تلاش مجدد' => FailedRequest::needsRetry()->count(),
+            'حداکثر تلاش رسیده' => FailedRequest::where('retry_count', '>=', FailedRequest::MAX_RETRY_COUNT)
+                ->where('is_resolved', false)->count()
+        ];
 
-        $this->table(['آمار', 'تعداد'], [
-            ['کل درخواست‌های ناموفق', number_format($totalFailed)],
-            ['حل نشده', number_format($unresolvedCount)],
-            ['نیاز به تلاش مجدد', number_format($needsRetryCount)],
-            ['حداکثر تلاش رسیده', number_format($maxRetriesReached)]
-        ]);
+        $this->displayHelper->displayStats($globalStats, 'آمار کلی درخواست‌های ناموفق');
 
-        // آمار بر اساس منبع
-        if ($sourceName = $this->option('source')) {
+        // آمار منبع خاص
+        if ($sourceName) {
             $sourceStats = FailedRequest::getSourceStats($sourceName);
-            $this->newLine();
-            $this->info("📈 آمار منبع: {$sourceName}");
-            $this->table(['آمار منبع', 'مقدار'], [
-                ['کل ناموفق', number_format($sourceStats['total_failed'])],
-                ['حل شده', number_format($sourceStats['resolved_count'])],
-                ['حل نشده', number_format($sourceStats['unresolved_count'])],
-                ['حداکثر تلاش رسیده', number_format($sourceStats['max_retries_reached'])],
-                ['نرخ حل شدن', $sourceStats['retry_rate'] . '%']
-            ]);
+            $this->displayHelper->displayStats([
+                'کل ناموفق' => $sourceStats['total_failed'],
+                'حل شده' => $sourceStats['resolved_count'],
+                'حل نشده' => $sourceStats['unresolved_count'],
+                'حداکثر تلاش رسیده' => $sourceStats['max_retries_reached'],
+                'نرخ حل شدن' => $sourceStats['retry_rate'] . '%'
+            ], "آمار منبع: {$sourceName}");
         } else {
-            // نمایش آمار تمام منابع
+            // آمار برترین منابع
             $sourceStats = FailedRequest::select('source_name')
                 ->selectRaw('COUNT(*) as total, COUNT(CASE WHEN is_resolved = 1 THEN 1 END) as resolved')
                 ->groupBy('source_name')
@@ -88,7 +86,6 @@ class ManageFailedRequestsCommand extends Command
                 ->get();
 
             if ($sourceStats->count() > 0) {
-                $this->newLine();
                 $this->info("📋 آمار برترین منابع:");
                 $tableData = [];
                 foreach ($sourceStats as $stat) {
@@ -113,7 +110,7 @@ class ManageFailedRequestsCommand extends Command
         $sourceName = $this->option('source');
         $configId = $this->option('config');
 
-        $query = FailedRequest::query()->with('config');
+        $query = FailedRequest::query()->with('config')->unresolved();
 
         if ($sourceName) {
             $query->where('source_name', $sourceName);
@@ -123,12 +120,7 @@ class ManageFailedRequestsCommand extends Command
             $query->where('config_id', $configId);
         }
 
-        // فقط حل نشده‌ها
-        $query->unresolved();
-
-        $failedRequests = $query->orderBy('first_failed_at', 'desc')
-            ->limit($limit)
-            ->get();
+        $failedRequests = $query->orderBy('first_failed_at', 'desc')->limit($limit)->get();
 
         if ($failedRequests->isEmpty()) {
             $this->info("✅ هیچ درخواست ناموفق حل نشده‌ای یافت نشد!");
@@ -161,7 +153,6 @@ class ManageFailedRequestsCommand extends Command
         $sourceName = $this->option('source');
         $configId = $this->option('config');
         $limit = (int)$this->option('limit');
-        $force = $this->option('force');
 
         if (!$sourceName && !$configId) {
             $this->error("❌ برای retry باید --source یا --config مشخص کنید");
@@ -169,25 +160,12 @@ class ManageFailedRequestsCommand extends Command
         }
 
         // پیدا کردن کانفیگ
-        $config = null;
-        if ($configId) {
-            $config = Config::find($configId);
-            if (!$config) {
-                $this->error("❌ کانفیگ با ID {$configId} یافت نشد!");
-                return Command::FAILURE;
-            }
-            $sourceName = $config->source_name;
-        } else {
-            // پیدا کردن کانفیگ بر اساس source name
-            $config = Config::where('source_name', $sourceName)->first();
-            if (!$config) {
-                $this->error("❌ کانفیگی با منبع {$sourceName} یافت نشد!");
-                return Command::FAILURE;
-            }
+        $config = $this->findConfig($configId, $sourceName);
+        if (!$config) {
+            return Command::FAILURE;
         }
 
-        // پیدا کردن failed requests قابل retry
-        $failedRequests = FailedRequest::where('source_name', $sourceName)
+        $failedRequests = FailedRequest::where('source_name', $config->source_name)
             ->needsRetry()
             ->orderBy('first_failed_at')
             ->limit($limit)
@@ -200,12 +178,41 @@ class ManageFailedRequestsCommand extends Command
 
         $this->info("🔄 یافت شد: {$failedRequests->count()} درخواست برای تلاش مجدد");
 
-        if (!$force && !$this->confirm("آیا می‌خواهید تلاش مجدد را شروع کنید؟")) {
+        if (!$this->displayHelper->confirmOperation($config, [
+            'تعداد درخواست‌ها' => $failedRequests->count()
+        ], $this->option('force'))) {
             $this->info("عملیات لغو شد.");
             return Command::SUCCESS;
         }
 
-        // ایجاد execution log موقت
+        return $this->performRetry($config, $failedRequests);
+    }
+
+    private function findConfig(?string $configId, ?string $sourceName): ?Config
+    {
+        if ($configId) {
+            $config = Config::find($configId);
+            if (!$config) {
+                $this->error("❌ کانفیگ با ID {$configId} یافت نشد!");
+                return null;
+            }
+            return $config;
+        }
+
+        if ($sourceName) {
+            $config = Config::where('source_name', $sourceName)->first();
+            if (!$config) {
+                $this->error("❌ کانفیگی با منبع {$sourceName} یافت نشد!");
+                return null;
+            }
+            return $config;
+        }
+
+        return null;
+    }
+
+    private function performRetry(Config $config, $failedRequests): int
+    {
         $executionLog = ExecutionLog::create([
             'config_id' => $config->id,
             'execution_id' => 'retry_' . time(),
@@ -228,12 +235,9 @@ class ManageFailedRequestsCommand extends Command
             try {
                 $result = $apiService->processSourceId($sourceId, $executionLog);
 
-                if (isset($result['stats']['total_success']) && $result['stats']['total_success'] > 0) {
+                if ($this->isSuccessResult($result)) {
                     $successCount++;
                     $this->line("\n✅ Source ID {$sourceId} موفق شد!");
-                } elseif (isset($result['action']) && in_array($result['action'], ['enhanced', 'enriched', 'merged'])) {
-                    $successCount++;
-                    $this->line("\n🔧 Source ID {$sourceId} بهبود یافت!");
                 } else {
                     $stillFailedCount++;
                 }
@@ -244,13 +248,12 @@ class ManageFailedRequestsCommand extends Command
             }
 
             $progressBar->advance();
-            sleep(1); // تاخیر کوتاه
+            sleep(1);
         }
 
         $progressBar->finish();
         $this->newLine(2);
 
-        // تکمیل execution log
         $executionLog->update([
             'status' => 'completed',
             'finished_at' => now(),
@@ -259,21 +262,33 @@ class ManageFailedRequestsCommand extends Command
             'total_failed' => $stillFailedCount
         ]);
 
-        $this->info("🎉 تلاش مجدد تمام شد:");
-        $this->line("   ✅ موفق: {$successCount}");
-        $this->line("   ❌ هنوز ناموفق: {$stillFailedCount}");
+        $this->displayHelper->displayFinalResults($failedRequests->count(), [
+            'موفق' => $successCount,
+            'هنوز ناموفق' => $stillFailedCount
+        ], 'تلاش مجدد');
 
         return Command::SUCCESS;
+    }
+
+    private function isSuccessResult($result): bool
+    {
+        if (isset($result['stats']['total_success']) && $result['stats']['total_success'] > 0) {
+            return true;
+        }
+
+        if (isset($result['action']) && in_array($result['action'], ['enhanced', 'enriched', 'merged'])) {
+            return true;
+        }
+
+        return false;
     }
 
     private function cleanupOldRequests(): int
     {
         $days = (int)$this->option('days');
-        $force = $this->option('force');
 
         $this->info("🧹 پاکسازی درخواست‌های حل شده قدیمی‌تر از {$days} روز");
 
-        // شمارش قبل از حذف
         $oldCount = FailedRequest::where('is_resolved', true)
             ->where('updated_at', '<', now()->subDays($days))
             ->count();
@@ -285,7 +300,7 @@ class ManageFailedRequestsCommand extends Command
 
         $this->line("یافت شد: {$oldCount} درخواست حل شده قدیمی");
 
-        if (!$force && !$this->confirm("آیا می‌خواهید آنها را حذف کنید؟")) {
+        if (!$this->option('force') && !$this->confirm("آیا می‌خواهید آنها را حذف کنید؟")) {
             $this->info("عملیات لغو شد.");
             return Command::SUCCESS;
         }

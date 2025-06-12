@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use App\Models\Config;
+use App\Console\Helpers\CommandDisplayHelper;
 use Illuminate\Support\Facades\Log;
 
 class FixExistingConfigsCommand extends Command
@@ -14,21 +15,30 @@ class FixExistingConfigsCommand extends Command
 
     protected $description = 'اصلاح start_page کانفیگ‌های موجود برای کارکرد صحیح getSmartStartPage';
 
+    private CommandDisplayHelper $displayHelper;
+
+    public function __construct()
+    {
+        parent::__construct();
+        $this->displayHelper = new CommandDisplayHelper($this);
+    }
+
     public function handle(): int
     {
-        $this->info("🔧 شروع اصلاح کانفیگ‌های موجود");
-
         $dryRun = $this->option('dry-run');
         $configId = $this->option('config-id');
 
+        $activeSettings = [];
+        if ($dryRun) $activeSettings[] = "Dry Run";
+        if ($configId) $activeSettings[] = "Config ID: {$configId}";
+
+        $this->displayHelper->displayWelcomeMessage(
+            'اصلاح کانفیگ‌های موجود',
+            $activeSettings
+        );
+
         try {
-            $query = Config::query();
-
-            if ($configId) {
-                $query->where('id', $configId);
-            }
-
-            $configs = $query->get();
+            $configs = $this->getConfigs($configId);
 
             if ($configs->isEmpty()) {
                 $this->error("❌ هیچ کانفیگی یافت نشد!");
@@ -37,32 +47,9 @@ class FixExistingConfigsCommand extends Command
 
             $this->info("📋 یافت شد: " . $configs->count() . " کانفیگ");
 
-            if ($dryRun) {
-                $this->warn("⚠️ حالت dry-run فعال - هیچ تغییری اعمال نمی‌شود");
-            }
+            $results = $this->processConfigs($configs, $dryRun);
 
-            $fixedCount = 0;
-            $skippedCount = 0;
-
-            foreach ($configs as $config) {
-                $result = $this->processConfig($config, $dryRun);
-
-                if ($result['fixed']) {
-                    $fixedCount++;
-                } else {
-                    $skippedCount++;
-                }
-            }
-
-            $this->newLine();
-            $this->info("✅ اصلاح تمام شد:");
-            $this->line("   • اصلاح شده: {$fixedCount}");
-            $this->line("   • رد شده: {$skippedCount}");
-
-            if ($dryRun && $fixedCount > 0) {
-                $this->newLine();
-                $this->warn("💡 برای اعمال تغییرات، دستور را بدون --dry-run اجرا کنید");
-            }
+            $this->displayResults($results, $dryRun);
 
             return Command::SUCCESS;
 
@@ -74,6 +61,45 @@ class FixExistingConfigsCommand extends Command
             ]);
             return Command::FAILURE;
         }
+    }
+
+    private function getConfigs(?string $configId)
+    {
+        $query = Config::query();
+
+        if ($configId) {
+            $query->where('id', $configId);
+        }
+
+        return $query->get();
+    }
+
+    private function processConfigs($configs, bool $dryRun): array
+    {
+        $fixedCount = 0;
+        $skippedCount = 0;
+        $details = [];
+
+        foreach ($configs as $config) {
+            $result = $this->processConfig($config, $dryRun);
+
+            if ($result['fixed']) {
+                $fixedCount++;
+            } else {
+                $skippedCount++;
+            }
+
+            $details[] = [
+                'config' => $config,
+                'result' => $result
+            ];
+        }
+
+        return [
+            'fixed_count' => $fixedCount,
+            'skipped_count' => $skippedCount,
+            'details' => $details
+        ];
     }
 
     private function processConfig(Config $config, bool $dryRun): array
@@ -92,54 +118,29 @@ class FixExistingConfigsCommand extends Command
             $this->line("      • منبع: {$config->source_name}");
 
             // منطق اصلاح
-            $needsFix = false;
-            $newStartPage = null;
-            $reason = '';
+            $fixResult = $this->determineFix($currentStartPage, $lastIdFromSources);
 
-            if ($currentStartPage === 1 && $lastIdFromSources > 0) {
-                // اگر start_page روی 1 است اما رکوردهایی در book_sources وجود دارد
-                $needsFix = true;
-                $newStartPage = null; // null می‌کنیم تا smart logic کار کند
-                $reason = "start_page=1 اما {$lastIdFromSources} رکورد در book_sources وجود دارد";
-            } elseif ($currentStartPage && $currentStartPage <= $lastIdFromSources) {
-                // اگر start_page کمتر یا مساوی آخرین ID موجود است
-                $needsFix = true;
-                $newStartPage = null;
-                $reason = "start_page={$currentStartPage} <= آخرین ID موجود ({$lastIdFromSources})";
-            }
-
-            if (!$needsFix) {
+            if (!$fixResult['needs_fix']) {
                 $this->line("   ✅ نیازی به اصلاح ندارد");
                 return ['fixed' => false, 'reason' => 'no_fix_needed'];
             }
 
             $this->line("   🔧 نیاز به اصلاح:");
-            $this->line("      • دلیل: {$reason}");
-            $this->line("      • start_page جدید: " . ($newStartPage ?? 'null (هوشمند)'));
+            $this->line("      • دلیل: {$fixResult['reason']}");
+            $this->line("      • start_page جدید: " . ($fixResult['new_start_page'] ?? 'null (هوشمند)'));
 
             if (!$dryRun) {
-                $config->update(['start_page' => $newStartPage]);
-
-                // refresh برای دریافت smart start page جدید
-                $config->refresh();
-                $newSmartStartPage = $config->getSmartStartPage();
-
-                $this->line("   ✅ اصلاح شد! smart start page جدید: {$newSmartStartPage}");
-
-                Log::info("کانفیگ اصلاح شد", [
-                    'config_id' => $config->id,
-                    'config_name' => $config->name,
-                    'old_start_page' => $currentStartPage,
-                    'new_start_page' => $newStartPage,
-                    'last_id_from_sources' => $lastIdFromSources,
-                    'new_smart_start_page' => $newSmartStartPage,
-                    'reason' => $reason
-                ]);
+                $this->applyFix($config, $fixResult);
             } else {
                 $this->line("   📝 (dry-run) تغییر اعمال نشد");
             }
 
-            return ['fixed' => true, 'reason' => $reason];
+            return [
+                'fixed' => true,
+                'reason' => $fixResult['reason'],
+                'old_start_page' => $currentStartPage,
+                'new_start_page' => $fixResult['new_start_page']
+            ];
 
         } catch (\Exception $e) {
             $this->error("   ❌ خطا در پردازش کانفیگ {$config->id}: " . $e->getMessage());
@@ -150,6 +151,85 @@ class FixExistingConfigsCommand extends Command
             ]);
 
             return ['fixed' => false, 'reason' => 'error: ' . $e->getMessage()];
+        }
+    }
+
+    private function determineFix($currentStartPage, $lastIdFromSources): array
+    {
+        $needsFix = false;
+        $newStartPage = null;
+        $reason = '';
+
+        if ($currentStartPage === 1 && $lastIdFromSources > 0) {
+            $needsFix = true;
+            $newStartPage = null;
+            $reason = "start_page=1 اما {$lastIdFromSources} رکورد در book_sources وجود دارد";
+        } elseif ($currentStartPage && $currentStartPage <= $lastIdFromSources) {
+            $needsFix = true;
+            $newStartPage = null;
+            $reason = "start_page={$currentStartPage} <= آخرین ID موجود ({$lastIdFromSources})";
+        }
+
+        return [
+            'needs_fix' => $needsFix,
+            'new_start_page' => $newStartPage,
+            'reason' => $reason
+        ];
+    }
+
+    private function applyFix(Config $config, array $fixResult): void
+    {
+        $config->update(['start_page' => $fixResult['new_start_page']]);
+
+        $config->refresh();
+        $newSmartStartPage = $config->getSmartStartPage();
+
+        $this->line("   ✅ اصلاح شد! smart start page جدید: {$newSmartStartPage}");
+
+        Log::info("کانفیگ اصلاح شد", [
+            'config_id' => $config->id,
+            'config_name' => $config->name,
+            'old_start_page' => $fixResult['old_start_page'] ?? null,
+            'new_start_page' => $fixResult['new_start_page'],
+            'new_smart_start_page' => $newSmartStartPage,
+            'reason' => $fixResult['reason']
+        ]);
+    }
+
+    private function displayResults(array $results, bool $dryRun): void
+    {
+        $this->newLine();
+        $this->displayHelper->displayStats([
+            'اصلاح شده' => $results['fixed_count'],
+            'رد شده' => $results['skipped_count']
+        ], 'نتایج اصلاح');
+
+        if ($dryRun && $results['fixed_count'] > 0) {
+            $this->newLine();
+            $this->warn("💡 برای اعمال تغییرات، دستور را بدون --dry-run اجرا کنید");
+        }
+
+        // نمایش جزئیات اگر debug mode باشد
+        if ($this->output->isVerbose()) {
+            $this->displayDetailedResults($results['details']);
+        }
+    }
+
+    private function displayDetailedResults(array $details): void
+    {
+        $this->newLine();
+        $this->info("📋 جزئیات کامل:");
+
+        foreach ($details as $detail) {
+            $config = $detail['config'];
+            $result = $detail['result'];
+
+            $status = $result['fixed'] ? '✅ اصلاح شد' : '⏭️ رد شد';
+            $this->line("• کانفیگ {$config->id} ({$config->name}): {$status}");
+
+            if (isset($result['reason'])) {
+                $this->line("  دلیل: {$result['reason']}");
+            }
         }
     }
 }
