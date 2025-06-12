@@ -7,8 +7,6 @@ use App\Models\Book;
 use App\Models\ExecutionLog;
 use App\Models\FailedRequest;
 use App\Models\MissingSource;
-use App\Services\BookProcessor;
-use App\Services\ApiClient;
 use Illuminate\Support\Facades\Log;
 
 class ApiDataService
@@ -32,56 +30,51 @@ class ApiDataService
 
         Log::info("🔍 پردازش source ID {$sourceId}", [
             'config_id' => $this->config->id,
-            'execution_id' => $executionLog->execution_id,
             'source_name' => $this->config->source_name
         ]);
 
         try {
-            // 1. بررسی اولیه - آیا این source قبلاً پردازش شده؟
-            $sourceProcessingResult = $this->bookProcessor->checkSourceProcessingStatus(
+            // 1. بررسی اولیه
+            $sourceStatus = $this->bookProcessor->checkSourceProcessingStatus(
                 $this->config->source_name,
                 $sourceId,
                 $this->config
             );
 
-            if ($sourceProcessingResult['should_skip'] && !$sourceProcessingResult['needs_reprocessing']) {
+            if ($sourceStatus['should_skip'] && !$sourceStatus['needs_reprocessing']) {
                 $executionLog->addLogEntry("⏭️ Source ID {$sourceId} رد شد", [
-                    'reason' => $sourceProcessingResult['reason'],
-                    'source_name' => $this->config->source_name,
-                    'source_id' => $sourceId,
-                    'book_id' => $sourceProcessingResult['book_id'] ?? null
+                    'reason' => $sourceStatus['reason'],
+                    'book_id' => $sourceStatus['book_id'] ?? null
                 ]);
 
-                $stats = $this->buildStats(1, 0, 0, 1, 0);
-                $this->updateStats($executionLog, $stats);
-                return $this->buildResult($sourceId, $sourceProcessingResult['action'], $stats);
+                return $this->buildResult($sourceId, $sourceStatus['action'], [
+                    'total_processed' => 1, 'total_success' => 0, 'total_failed' => 0,
+                    'total_duplicate' => 1, 'total_enhanced' => 0
+                ]);
             }
 
-            // 2. بررسی اینکه آیا source قبلاً ناموجود بوده
+            // 2. بررسی missing source
             if (MissingSource::isMissing($this->config->id, $this->config->source_name, (string)$sourceId)) {
                 $executionLog->addLogEntry("📭 Source ID {$sourceId} قبلاً ناموجود ثبت شده", [
-                    'source_name' => $this->config->source_name,
                     'source_id' => $sourceId
                 ]);
 
-                $stats = $this->buildStats(1, 0, 1, 0, 0);
-                $this->updateStats($executionLog, $stats);
-                return $this->buildResult($sourceId, 'previously_missing', $stats);
+                return $this->buildResult($sourceId, 'previously_missing', [
+                    'total_processed' => 1, 'total_success' => 0, 'total_failed' => 1,
+                    'total_duplicate' => 0, 'total_enhanced' => 0
+                ]);
             }
 
             // 3. درخواست API
             $apiResult = $this->makeApiRequest($sourceId, $executionLog);
-
             if (!$apiResult['success']) {
                 return $this->handleApiFailure($sourceId, $apiResult, $executionLog);
             }
 
-            // 4. استخراج و اعتبارسنجی داده‌های کتاب
-            $data = $apiResult['data'];
-            $bookData = $this->extractBookData($data, $sourceId);
-
+            // 4. استخراج داده‌های کتاب
+            $bookData = $this->extractBookData($apiResult['data'], $sourceId);
             if (empty($bookData) || empty($bookData['title'])) {
-                return $this->handleNoBookFound($sourceId, $data, $executionLog);
+                return $this->handleNoBookFound($sourceId, $apiResult['data'], $executionLog);
             }
 
             // 5. پردازش کتاب
@@ -90,10 +83,10 @@ class ApiDataService
                 $sourceId,
                 $this->config,
                 $executionLog,
-                $sourceProcessingResult
+                $sourceStatus
             );
 
-            // 6. اگر کتاب موجود بود، از لیست ناموجود حذف کن
+            // 6. حذف از لیست missing در صورت موفقیت
             if ($this->isProcessingSuccessful($result)) {
                 MissingSource::markAsFound($this->config->id, $this->config->source_name, (string)$sourceId);
             }
@@ -103,17 +96,14 @@ class ApiDataService
                 $this->updateStats($executionLog, $result['stats']);
             }
 
-            $this->logFinalResult($sourceId, $result, $executionLog);
+            $this->logResult($sourceId, $result, $executionLog);
             return $result;
 
         } catch (\Exception $e) {
-            return $this->handleProcessingException($sourceId, $e, $executionLog);
+            return $this->handleException($sourceId, $e, $executionLog);
         }
     }
 
-    /**
-     * درخواست API ساده‌شده
-     */
     private function makeApiRequest(int $sourceId, ExecutionLog $executionLog): array
     {
         $url = $this->config->buildApiUrl($sourceId);
@@ -128,16 +118,10 @@ class ApiDataService
 
             if ($response->successful()) {
                 $data = $response->json();
-
                 if (empty($data)) {
                     throw new \Exception('پاسخ API خالی است');
                 }
-
-                return [
-                    'success' => true,
-                    'data' => $data,
-                    'status_code' => $response->status()
-                ];
+                return ['success' => true, 'data' => $data, 'status_code' => $response->status()];
             }
 
             return [
@@ -156,92 +140,10 @@ class ApiDataService
         }
     }
 
-    /**
-     * مدیریت شکست API
-     */
-    private function handleApiFailure(int $sourceId, array $apiResult, ExecutionLog $executionLog): array
-    {
-        $errorMessage = $apiResult['error'];
-        $statusCode = $apiResult['status_code'];
-
-        // اگر 404 بود، source رو ناموجود ثبت کن
-        if ($apiResult['is_404'] ?? false) {
-            MissingSource::recordMissing(
-                $this->config->id,
-                $this->config->source_name,
-                (string)$sourceId,
-                'not_found',
-                'کتاب در API یافت نشد (404)',
-                404
-            );
-
-            $executionLog->addLogEntry("📭 Source ID {$sourceId} ناموجود (404)", [
-                'url' => $this->config->buildApiUrl($sourceId)
-            ]);
-
-            $stats = $this->buildStats(1, 0, 1, 0, 0);
-            $this->updateStats($executionLog, $stats);
-            return $this->buildResult($sourceId, 'not_found', $stats);
-        }
-
-        // سایر خطاهای API
-        FailedRequest::recordFailure(
-            $this->config->id,
-            $this->config->source_name,
-            (string)$sourceId,
-            $this->config->buildApiUrl($sourceId),
-            $errorMessage,
-            $statusCode
-        );
-
-        $executionLog->addLogEntry("💥 خطای API", [
-            'source_id' => $sourceId,
-            'error' => $errorMessage,
-            'status_code' => $statusCode
-        ]);
-
-        $stats = $this->buildStats(1, 0, 1, 0, 0);
-        $this->updateStats($executionLog, $stats);
-        return $this->buildResult($sourceId, 'api_failed', $stats);
-    }
-
-    /**
-     * مدیریت عدم یافتن کتاب در پاسخ
-     */
-    private function handleNoBookFound(int $sourceId, array $data, ExecutionLog $executionLog): array
-    {
-        MissingSource::recordMissing(
-            $this->config->id,
-            $this->config->source_name,
-            (string)$sourceId,
-            'invalid_data',
-            'ساختار کتاب در پاسخ API یافت نشد یا عنوان خالی است',
-            200
-        );
-
-        $executionLog->addLogEntry("📭 کتاب در پاسخ API یافت نشد", [
-            'source_id' => $sourceId,
-            'response_keys' => array_keys($data)
-        ]);
-
-        $stats = $this->buildStats(1, 0, 1, 0, 0);
-        $this->updateStats($executionLog, $stats);
-        return $this->buildResult($sourceId, 'no_book_found', $stats);
-    }
-
-    /**
-     * استخراج داده‌های کتاب از پاسخ API
-     */
     private function extractBookData(array $data, int $sourceId): array
     {
         // بررسی ساختارهای مختلف پاسخ
-        $possiblePaths = [
-            'data.book',
-            'book',
-            'data',
-            'result.book',
-            'response.book'
-        ];
+        $possiblePaths = ['data.book', 'book', 'data', 'result.book', 'response.book'];
 
         foreach ($possiblePaths as $path) {
             $bookData = $this->getNestedValue($data, $path);
@@ -274,61 +176,82 @@ class ApiDataService
         return $value;
     }
 
-    /**
-     * بررسی موفقیت‌آمیز بودن پردازش
-     */
-    private function isProcessingSuccessful(array $result): bool
+    private function handleApiFailure(int $sourceId, array $apiResult, ExecutionLog $executionLog): array
     {
-        $stats = $result['stats'] ?? [];
-        return ($stats['total_success'] ?? 0) > 0 || ($stats['total_enhanced'] ?? 0) > 0;
-    }
+        $errorMessage = $apiResult['error'];
+        $statusCode = $apiResult['status_code'];
 
-    /**
-     * لاگ نتیجه نهایی
-     */
-    private function logFinalResult(int $sourceId, array $result, ExecutionLog $executionLog): void
-    {
-        $action = $result['action'] ?? 'unknown';
-        $stats = $result['stats'] ?? [];
+        if ($apiResult['is_404'] ?? false) {
+            MissingSource::recordMissing(
+                $this->config->id,
+                $this->config->source_name,
+                (string)$sourceId,
+                'not_found',
+                'کتاب در API یافت نشد (404)',
+                404
+            );
 
-        $logData = [
-            'source_id' => $sourceId,
-            'action' => $action,
-            'stats' => $stats
-        ];
+            $executionLog->addLogEntry("📭 Source ID {$sourceId} ناموجود (404)", [
+                'url' => $this->config->buildApiUrl($sourceId)
+            ]);
 
-        if (isset($result['book_id'])) {
-            $logData['book_id'] = $result['book_id'];
-            $logData['title'] = $result['title'] ?? 'N/A';
+            return $this->buildResult($sourceId, 'not_found', [
+                'total_processed' => 1, 'total_success' => 0, 'total_failed' => 1,
+                'total_duplicate' => 0, 'total_enhanced' => 0
+            ]);
         }
 
-        $actionEmojis = [
-            'created' => '🆕',
-            'enhanced' => '🔧',
-            'enriched' => '💎',
-            'merged' => '🔗',
-            'already_processed' => '📋',
-            'source_added' => '📌',
-            'no_changes' => '⚪',
-            'not_found' => '📭',
-            'previously_missing' => '🔍'
-        ];
+        // سایر خطاهای API
+        FailedRequest::recordFailure(
+            $this->config->id,
+            $this->config->source_name,
+            (string)$sourceId,
+            $this->config->buildApiUrl($sourceId),
+            $errorMessage,
+            $statusCode
+        );
 
-        $emoji = $actionEmojis[$action] ?? '❓';
-        $executionLog->addLogEntry("{$emoji} پردازش source ID {$sourceId} تمام شد", $logData);
+        $executionLog->addLogEntry("💥 خطای API", [
+            'source_id' => $sourceId,
+            'error' => $errorMessage,
+            'status_code' => $statusCode
+        ]);
+
+        return $this->buildResult($sourceId, 'api_failed', [
+            'total_processed' => 1, 'total_success' => 0, 'total_failed' => 1,
+            'total_duplicate' => 0, 'total_enhanced' => 0
+        ]);
     }
 
-    /**
-     * مدیریت خطای پردازش
-     */
-    private function handleProcessingException(int $sourceId, \Exception $e, ExecutionLog $executionLog): array
+    private function handleNoBookFound(int $sourceId, array $data, ExecutionLog $executionLog): array
+    {
+        MissingSource::recordMissing(
+            $this->config->id,
+            $this->config->source_name,
+            (string)$sourceId,
+            'invalid_data',
+            'ساختار کتاب در پاسخ API یافت نشد یا عنوان خالی است',
+            200
+        );
+
+        $executionLog->addLogEntry("📭 کتاب در پاسخ API یافت نشد", [
+            'source_id' => $sourceId,
+            'response_keys' => array_keys($data)
+        ]);
+
+        return $this->buildResult($sourceId, 'no_book_found', [
+            'total_processed' => 1, 'total_success' => 0, 'total_failed' => 1,
+            'total_duplicate' => 0, 'total_enhanced' => 0
+        ]);
+    }
+
+    private function handleException(int $sourceId, \Exception $e, ExecutionLog $executionLog): array
     {
         Log::error("❌ خطا در پردازش source ID {$sourceId}", [
             'config_id' => $this->config->id,
             'error' => $e->getMessage()
         ]);
 
-        // ثبت در FailedRequest
         FailedRequest::recordFailure(
             $this->config->id,
             $this->config->source_name,
@@ -342,28 +265,36 @@ class ApiDataService
             'error' => $e->getMessage()
         ]);
 
-        $stats = $this->buildStats(1, 0, 1, 0, 0);
-        $this->updateStats($executionLog, $stats);
-        return $this->buildResult($sourceId, 'processing_failed', $stats);
+        return $this->buildResult($sourceId, 'processing_failed', [
+            'total_processed' => 1, 'total_success' => 0, 'total_failed' => 1,
+            'total_duplicate' => 0, 'total_enhanced' => 0
+        ]);
     }
 
-    /**
-     * ساخت آمار استاندارد
-     */
-    private function buildStats(int $processed, int $success, int $failed, int $duplicate, int $enhanced): array
+    private function isProcessingSuccessful(array $result): bool
     {
-        return [
-            'total_processed' => $processed,
-            'total_success' => $success,
-            'total_failed' => $failed,
-            'total_duplicate' => $duplicate,
-            'total_enhanced' => $enhanced
-        ];
+        $stats = $result['stats'] ?? [];
+        return ($stats['total_success'] ?? 0) > 0 || ($stats['total_enhanced'] ?? 0) > 0;
     }
 
-    /**
-     * بروزرسانی آمار
-     */
+    private function logResult(int $sourceId, array $result, ExecutionLog $executionLog): void
+    {
+        $action = $result['action'] ?? 'unknown';
+        $actionEmojis = [
+            'created' => '🆕', 'enhanced' => '🔧', 'enriched' => '💎',
+            'merged' => '🔗', 'already_processed' => '📋', 'source_added' => '📌',
+            'no_changes' => '⚪', 'not_found' => '📭', 'previously_missing' => '🔍'
+        ];
+
+        $emoji = $actionEmojis[$action] ?? '❓';
+        $executionLog->addLogEntry("{$emoji} پردازش source ID {$sourceId} تمام شد", [
+            'source_id' => $sourceId,
+            'action' => $action,
+            'book_id' => $result['book_id'] ?? null,
+            'title' => $result['title'] ?? null
+        ]);
+    }
+
     private function updateStats(ExecutionLog $executionLog, array $stats): void
     {
         try {
@@ -377,9 +308,6 @@ class ApiDataService
         }
     }
 
-    /**
-     * ساخت نتیجه استاندارد
-     */
     private function buildResult(int $sourceId, string $action, array $stats, ?Book $book = null): array
     {
         $result = [
@@ -396,9 +324,6 @@ class ApiDataService
         return $result;
     }
 
-    /**
-     * تکمیل اجرا
-     */
     private function completeExecution(ExecutionLog $executionLog): array
     {
         try {
@@ -414,7 +339,6 @@ class ApiDataService
             $executionLog->markCompleted($finalStats);
             $this->config->update(['is_running' => false]);
 
-            // گزارش missing sources
             $missingStats = MissingSource::getStatsForConfig($this->config->id);
 
             Log::info("🏁 اجرا تمام شد", [

@@ -41,7 +41,6 @@ class ConfigService
         $configData = $this->buildConfigData($data);
         $sourceName = $this->extractSourceName($data['base_url']);
         $startPage = $this->processStartPage($data['start_page'] ?? null);
-        $oldStartPage = $config->start_page;
 
         $config->update([
             ...$data,
@@ -52,11 +51,8 @@ class ConfigService
 
         Log::info("🔧 کانفیگ ویرایش شد", [
             'config_id' => $config->id,
-            'old_start_page' => $oldStartPage,
-            'new_start_page' => $startPage,
             'source_name' => $sourceName,
-            'smart_start_page' => $config->getSmartStartPage(),
-            'has_user_defined_start' => $config->hasUserDefinedStartPage()
+            'start_page' => $startPage
         ]);
 
         return $config;
@@ -68,36 +64,19 @@ class ConfigService
             throw new \Exception('امکان حذف کانفیگ در حال اجرا وجود ندارد.');
         }
 
-        // حذف تمام داده‌های مرتبط
         ExecutionLog::where('config_id', $config->id)->delete();
         FailedRequest::where('config_id', $config->id)->delete();
-
         $config->delete();
     }
 
     private function processStartPage($startPageValue): ?int
     {
         if ($startPageValue === null || $startPageValue === '' || $startPageValue === false) {
-            Log::debug("📝 start_page خالی - حالت هوشمند فعال خواهد شد");
             return null;
         }
 
         $intValue = (int) $startPageValue;
-
-        if ($intValue > 0) {
-            Log::info("🎯 start_page تنظیم شد", [
-                'original_value' => $startPageValue,
-                'processed_value' => $intValue,
-                'mode' => 'user_defined'
-            ]);
-            return $intValue;
-        }
-
-        Log::warning("⚠️ start_page نامعتبر دریافت شد، حالت هوشمند فعال می‌شود", [
-            'invalid_value' => $startPageValue,
-            'converted_to' => $intValue
-        ]);
-        return null;
+        return $intValue > 0 ? $intValue : null;
     }
 
     private function extractSourceName(string $url): string

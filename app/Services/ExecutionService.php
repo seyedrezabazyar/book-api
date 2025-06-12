@@ -23,17 +23,13 @@ class ExecutionService
                 ], 422);
             }
 
-            // شروع Worker
             $this->queueManager->ensureWorkerIsRunning();
 
             $maxIds = $config->max_pages ?? 1000;
             $startId = $config->getSmartStartPage();
             $endId = $startId + $maxIds - 1;
 
-            // علامت‌گذاری به عنوان در حال اجرا
             $config->update(['is_running' => true]);
-
-            // ایجاد execution log
             $executionLog = ExecutionLog::createNew($config);
             $executionId = $executionLog->execution_id;
 
@@ -42,7 +38,6 @@ class ExecutionService
                 ProcessSinglePageJob::dispatch($config->id, $sourceId, $executionId);
             }
 
-            // Job پایان اجرا
             ProcessSinglePageJob::dispatch($config->id, -1, $executionId)
                 ->delay(now()->addMinutes(5));
 
@@ -87,10 +82,8 @@ class ExecutionService
                 ], 422);
             }
 
-            // متوقف کردن کانفیگ
             $config->update(['is_running' => false]);
 
-            // متوقف کردن execution log فعال
             $activeExecution = ExecutionLog::where('config_id', $config->id)
                 ->where('status', 'running')
                 ->latest()
@@ -100,7 +93,6 @@ class ExecutionService
                 $activeExecution->stop(['stopped_manually' => true]);
             }
 
-            // حذف Jobs باقی‌مانده
             $deletedJobs = DB::table('jobs')
                 ->where('payload', 'like', '%"configId":' . $config->id . '%')
                 ->delete();
